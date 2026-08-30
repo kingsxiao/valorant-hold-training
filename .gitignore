@@ -1,0 +1,8 @@
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 内部工具状态 / 本机文件
+.mimosa/
+.DS_Store
+*.log

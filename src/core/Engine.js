@@ -1,0 +1,177 @@
+import * as THREE from 'three'
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
+import { CONFIG } from './Config.js'
+
+// 引擎：渲染器 / 场景 / 相机 / 固定步长主循环 / FPS 统计
+export class Engine {
+  constructor(canvas) {
+    this.canvas = canvas
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      powerPreference: 'high-performance',
+      stencil: false,
+    })
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, CONFIG.graphics.maxPixelRatio))
+    this.renderer.shadowMap.enabled = CONFIG.graphics.shadows
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping
+    this.renderer.toneMappingExposure = 1.06
+
+    this.scene = new THREE.Scene()
+    this.scene.background = new THREE.Color(CONFIG.colors.sky)
+    this.scene.fog = new THREE.Fog(CONFIG.colors.fog, 60, 170)
+
+    // 环境反射贴图：让金属/皮肤等 Standard 材质有真实的高光与反射（一次性生成）
+    const pmrem = new THREE.PMREMGenerator(this.renderer)
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+    pmrem.dispose()
+
+    // 天空穹顶：垂直渐变 + 太阳光斑（比平涂背景更有空间感）
+    this._buildSky()
+
+    this.camera = new THREE.PerspectiveCamera(71, 1, 0.05, 300)
+    this.camera.rotation.order = 'YXZ'
+    this.scene.add(this.camera) // 相机入场景图：持枪模型/枪口焰作为相机子节点才会被渲染
+
+    // 光照：半球光（天空补光）+ 平行光（太阳）+ 环境反射，强度按 ACES 色调映射调校避免过曝
+    const hemi = new THREE.HemisphereLight(0xcfe5f2, 0x8a7a63, 0.72)
+    this.scene.add(hemi)
+    const sun = new THREE.DirectionalLight(0xfff2dc, 1.05)
+    sun.position.set(28, 46, 18)
+    if (CONFIG.graphics.shadows) {
+      sun.castShadow = true
+      sun.shadow.mapSize.set(1024, 1024)
+      sun.shadow.camera.left = -45; sun.shadow.camera.right = 45
+      sun.shadow.camera.top = 45; sun.shadow.camera.bottom = -45
+      sun.shadow.camera.far = 120
+    }
+    this.scene.add(sun)
+
+    // 主循环状态
+    this.fixedDt = 1 / CONFIG.sim.tickHz
+    this.accumulator = 0
+    this.lastTime = 0
+    this.running = false
+
+    // FPS 统计（环形缓冲）
+    this.frameTimes = new Float32Array(600)
+    this.frameIdx = 0
+    this.fps = 0
+    this.frameMs = 0
+    this.low1Pct = 0
+
+    this.simStep = null   // (dt) => void   固定 128Hz 逻辑
+    this.renderFrame = null // (alpha, dtMs) => void  每渲染帧
+    this.preFrame = null  // 每渲染帧最前（鼠标视角先于逻辑步应用 → 零延迟跟手）
+
+    this._resize()
+    addEventListener('resize', () => this._resize())
+  }
+
+  // Valorant 锁定水平 FOV 103°，垂直 FOV 随宽高比换算（保证不同窗口下视野一致）
+  _resize() {
+    const w = innerWidth, h = innerHeight
+    this.renderer.setSize(w, h, false)
+    this.camera.aspect = w / h
+    const tanHalfH = Math.tan((CONFIG.graphics.fovH * Math.PI / 360))
+    this.camera.fov = THREE.MathUtils.radToDeg(Math.atan(tanHalfH / this.camera.aspect)) * 2
+    this.camera.updateProjectionMatrix()
+  }
+
+  // 天空穹顶：程序化渐变贴图 + 太阳精灵（跟随相机，永不触及雾）
+  _buildSky() {
+    const c = document.createElement('canvas')
+    c.width = 4; c.height = 256
+    const g = c.getContext('2d')
+    const grad = g.createLinearGradient(0, 0, 0, 256)
+    grad.addColorStop(0, '#5f87a6')   // 天顶
+    grad.addColorStop(0.5, '#8fb0c7')
+    grad.addColorStop(0.82, '#d5dfe6') // 地平线
+    grad.addColorStop(1, '#e4e6df')
+    g.fillStyle = grad
+    g.fillRect(0, 0, 4, 256)
+    const tex = new THREE.CanvasTexture(c)
+    tex.colorSpace = THREE.SRGBColorSpace
+    const sky = new THREE.Mesh(
+      new THREE.SphereGeometry(200, 24, 16),
+      new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, depthWrite: false }),
+    )
+    sky.renderOrder = -10
+    this.scene.add(sky)
+    // 太阳（贴着平行光方向）
+    const sunCanvas = document.createElement('canvas')
+    sunCanvas.width = sunCanvas.height = 128
+    const sg = sunCanvas.getContext('2d')
+    const rg = sg.createRadialGradient(64, 64, 4, 64, 64, 64)
+    rg.addColorStop(0, 'rgba(255,250,230,1)')
+    rg.addColorStop(0.18, 'rgba(255,240,200,0.9)')
+    rg.addColorStop(0.5, 'rgba(255,230,170,0.25)')
+    rg.addColorStop(1, 'rgba(255,230,170,0)')
+    sg.fillStyle = rg
+    sg.fillRect(0, 0, 128, 128)
+    const sunTex = new THREE.CanvasTexture(sunCanvas)
+    sunTex.colorSpace = THREE.SRGBColorSpace
+    const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: sunTex, transparent: true, fog: false, depthWrite: false }))
+    sunSprite.position.set(120, 190, 76)
+    sunSprite.scale.set(70, 70, 1)
+    this.scene.add(sunSprite)
+  }
+
+  start() {
+    if (this.running) return
+    this.running = true
+    this.lastTime = performance.now()
+    this.accumulator = 0
+    const loop = (now) => {
+      if (!this.running) return
+      this._raf = requestAnimationFrame(loop)
+
+      let dtMs = now - this.lastTime
+      this.lastTime = now
+      if (dtMs > 250) dtMs = 250 // 切后台回来不追赶
+      this._recordFrame(dtMs)
+      this.preFrame?.(dtMs / 1000)
+
+      this.accumulator += dtMs / 1000
+      let steps = 0
+      while (this.accumulator >= this.fixedDt && steps < CONFIG.sim.maxStepsPerFrame) {
+        this.simStep?.(this.fixedDt)
+        this.accumulator -= this.fixedDt
+        steps++
+      }
+      if (steps === CONFIG.sim.maxStepsPerFrame) this.accumulator = 0 // 过载保护
+
+      this.renderFrame?.(this.accumulator / this.fixedDt, dtMs)
+      this.renderer.render(this.scene, this.camera)
+    }
+    this._raf = requestAnimationFrame(loop)
+  }
+
+  stop() { this.running = false; cancelAnimationFrame(this._raf) }
+
+  _recordFrame(dtMs) {
+    this.frameMs = dtMs
+    this.frameTimes[this.frameIdx] = dtMs
+    this.frameIdx = (this.frameIdx + 1) % this.frameTimes.length
+    // 每 30 帧结算一次 fps 与 1% low（取最差的 6 帧）
+    if (this.frameIdx % 30 === 0) {
+      let sum = 0, worst = 0
+      for (let i = 0; i < this.frameTimes.length; i++) {
+        const t = this.frameTimes[i]
+        if (t > 0) { sum += t; if (t > worst) worst = t }
+      }
+      this.fps = Math.round(1000 / (sum / this.frameTimes.length))
+      this.low1Pct = Math.round(1000 / worst)
+    }
+  }
+
+  setShadows(on) {
+    this.renderer.shadowMap.enabled = on
+    this.scene.traverse(o => { if (o.material) o.material.needsUpdate = true })
+  }
+
+  setResolutionScale(s) {
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, CONFIG.graphics.maxPixelRatio) * s)
+  }
+}

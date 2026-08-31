@@ -5,13 +5,14 @@ import { CONFIG } from '../core/Config.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
 
-// 训练机器人 v4：
+// 训练机器人 v5：
 //  - 分段人形：头盔+发光面罩 / 护甲(3D 弹匣袋+袋盖+腰带) / 圆柱渐变四肢 / 手套 / 走路摆腿
 //  - 全部 PBR：颜色+粗糙度+法线贴图（程序化生成，纹理单例共享，材质按 bot 克隆）
 //  - 命中区域球体（头/胸/腹/腿）与视觉对齐；移动模型与玩家一致
 //  - 命中反馈：受击泛红闪 + 踉跄后仰（爆头更强）；死亡后仰倒地 + 侧倒 + 淡出消散
-//  - 接触阴影；支持 agent.glb 骨骼模型整体替换（SkeletonUtils 克隆，
-//    动画只采样一帧冻结站姿 —— 不播放走路/挥臂动画）
+//  - 接触阴影；支持 agent.glb 骨骼模型整体替换（SkeletonUtils 克隆）：
+//    idle/walk/run 按实际移速加权混合，脚步速率与位移同步 —— 拉出/横移真在跑；
+//    单 clip 老模型（BrainStem）静止时 timeScale→0 冻结、移动时恢复
 const _v = new THREE.Vector3()
 
 export class Bot {
@@ -204,20 +205,30 @@ export class Bot {
       }
     })
     g.add(clone)
-    // 姿态冻结：从动画 clip 采样一帧站姿后不再更新（不播放走路，避免挥臂"跳舞"）
+    // 动画：idle/walk/run 多 clip 按移速加权混合；单 clip 老模型回退为
+    // "移动时播放走路段、静止时 timeScale→0 冻结"（避免原地踏步）
     // 注意不能 stopAllAction()/uncacheRoot() —— 会把属性还原回 T-pose 绑定姿态
     const clips = Bot.customAnimations
     if (clips?.length) {
-      // 优先 idle（真正的站立姿态）；老模型只有走路 clip 时回退到 walk/run
-      let clip = clips.find(c => /idle|motion|walk|run/i.test(c.name)) ?? clips[0]
-      if (clip.duration > 10) {
-        clip = clip.clone().trim(0, 8) // BrainStem 前 8s 是走路段，后面是头部变形演示
-      }
       this.mixer = new THREE.AnimationMixer(clone)
-      const action = this.mixer.clipAction(clip)
-      action.play()
-      action.time = clip.duration * 0.5 // 周期中段：双腿并拢的过渡步，接近持枪站姿
-      action.paused = true
+      const find = (re) => clips.find(c => re.test(c.name))
+      let idle = find(/idle|stand/i)
+      let walk = find(/walk/i)
+      const run = find(/run|sprint/i)
+      if (!walk && !run) { // BrainStem：单 clip，前 8s 是走路段（后面是头部变形演示）
+        walk = clips[0].duration > 10 ? clips[0].clone().trim(0, 8) : clips[0]
+      }
+      const mk = (clip) => {
+        const a = this.mixer.clipAction(clip)
+        a.play()
+        a.setEffectiveWeight(0)
+        return a
+      }
+      this.anim = { walk: mk(walk) }
+      if (idle && idle !== walk) this.anim.idle = mk(idle)
+      if (run) this.anim.run = mk(run)
+      this._animAcc = 0
+      this._setAnimWeights(0)
       this.mixer.update(0)
     }
     this.blobMat = new THREE.MeshBasicMaterial({ map: Tex.blob(), transparent: true, depthWrite: false })
@@ -231,6 +242,34 @@ export class Bot {
     this.deathT = 0
     this.hitFlash = 0
     this.allMats = [...Object.values(this.mats), this.blobMat]
+  }
+
+  // 骨骼动画权重：idle ↔ walk ↔ run 按移速平滑过渡；
+  // timeScale 让脚步频率与实际位移同步（原地 clip ≈1.9m/s 步速、run clip ≈5.2m/s）
+  _setAnimWeights(speed) {
+    const A = this.anim
+    if (!A) return
+    const moveW = THREE.MathUtils.clamp((speed - 0.25) / 0.9, 0, 1)   // 起步/急停的淡入淡出
+    const runW = A.run ? THREE.MathUtils.clamp((speed - 3.0) / 1.6, 0, 1) : 0
+    if (A.idle) A.idle.setEffectiveWeight(1 - moveW)
+    A.walk.setEffectiveWeight(moveW * (1 - runW) + (A.idle ? 0 : 1 - moveW))
+    if (A.run) A.run.setEffectiveWeight(moveW * runW)
+    const alias = !A.idle // 无独立 idle：静止时冻结在当前帧（timeScale=0）
+    A.walk.timeScale = alias
+      ? Math.min(speed / 1.9, 2.1)
+      : THREE.MathUtils.clamp(speed / 1.9, 0.6, 2.1)
+    if (A.run) A.run.timeScale = THREE.MathUtils.clamp(speed / 5.2, 0.9, 1.5)
+  }
+
+  _stepAnim(speed, dt) {
+    if (!this.mixer) return
+    this._setAnimWeights(speed)
+    // 60Hz 采样足够平滑，省一半蒙皮计算（逻辑帧 128Hz）
+    this._animAcc += dt
+    if (this._animAcc >= 1 / 60) {
+      this.mixer.update(this._animAcc)
+      this._animAcc = 0
+    }
   }
 
   hide() {
@@ -259,6 +298,13 @@ export class Bot {
     this.spawnGuardUntil = this.now() + CONFIG.bot.spawnGuardMs / 1000
     this.firstVisibleAt = -1
     this.flinch = 0 // 复用的 Bot 不带旧受击踉跄
+    if (this.mixer) { // 骨骼假人归位站姿，不带上一条的残留步态
+      this.anim.walk.time = 0
+      if (this.anim.run) this.anim.run.time = 0
+      this._setAnimWeights(0)
+      this.mixer.update(0)
+      this._animAcc = 0
+    }
   }
 
   setOpacity(o) {
@@ -332,15 +378,19 @@ export class Bot {
       }
     }
 
-    // 朝向：peek 移动时朝行进方向，急停/静止时朝玩家
+    // 朝向：移动时朝行进方向（与脚步方向一致），急停/静止时朝玩家；平滑转身
     const stopped = this.mode === 'peek' && this.peek?.stopUntil > this.now()
-    if (this.mode === 'peek' && Math.abs(this.velX) > 0.4 && !stopped) {
-      this.mesh.rotation.y = this.velX > 0 ? -Math.PI / 2 : Math.PI / 2
+    let targetYaw
+    if ((this.mode === 'peek' || this.mode === 'track') && Math.abs(this.velX) > 0.4 && !stopped) {
+      targetYaw = this.velX > 0 ? -Math.PI / 2 : Math.PI / 2
     } else {
-      this.faceTowards(p.pos.x, p.pos.z)
+      targetYaw = Math.atan2(-(p.pos.x - this.pos.x), -(p.pos.z - this.pos.z))
     }
+    let dy = targetYaw - this.mesh.rotation.y
+    dy = Math.atan2(Math.sin(dy), Math.cos(dy)) // 取最短角差
+    this.mesh.rotation.y += dy * Math.min(1, dt * 14)
 
-    // 移动表现：程序化假人保留腿部摆动；骨骼假人姿态冻结（不播动画），仅身体轻微起伏
+    // 移动表现：程序化假人腿部摆动；骨骼假人播放混合动画（脚步与位移同步）
     const speed = Math.abs(this.velX)
     if (this.legL && this.legR) {
       if (speed > 0.3) {
@@ -354,6 +404,8 @@ export class Bot {
         this.legR.rotation.x *= 1 - Math.min(1, dt * 10)
         this.mesh.position.y = 0
       }
+    } else if (this.mixer) {
+      this._stepAnim(speed, dt)
     } else if (speed > 0.3) {
       this.walkPhase += dt * (4 + speed * 2.4)
       this.mesh.position.y = Math.abs(Math.sin(this.walkPhase)) * 0.018

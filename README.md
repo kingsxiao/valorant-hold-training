@@ -5,9 +5,9 @@
 > **关于素材的说明**：Riot 的游戏资产（模型/贴图/音效）受版权保护，本项目**不提取、不打包、不复刻**官方资源。
 >
 > **当前内置的开源模型**（`public/models/`）：
-> - `agent.glb` — ["BrainStem"](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/BrainStem)，© Microsoft，**CC-BY 4.0**（加载时自动归一化到 1.8m；取走路动画一帧冻结为持枪站姿，不播放动作）
-> - `viewmodel.glb` — [AK-47 by Quaternius](https://poly.pizza/m/em1Hi9GuCv)（Poly Pizza 分发），**CC0**
-> - `hands.glb` — ["Rigged FPS Arms" by J-Toastie](https://poly.pizza/m/XdHWM8uSAO)（Poly Pizza 分发），**CC-BY 3.0**（按骨骼左右手位置自动对位到枪的握把/护木，手腕下压成持握姿势）
+> - `agent.glb` — ["X Bot"](https://github.com/mrdoob/three.js/tree/master/examples/models/gltf)（Mixamo，经 three.js 官方示例分发），训练靶按实际移速**加权混合 idle/walk/run 动画**，脚步频率与位移同步（加载时自动归一化到 1.8m）
+> - `viewmodel.glb` — [AK-47 by Quaternius](https://poly.pizza/m/em1Hi9GuCv)（Poly Pizza 分发），**CC0**；仅替换步枪（Vandal/Phantom）外观，Sheriff/手枪/刀使用内置程序化模型（带枪机/套筒/转轮活动机件、解剖学分段手部与换弹弹匣动画）
+> - `hands.glb` — ["Rigged FPS Arms" by J-Toastie](https://poly.pizza/m/XdHWM8uSAO)（Poly Pizza 分发），**CC-BY 3.0**（按骨骼左右手位置自动对位到枪的握把/护木，手腕下压成持握姿势；随步枪显隐，手枪/刀用内置手臂）
 >
 > **替换成你自己的资产**（本地使用你拥有合法权利的文件）：同名覆盖 `public/models/*.glb`；音效放 `public/sfx/`（文件名见目录内说明）。本项目与 Riot Games 无关。
 
@@ -77,6 +77,7 @@ HUD 实时显示：击杀 / 对枪败 / 命中率 / 爆头率 / 反应时间（�
 **手感机制**：
 - 首发精度：静止 ≈0.2°，全速跑 ≈4.5°，跳跃大幅扩散；蹲下 ×0.85
 - 后坐力：程序化生成的弹道表（前 8 发垂直爬升 → 中后段水平摆动），停火 0.4s 立即重置（鼓励点射/急停）；视角上踢仅为视觉，弹道由表驱动
+- 持枪动画：枪机/套筒击发后坐回位、Sheriff 转轮分度+击锤、换弹时弹匣下落回插+上膛抽动、切枪从下方托起、静止呼吸微摆、挥刀弧线
 - 逻辑帧固定 **128Hz**（与游戏服务器 tick 一致），渲染插值，鼠标视角渲染帧直通（零延迟）
 
 ## 架构

@@ -235,7 +235,7 @@ export class BotManager {
     if (b.pos.x < -13) t.dir = 1
     if (b.pos.x > 13) t.dir = -1
     b.moveToward(t.dir * CONFIG.bot.moveSpeed * this.params.speedMult, dt)
-    b.faceTowards(this.player.pos.x, this.player.pos.z)
+    // 朝向由 Bot.step 统一处理（移动朝行进方向、静止朝玩家，带平滑转身）
   }
 
   // ---- 命中入口（WeaponSystem 调用）----

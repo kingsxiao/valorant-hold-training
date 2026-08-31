@@ -63,10 +63,14 @@ export class WeaponSystem {
       gold: new THREE.MeshStandardMaterial({ color: 0xe0b53c, roughness: 0.3, metalness: 0.9, emissive: 0x332200 }),
       dot: new THREE.MeshStandardMaterial({ color: 0x7dff9a, emissive: 0x2fbf62, emissiveIntensity: 2.2, roughness: 0.4 }),
     }
-    // 第一人称手臂材质：战术袖料（浅灰纯色，避免贴图乘色过暗）+ 战术手套（所有武器共享）
+    // 第一人称手臂材质：战术袖料（浅灰纯色）+ 战术手套（中灰 + 聚合物法线/粗糙度贴图出橘皮微凹凸）
     this.armMats = {
       sleeve: new THREE.MeshStandardMaterial({ color: 0x99a0a8, roughness: 0.93, metalness: 0 }),
-      glove: new THREE.MeshStandardMaterial({ color: 0x2b2f36, roughness: 0.88, metalness: 0.05 }),
+      glove: (() => {
+        const m = new THREE.MeshStandardMaterial({ color: 0x5a626c, roughnessMap: polyMaps.roughnessMap, normalMap: polyMaps.normalMap, roughness: 0.85, metalness: 0.05 })
+        m.normalScale = new THREE.Vector2(1.3, 1.3) // 近景微凹凸加重
+        return m
+      })(),
     }
     this.viewmodels = {
       vandal: this._buildRifleAK(),
@@ -88,6 +92,9 @@ export class WeaponSystem {
     this.vmBase = holder.position.clone()
     this.vmKick = 0
     this.swayX = 0; this.swayY = 0; this.bobT = 0
+    this.vmBolt = 0   // 机件后坐相位 0..1（枪机/套筒，击发置 1 快速回位）
+    this.vmSwing = 0  // 挥刀相位 0..1（sin 包络弧线）
+    this.idleT = 0    // 呼吸微摆计时
     this.muzzleOffset = new THREE.Vector3()
     this.customVm = null
     this.customHands = null
@@ -130,17 +137,30 @@ export class WeaponSystem {
     cyl(g, M.dark, 0.014, 0.055, 0, 0.012, -0.645)                  // 消焰器
     box(g, M.wood, 0.046, 0.042, 0.15, 0, -0.002, -0.31)            // 上护木
     box(g, M.wood, 0.04, 0.018, 0.15, 0, -0.032, -0.31)             // 下护木
-    const magSeg = (y, z, rx) => box(g, M.dark, 0.034, 0.052, 0.05, 0, y, z, rx) // 四段弧形弹匣
+    // 弹匣（独立组 + 克隆材质：换弹时下落/回插/淡出，不影响其它深色件）
+    const mag = new THREE.Group()
+    const magMat = M.dark.clone()
+    magMat.transparent = true
+    const magSeg = (y, z, rx) => box(mag, magMat, 0.034, 0.052, 0.05, 0, y, z, rx) // 四段弧形弹匣
     magSeg(-0.058, -0.025, 0.08)
     magSeg(-0.104, -0.008, 0.24)
     magSeg(-0.146, 0.018, 0.42)
     magSeg(-0.182, 0.052, 0.6)
+    g.add(mag)
+    g.userData.mag = mag
+    g.userData.magMats = [magMat]
     box(g, M.dark, 0.028, 0.005, 0.06, 0, -0.035, 0.03)             // 扳机护圈
     box(g, M.dark, 0.006, 0.018, 0.008, 0, -0.028, 0.018)           // 扳机
     box(g, M.wood, 0.034, 0.085, 0.045, 0, -0.06, 0.085, 0.3)       // 握把
     box(g, M.wood, 0.038, 0.05, 0.2, 0, -0.002, 0.26, -0.06)        // 枪托
     box(g, M.dark, 0.04, 0.06, 0.02, 0, -0.012, 0.36)               // 托底板
-    cyl(g, M.dark, 0.006, 0.03, 0.034, 0.01, -0.06, 8)              // 拉机柄
+    // 枪机组件（击发后坐回位）：拉机柄 + 右侧导轨盖，沿 +z 后坐
+    const bolt = new THREE.Group()
+    cyl(bolt, M.dark, 0.006, 0.03, 0.034, 0.01, -0.06, 8)           // 拉机柄
+    box(bolt, M.dark, 0.009, 0.018, 0.1, 0.0285, 0.012, -0.05)      // 枪机导轨盖
+    g.add(bolt)
+    bolt.userData.travel = 0.03
+    g.userData.bolt = bolt
     box(g, M.dark, 0.007, 0.026, 0.055, 0.0265, 0.012, -0.03)       // 抛壳口（右侧面暗槽）
     box(g, M.dark, 0.005, 0.02, 0.012, 0.0255, 0.012, -0.062)       // 抛壳口后导向
     for (const pz of [0.028, 0.072]) {                              // 机匣固定销 ×2
@@ -166,7 +186,20 @@ export class WeaponSystem {
     box(g, M.poly, 0.044, 0.05, 0.16, 0, -0.004, -0.26)             // 护木
     box(g, M.dark, 0.03, 0.024, 0.02, 0, 0.03, -0.2)                // 前准星
     box(g, M.dark, 0.032, 0.022, 0.025, 0, 0.056, 0.06)             // 后照门
-    box(g, M.dark, 0.032, 0.11, 0.05, 0, -0.075, -0.02, 0.08)       // 直弹匣
+    // 弹匣（独立组 + 克隆材质，换弹动画用）
+    const mag = new THREE.Group()
+    const magMat = M.poly.clone()
+    magMat.transparent = true
+    box(mag, magMat, 0.032, 0.11, 0.05, 0, -0.075, -0.02, 0.08)     // 直弹匣
+    g.add(mag)
+    g.userData.mag = mag
+    g.userData.magMats = [magMat]
+    // 枪机组件：后置拉机柄，击发后坐
+    const bolt = new THREE.Group()
+    box(bolt, M.dark, 0.022, 0.012, 0.032, -0.02, 0.046, 0.075)     // 拉机柄（左后上）
+    g.add(bolt)
+    bolt.userData.travel = 0.02
+    g.userData.bolt = bolt
     box(g, M.poly, 0.034, 0.08, 0.045, 0, -0.055, 0.08, 0.25)       // 握把
     box(g, M.poly, 0.036, 0.055, 0.14, 0, -0.005, 0.19)             // 枪托
     box(g, M.poly, 0.04, 0.07, 0.03, 0, -0.012, 0.27)               // 托腮板
@@ -177,16 +210,32 @@ export class WeaponSystem {
   }
 
   // 重左轮（Sheriff 定位）：转轮 + 六角枪管 + 木质握把
+  // 击发时转轮分度 60°、击锤前倒再待击（见 _updateVmParts/_indexCylinder）
   _buildRevolver() {
     const g = new THREE.Group()
     const { M, box, cyl } = this._vmHelpers()
     box(g, M.steel, 0.032, 0.05, 0.15, 0, 0.005, -0.02)             // 枪身框架
-    cyl(g, M.steel, 0.027, 0.05, 0, -0.002, -0.06)                  // 转轮
-    cyl(g, M.dark, 0.006, 0.052, 0, -0.002, -0.06, 6)               // 转轮中心栓
+    // 转轮（pivot 旋转 = 分度；弹巢槽随之转动可见）
+    const cylPivot = new THREE.Group()
+    cylPivot.position.set(0, -0.002, -0.06)
+    cyl(cylPivot, M.steel, 0.027, 0.05, 0, 0, 0)                    // 转轮体
+    cyl(cylPivot, M.dark, 0.006, 0.052, 0, 0, 0, 6)                 // 中心栓
+    for (let i = 0; i < 6; i++) {                                   // 六个弹巢暗槽
+      const a = i * Math.PI / 3
+      box(cylPivot, M.dark, 0.0085, 0.0085, 0.05, Math.cos(a) * 0.017, Math.sin(a) * 0.017, 0)
+    }
+    g.add(cylPivot)
+    g.userData.cylPivot = cylPivot
     cyl(g, M.steel, 0.013, 0.17, 0, 0.014, -0.16, 6)                // 六角枪管
     box(g, M.dark, 0.012, 0.014, 0.16, 0, 0.033, -0.15)             // 准星肋
     box(g, M.gold, 0.005, 0.018, 0.008, 0, 0.05, -0.225)            // 前准星
-    box(g, M.dark, 0.01, 0.022, 0.02, 0, 0.036, 0.05)               // 击锤
+    // 击锤（几何上移使 pivot 在根部，rotation.x 前倒/待击）
+    const hammerGeo = new THREE.BoxGeometry(0.01, 0.03, 0.024)
+    hammerGeo.translate(0, 0.015, 0)
+    const hammer = new THREE.Mesh(hammerGeo, M.dark)
+    hammer.position.set(0, 0.026, 0.056)
+    g.add(hammer)
+    g.userData.hammer = hammer
     box(g, M.wood, 0.03, 0.08, 0.042, 0, -0.05, 0.055, 0.38)        // 木质握把
     box(g, M.dark, 0.024, 0.005, 0.05, 0, -0.028, 0.0)              // 护圈
     box(g, M.dark, 0.006, 0.016, 0.008, 0, -0.02, -0.005)           // 扳机
@@ -201,18 +250,31 @@ export class WeaponSystem {
   }
 
   // 手枪（Classic / Ghost）：套筒 + 握把，（Ghost）加消音管
+  // 套筒（含准星/防滑纹）为独立组：击发后坐回位；弹匣底板换弹时下落/回插
   _buildPistol(suppressed) {
     const g = new THREE.Group()
     const { M, box, cyl } = this._vmHelpers()
     const slide = suppressed ? M.steel : M.silver
-    box(g, slide, 0.028, 0.038, 0.17, 0, 0.02, -0.06)               // 套筒
+    const bolt = new THREE.Group()
+    box(bolt, slide, 0.028, 0.038, 0.17, 0, 0.02, -0.06)             // 套筒
+    box(bolt, M.dark, 0.006, 0.008, 0.01, 0, 0.045, -0.135)         // 前准星
+    box(bolt, M.dark, 0.022, 0.008, 0.012, 0, 0.046, 0.015)         // 后照门
+    for (let i = 0; i < 3; i++) box(bolt, M.dark, 0.03, 0.026, 0.0035, 0, 0.02, 0.0 + i * 0.009) // 套筒后部防滑纹
+    if (suppressed) box(bolt, M.dark, 0.007, 0.012, 0.03, 0.0145, 0.024, -0.03) // 抛壳窗
+    g.add(bolt)
+    bolt.userData.travel = 0.017
+    g.userData.bolt = bolt
     box(g, M.poly, 0.026, 0.03, 0.15, 0, -0.008, -0.04)             // 下机匣
     box(g, M.poly, 0.03, 0.082, 0.044, 0, -0.05, 0.04, 0.28)        // 握把
+    const mag = new THREE.Group()
+    const magMat = M.dark.clone()
+    magMat.transparent = true
+    box(mag, magMat, 0.027, 0.016, 0.038, 0, -0.094, 0.052, 0.28)   // 弹匣底板（握把底微露）
+    g.add(mag)
+    g.userData.mag = mag
+    g.userData.magMats = [magMat]
     box(g, M.dark, 0.022, 0.005, 0.05, 0, -0.026, -0.015)           // 护圈
     box(g, M.dark, 0.005, 0.014, 0.007, 0, -0.018, -0.02)           // 扳机
-    box(g, M.dark, 0.006, 0.008, 0.01, 0, 0.045, -0.135)            // 前准星
-    box(g, M.dark, 0.022, 0.008, 0.012, 0, 0.046, 0.015)            // 后照门
-    for (let i = 0; i < 3; i++) box(g, M.dark, 0.03, 0.026, 0.0035, 0, 0.02, 0.0 + i * 0.009) // 套筒后部防滑纹
     if (suppressed) {
       cyl(g, M.dark, 0.015, 0.1, 0, 0.02, -0.2)                     // 消音管
       this._orientVm(g, { muzzle: new THREE.Vector3(0, 0.02, -0.26), pos: new THREE.Vector3(0.13, -0.125, -0.24), scale: 0.95, eject: new THREE.Vector3(0.018, 0.024, -0.05) })
@@ -253,15 +315,17 @@ export class WeaponSystem {
     g.scale.setScalar(scale)
   }
 
-  // ---- 第一人称持枪手臂（静态姿势）：袖臂圆柱 + 关节球 + 手指，全部合并成 2 个网格 ----
-  // 坐标为各武器本地系（-Z 朝前），随武器继承持枪位置/缩放/后坐摆动，不做独立动画
-  _buildArms(kind) {
+    // ---- 第一人称持枪手臂（静态姿势）：袖臂圆柱 + 解剖学手部，全部合并成 2 个网格 ----
+    // 坐标为各武器本地系（-Z 朝前），随武器继承持枪位置/缩放/后坐摆动，不做独立动画
+    // 手部结构：三球掌型（掌跟/掌中/指根脊）+ 三节分段手指（指节球+扣握弧+微扁指尖）
+    //           + 三段拇指 + 指节护甲板 + 护腕束带 —— 全部合并，零 draw call 增量
+    _buildArms(kind) {
     const sleeve = [], glove = []
     const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3()
     const UP = new THREE.Vector3(0, 1, 0), _d = new THREE.Vector3()
-    const ball = (bk, x, y, z, r, sx = 1, sy = 1, sz = 1) => {
+    const ball = (bk, x, y, z, r, sx = 1, sy = 1, sz = 1, seg = 12) => {
       _m4.compose(_p.set(x, y, z), _q.identity(), _s.set(sx, sy, sz))
-      bk.push(new THREE.SphereGeometry(r, 12, 9).applyMatrix4(_m4))
+      bk.push(new THREE.SphereGeometry(r, seg, Math.round(seg * 0.75)).applyMatrix4(_m4))
     }
     const tube = (bk, ax, ay, az, bx, by, bz, r1, r2 = r1) => { // r1 近端 → r2 远端
       _d.set(bx - ax, by - ay, bz - az)
@@ -272,46 +336,133 @@ export class WeaponSystem {
       _m4.compose(_p.set(ax, ay, az), _q, _s.set(1, 1, 1))
       bk.push(geo.applyMatrix4(_m4))
     }
-    // 右臂（握把）：掌 + 指扣握 + 拇指 + 小臂/上臂探出画面右下（fingerZ 为绝对 Z 坐标）
+    const boxAt = (bk, w, h, d, x, y, z, rx = 0, ry = 0, rz = 0) => {
+      _q.setFromEuler(new THREE.Euler(rx, ry, rz))
+      _m4.compose(_p.set(x, y, z), _q, _s.set(1, 1, 1))
+      bk.push(new THREE.BoxGeometry(w, h, d).applyMatrix4(_m4))
+    }
+    // 三节扣握手指：沿 S→E 三段递进弓起（bow>0 向下扣、<0 向上翻）。
+    // 关键：管段末端明显收细 + 指节球放大 → 关节处有肉眼可见的鼓包折角
+    const curlFinger = (bk, S, E, rBase = 0.0104, bow = [0, 0.006, 0.014, 0.02]) => {
+      const ts = [0, 0.36, 0.7, 1]
+      const pts = ts.map((t, i) => [
+        S[0] + (E[0] - S[0]) * t,
+        S[1] + (E[1] - S[1]) * t - bow[i],
+        S[2] + (E[2] - S[2]) * t,
+      ])
+      tube(bk, ...pts[0], ...pts[1], rBase * 0.9, rBase * 0.66)                       // 近节（粗→细）
+      ball(bk, ...pts[1], rBase * 0.97)                                                // 指节球（凸出管端 ~45%）
+      tube(bk, ...pts[1], ...pts[2], rBase * 0.78, rBase * 0.56)                      // 中节
+      ball(bk, ...pts[2], rBase * 0.8)                                                 // 中节球
+      tube(bk, ...pts[2], ...pts[3], rBase * 0.7, rBase * 0.48)                       // 远节（最细）
+      ball(bk, pts[3][0], pts[3][1] - 0.001, pts[3][2], rBase * 0.62, 1, 0.92, 1.2)  // 指尖（微扁圆）
+    }
+    // 三段拇指：粗短腕掌根 → 渐细指尖，与四指形成明显粗细对比
+    const thumb3 = (bk, base, mid, tip) => {
+      ball(bk, ...base, 0.0142)                          // 腕掌关节（粗）
+      tube(bk, ...base, ...mid, 0.012, 0.0094)
+      ball(bk, ...mid, 0.0112)                           // 拇指掌指球
+      tube(bk, ...mid, ...tip, 0.0102, 0.007)
+      ball(bk, tip[0], tip[1] + 0.001, tip[2], 0.0078, 1, 0.85, 1.35)
+    }
+    // 三球掌型：掌跟（近腕收窄）+ 掌中（最饱满）+ 指根脊（横向展开）叠出体积过渡
+    const palm3 = (bk, heel, mid, ridge) => {
+      ball(bk, ...heel, 16)
+      ball(bk, ...mid, 16)
+      ball(bk, ...ridge, 14)
+    }
+    // 指节护甲板：横跨指根列的微倾厚板（战术手套样式，凸出轮廓 ~2mm 读得出体积）
+    const knucklePlate = (bk, x, y, z, span, rx) => boxAt(bk, 0.014, 0.016, span, x, y, z, rx)
+    // 护腕束带：腕口一段加粗环（手套色，与袖料形成层次；合并进现有桶 → 零 draw call）
+    const cuff = (bk, A, B, t0, t1, r) => tube(bk,
+      A[0] + (B[0] - A[0]) * t0, A[1] + (B[1] - A[1]) * t0, A[2] + (B[2] - A[2]) * t0,
+      A[0] + (B[0] - A[0]) * t1, A[1] + (B[1] - A[1]) * t1, A[2] + (B[2] - A[2]) * t1, r)
+    // 右臂（握把）：三球掌 + 指节护甲 + 四指三节扣握 + 三段拇指 + 小臂/上臂探出画面右下（fingerZ 为绝对 Z 坐标）
     const rightArm = (gx, gy, gz, gripW, fingerZ, thumbZ) => {
-      ball(glove, gx + 0.028, gy - 0.012, gz + 0.01, 0.04, 0.85, 1.25, 1.35)          // 右掌
-      for (const fz of fingerZ) tube(glove, gx + gripW, gy + 0.015, fz, gx - gripW, gy - 0.002, fz - 0.006, 0.0088) // 四指
-      ball(glove, gx + 0.036, gy + 0.035, thumbZ, 0.013, 0.8, 1, 1.7)                 // 拇指
+      palm3(glove,
+        [gx + 0.033, gy - 0.03, gz + 0.05, 0.030, 0.8, 1.02, 0.85],     // 掌跟
+        [gx + 0.030, gy - 0.012, gz + 0.018, 0.036, 0.88, 1.18, 1.12],  // 掌中
+        [gx + 0.026, gy + 0.008, gz - 0.006, 0.030, 1.14, 0.6, 1.38],   // 指根脊
+      )
+      const zMid = (fingerZ[0] + fingerZ[fingerZ.length - 1]) / 2
+      knucklePlate(glove, gx + gripW + 0.006, gy + 0.026, zMid,
+        Math.abs(fingerZ[fingerZ.length - 1] - fingerZ[0]) + 0.024, 0.22)
+      for (const fz of fingerZ) curlFinger(glove, [gx + gripW, gy + 0.017, fz], [gx - gripW, gy - 0.004, fz - 0.006])
+      thumb3(glove,
+        [gx + 0.034, gy + 0.026, thumbZ + 0.014],
+        [gx + 0.038, gy + 0.04, thumbZ - 0.004],
+        [gx + 0.034, gy + 0.049, thumbZ - 0.022],
+      )
       ball(sleeve, gx + 0.052, gy - 0.045, gz + 0.06, 0.036)                          // 腕
       tube(sleeve, gx + 0.056, gy - 0.05, gz + 0.07, gx + 0.13, gy - 0.13, gz + 0.26, 0.043, 0.052) // 小臂
       tube(sleeve, gx + 0.13, gy - 0.13, gz + 0.26, gx + 0.26, gy - 0.26, gz + 0.46, 0.052, 0.058)  // 上臂（出画）
+      cuff(glove, [gx + 0.056, gy - 0.05, gz + 0.07], [gx + 0.13, gy - 0.13, gz + 0.26], 0.04, 0.17, 0.0465)
     }
-    // 左臂（护木/握把下）：掌 + 指扣压 + 拇指 + 小臂/上臂探出画面左下（fingerZ 为绝对 Z 坐标）
+    // 左臂（护木/握把下）：三球掌（宽扁托底）+ 四指三节上翻扣顶 + 三段拇指 + 小臂/上臂探出画面左下
     const leftArm = (gx, gy, gz, gripW, fingerZ) => {
-      ball(glove, gx - 0.004, gy - 0.016, gz, 0.042, 1.25, 0.9, 1.55)                 // 左掌（托底）
-      for (const fz of fingerZ) tube(glove, gx - gripW, gy + 0.012, fz, gx + gripW - 0.004, gy + 0.03, fz + 0.005, 0.0085) // 四指扣顶
-      ball(glove, gx + gripW + 0.004, gy + 0.008, gz - 0.03, 0.014, 0.75, 0.9, 2.0)   // 拇指（贴近侧）
+      palm3(glove,
+        [gx - 0.006, gy - 0.034, gz + 0.056, 0.030, 0.9, 0.95, 0.9],    // 掌跟
+        [gx - 0.004, gy - 0.018, gz + 0.008, 0.038, 1.22, 0.88, 1.3],   // 掌中（宽扁）
+        [gx - 0.002, gy + 0.002, gz - 0.018, 0.031, 1.3, 0.55, 1.45],   // 指根脊
+      )
+      const zMid = (fingerZ[0] + fingerZ[fingerZ.length - 1]) / 2
+      knucklePlate(glove, gx - gripW - 0.003, gy + 0.03, zMid,
+        Math.abs(fingerZ[fingerZ.length - 1] - fingerZ[0]) + 0.024, -0.16)
+      for (const fz of fingerZ) curlFinger(glove, [gx - gripW, gy + 0.014, fz], [gx + gripW - 0.004, gy + 0.032, fz + 0.005], 0.0098, [0, -0.004, -0.01, -0.003])
+      thumb3(glove,
+        [gx + gripW - 0.004, gy + 0.002, gz - 0.052],
+        [gx + gripW + 0.002, gy + 0.008, gz - 0.03],
+        [gx + gripW + 0.006, gy + 0.014, gz - 0.008],
+      )
       ball(sleeve, gx - 0.052, gy - 0.055, gz + 0.11, 0.035)                          // 腕
       tube(sleeve, gx - 0.056, gy - 0.06, gz + 0.12, gx - 0.15, gy - 0.16, gz + 0.3, 0.043, 0.052) // 小臂
       tube(sleeve, gx - 0.15, gy - 0.16, gz + 0.3, gx - 0.27, gy - 0.28, gz + 0.52, 0.052, 0.058)  // 上臂（出画）
+      cuff(glove, [gx - 0.056, gy - 0.06, gz + 0.12], [gx - 0.15, gy - 0.16, gz + 0.3], 0.04, 0.17, 0.0465)
     }
 
     if (kind === 'rifle') {
       rightArm(-0.068, -0.068, 0.086, 0.04, [0.064, 0.086, 0.108], 0.106)             // 右手握木握把（掌贴近侧面）
       leftArm(-0.036, -0.032, -0.31, 0.028, [-0.26, -0.3, -0.34, -0.37])              // 左手托下护木
     } else if (kind === 'pistol') {
-      ball(glove, -0.03, -0.058, 0.048, 0.037, 0.82, 1.2, 1.3)                        // 右掌（贴近侧面外）
-      for (const dz of [0.028, 0.048, 0.068]) tube(glove, 0.034, -0.028, dz, -0.028, -0.045, dz, 0.008)  // 右四指
-      ball(glove, -0.05, -0.064, 0.036, 0.034, 0.8, 1.1, 1.2)                         // 左掌（托底）
-      for (const dz of [0.03, 0.05, 0.07]) tube(glove, -0.056, -0.048, dz, 0.026, -0.058, dz, 0.008)     // 左指扣右指
+      // 右手（主力握把）：三球掌 + 指节护甲 + 三指扣握 + 拇指贴机匣侧
+      palm3(glove,
+        [-0.032, -0.08, 0.076, 0.029, 0.8, 1.0, 0.85],
+        [-0.03, -0.058, 0.05, 0.035, 0.82, 1.16, 1.25],
+        [-0.028, -0.04, 0.026, 0.03, 1.06, 0.6, 1.3],
+      )
+      knucklePlate(glove, 0.038, -0.018, 0.048, 0.064, 0.25)
+      for (const dz of [0.028, 0.048, 0.068]) curlFinger(glove, [0.034, -0.026, dz], [-0.028, -0.046, dz], 0.0098)
+      thumb3(glove, [-0.03, -0.032, 0.06], [-0.028, -0.024, 0.028], [-0.026, -0.022, -0.004])
+      // 左手（托底支撑）：三球掌 + 三指扣压右手 + 拇指压掌背
+      palm3(glove,
+        [-0.056, -0.09, 0.062, 0.028, 0.8, 0.95, 0.85],
+        [-0.052, -0.066, 0.038, 0.033, 0.8, 1.1, 1.15],
+        [-0.048, -0.046, 0.018, 0.028, 1.1, 0.55, 1.25],
+      )
+      for (const dz of [0.03, 0.05, 0.07]) curlFinger(glove, [-0.054, -0.044, dz], [0.026, -0.056, dz], 0.0092, [0, 0.003, 0.008, 0.012])
+      thumb3(glove, [-0.06, -0.052, 0.024], [-0.052, -0.038, 0.006], [-0.044, -0.03, -0.008])
       ball(sleeve, 0.048, -0.092, 0.1, 0.036)
       tube(sleeve, 0.052, -0.096, 0.11, 0.12, -0.175, 0.29, 0.043, 0.052)
       tube(sleeve, 0.12, -0.175, 0.29, 0.24, -0.3, 0.49, 0.052, 0.058)
+      cuff(glove, [0.052, -0.096, 0.11], [0.12, -0.175, 0.29], 0.04, 0.17, 0.0465)
       ball(sleeve, -0.05, -0.098, 0.085, 0.035)
       tube(sleeve, -0.054, -0.102, 0.095, -0.125, -0.18, 0.27, 0.042, 0.051)
       tube(sleeve, -0.125, -0.18, 0.27, -0.24, -0.3, 0.47, 0.051, 0.057)
+      cuff(glove, [-0.054, -0.102, 0.095], [-0.125, -0.18, 0.27], 0.04, 0.17, 0.0445)
     } else if (kind === 'knife') {
-      ball(glove, -0.026, -0.026, 0.055, 0.038, 0.85, 1.3, 1.5)                       // 掌（贴近侧面外）
-      for (const dz of [0.03, 0.06, 0.09]) tube(glove, 0.024, -0.002, dz, -0.022, -0.018, dz, 0.0085)
-      ball(glove, -0.02, 0.008, 0.02, 0.011, 0.8, 1, 1.4)
+      // 反握刀柄：三球掌 + 指节护甲 + 三指扣柄 + 拇指压柄脊
+      palm3(glove,
+        [-0.028, -0.05, 0.085, 0.029, 0.8, 1.0, 0.9],
+        [-0.026, -0.026, 0.055, 0.036, 0.85, 1.28, 1.45],
+        [-0.024, -0.006, 0.03, 0.03, 1.0, 0.6, 1.5],
+      )
+      knucklePlate(glove, 0.028, 0.002, 0.06, 0.087, 0.3)
+      for (const dz of [0.03, 0.06, 0.09]) curlFinger(glove, [0.024, 0.0, dz], [-0.022, -0.018, dz], 0.01)
+      thumb3(glove, [-0.026, 0.0, 0.04], [-0.022, 0.01, 0.026], [-0.018, 0.016, 0.012])
       ball(sleeve, 0.042, -0.058, 0.12, 0.036)
       tube(sleeve, 0.046, -0.062, 0.13, 0.12, -0.15, 0.29, 0.043, 0.052)
       tube(sleeve, 0.12, -0.15, 0.29, 0.24, -0.27, 0.49, 0.052, 0.058)
+      cuff(glove, [0.046, -0.062, 0.13], [0.12, -0.15, 0.29], 0.04, 0.17, 0.0465)
     } else { // custom：用户自有枪模（customArms 原点=模型包围盒中心，-Z 朝枪口；经投影校准）
       // 手掌贴在枪身近侧（-X 面）外，手指穿过侧面 → 可见的"包握"
       rightArm(-0.12, 0.03, 0.126, 0.05, [0.1, 0.13, 0.16], 0.13)                     // 右手握握把（枪身后段）
@@ -326,16 +477,14 @@ export class WeaponSystem {
 
   weaponMeshFor(id) {
     this.currentVmId = id
-    for (const [vid, vm] of Object.entries(this.viewmodels)) vm.visible = vid === id
-    const vm = this.viewmodels[id]
-    this.muzzleOffset.copy(vm.userData.muzzle)
-    if (this.customVm) { // 用户自有枪模：替换一切步枪/手枪显示
-      for (const v of Object.values(this.viewmodels)) v.visible = false
-      this.customVm.visible = true
-      this.muzzleOffset.copy(this.customVm.userData.muzzle)
-    }
-    if (this.customArms) this.customArms.visible = !!this.customVm && !this.customHands // 自有枪模手臂随其显隐
-    if (this.customHands) this.customHands.visible = !!this.customVm // GLB 手臂随自定义枪模显隐
+    // 自有 GLB 枪模只接管步枪（AK 造型配 Vandal/Phantom 定位）；
+    // Sheriff/Classic/Ghost/Knife 用内置模型 —— 刀得像刀，左轮得像左轮
+    const useCustom = !!this.customVm && (id === 'vandal' || id === 'phantom')
+    for (const [vid, vm] of Object.entries(this.viewmodels)) vm.visible = !useCustom && vid === id
+    if (this.customVm) this.customVm.visible = useCustom
+    this.muzzleOffset.copy((useCustom ? this.customVm : this.viewmodels[id]).userData.muzzle)
+    if (this.customArms) this.customArms.visible = useCustom && !this.customHands // 自有枪模手臂随其显隐
+    if (this.customHands) this.customHands.visible = useCustom // GLB 手臂随步枪显隐
   }
 
   // 用户自有 GLB 手臂（public/models/hands.glb）：按"左手/右手"骨骼位置做刚性对位 ——
@@ -558,16 +707,24 @@ export class WeaponSystem {
       this.fx.impact(wallHit.x, wallHit.y, wallHit.z, wallHit.nx, wallHit.ny, wallHit.nz)
     }
 
-    // 持枪模型后坐
+    // 持枪模型后坐 + 机件循环（枪机/套筒后坐回位，Sheriff 转轮分度）
     this.vmKick = Math.min(this.vmKick + 0.035, 0.08)
+    this.vmBolt = 1
+    if (this.currentId === 'sheriff') this._indexCylinder()
     this.lastFireTime = this.now
     this.onAmmoChange?.(this)
+  }
+
+  // 转轮击发后分度 60°（下一发弹巢对准枪管）
+  _indexCylinder() {
+    this.viewmodels.sheriff.userData.cylPivot.rotation.z += Math.PI / 3
   }
 
   _meleeSwing() {
     const w = this.weapon
     this.audio.shot(w.sound, null, { pos: this.camera.position, yaw: this.player.yaw })
     this.vmKick = 0.09
+    this.vmSwing = 1 // 挥刀弧线（updateViewmodel 里 sin 包络）
     const p = this.player
     const eye = _eye.set(p.pos.x, p.pos.y + p.eyeHeight, p.pos.z)
     const hit = this.bots.pickHit(eye, _dir.set(0, 0, -1).applyEuler(_euler.set(p.pitch, p.yaw, 0)), w.range)
@@ -652,21 +809,71 @@ export class WeaponSystem {
     this.bobT += dt * (6 + speedRatio * 6)
     const bob = p.grounded ? Math.sin(this.bobT) * 0.006 * speedRatio : 0
     const bobX = p.grounded ? Math.cos(this.bobT * 0.5) * 0.004 * speedRatio : 0
-    // 换弹/切枪动作下沉
+    // 静止呼吸微摆（慢频小幅，速度越快越弱）
+    this.idleT += dt
+    const idleK = 1 - speedRatio
+    const breatheY = Math.sin(this.idleT * 1.7) * 0.0022 * idleK
+    const breatheX = Math.cos(this.idleT * 0.9) * 0.0016 * idleK
+    // 换弹下沉 / 起枪缓动（从下方托起，ease-out）
     const reloading = this.reloadEnd > this.now
-    const equipping = this.now < this.equipUntil
-    const lower = reloading ? 0.1 : equipping ? 0.14 : 0
+    const equipT = Math.max(0.01, this.weapon.equipTime)
+    const ep = this.now < this.equipUntil ? 1 - (this.equipUntil - this.now) / equipT : 1
+    const raise = (1 - Math.pow(THREE.MathUtils.clamp(ep, 0, 1), 3)) * 0.17
+    const lower = reloading ? 0.1 : raise
     const crouchDrop = p.crouchAmt * 0.02
+    // 挥刀弧线（sin 包络：抬起 → 劈下 → 回位）
+    let swPitch = 0, swYaw = 0, swFwd = 0
+    if (this.vmSwing > 0) {
+      this.vmSwing = Math.max(0, this.vmSwing - dt * 3.2)
+      const s = Math.sin((1 - this.vmSwing) * Math.PI)
+      swPitch = s * 0.85
+      swYaw = s * 0.3
+      swFwd = -s * 0.12
+    }
     this.vmHolder.position.set(
-      this.vmBase.x + this.swayX + bobX,
-      this.vmBase.y + this.swayY + bob - lower - crouchDrop,
-      this.vmBase.z + this.vmKick,
+      this.vmBase.x + this.swayX + bobX + breatheX,
+      this.vmBase.y + this.swayY + bob - lower - crouchDrop + breatheY,
+      this.vmBase.z + this.vmKick + swFwd,
     )
     this.vmHolder.rotation.set(
-      this.vmKick * 2.2 + this.swayY * 2 + 0.04,
-      WeaponSystem.vmBaseYaw + this.swayX * 2,
+      this.vmKick * 2.2 + this.swayY * 2 + 0.04 - swPitch,
+      WeaponSystem.vmBaseYaw + this.swayX * 2 + swYaw,
       WeaponSystem.vmBaseRoll + (reloading ? 0.3 : 0),
     )
+    this._updateVmParts(dt, reloading)
+  }
+
+  // ---- 机件/弹匣动画：枪机后坐回位、左轮击锤、换弹弹匣下落回插 + 上膛抽动 ----
+  _updateVmParts(dt, reloading) {
+    this.vmBolt = Math.max(0, this.vmBolt - dt * 11) // ~90ms 一个循环，对上步枪射速观感
+    const vm = this.customVm && (this.currentVmId === 'vandal' || this.currentVmId === 'phantom')
+      ? this.customVm
+      : this.viewmodels[this.currentVmId]
+    if (!vm) return
+    const bolt = vm.userData.bolt
+    if (bolt) {
+      bolt.userData.z0 ??= bolt.position.z
+      bolt.position.z = bolt.userData.z0 + this.vmBolt * bolt.userData.travel
+    }
+    const hammer = vm.userData.hammer
+    if (hammer) hammer.rotation.x = 0.12 + (1 - this.vmBolt) * 0.62 // 击发瞬间前倒，随后回待击
+    const mag = vm.userData.mag
+    if (!mag) return
+    const mats = vm.userData.magMats
+    if (reloading) {
+      const pr = THREE.MathUtils.clamp(1 - (this.reloadEnd - this.now) / this.weapon.reloadTime, 0, 1)
+      // 弹匣：0~14% 抽出下坠 → 中段离手（淡出）→ 62~84% 回插 → 90% 上膛抽动
+      const drop = pr < 0.14 ? pr / 0.14 : pr < 0.62 ? 1 : pr < 0.84 ? 1 - (pr - 0.62) / 0.22 : 0
+      mag.userData.y0 ??= mag.position.y
+      mag.position.y = mag.userData.y0 - drop * 0.14
+      const vis = pr < 0.10 ? 1 - pr / 0.10 : pr < 0.64 ? 0 : Math.min(1, (pr - 0.64) / 0.12)
+      for (const m of mats) m.opacity = vis
+      if (pr > 0.9) { if (!mag.userData.racked) this.vmBolt = 1; mag.userData.racked = true }
+      if (pr < 0.5) mag.userData.racked = false
+    } else {
+      mag.position.y = mag.userData.y0 ?? 0
+      for (const m of mats) m.opacity = 1
+    }
   }
 }
 

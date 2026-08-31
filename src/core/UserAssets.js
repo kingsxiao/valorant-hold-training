@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { applyAgentTextures, applyViewmodelTextures, applyHandsTextures } from '../world/ModelTexturing.js'
 
 // 用户/开源模型加载：
 //   public/models/agent.glb      → 训练机器人外观（当前内置：Khronos "BrainStem"，CC-BY 4.0 by Microsoft，
@@ -54,6 +55,7 @@ export async function loadUserAssets() {
     agent.position.x -= c.x
     agent.position.z -= c.z
     agent.position.y -= box.min.y
+    applyAgentTextures(agent) // GLB 白模 → 程序化装甲/关节贴图
     out.agent = agent
     out.agentAnimations = animations
   }
@@ -75,9 +77,13 @@ export async function loadUserAssets() {
     vm.position.x -= c.x
     vm.position.y -= c.y
     vm.position.z -= c.z
+    applyViewmodelTextures(vm) // 无 UV 白模 → 盒式投影 UV + 金属/木纹贴图
     out.viewmodel = vm
   }
   // 手臂：原始场景原样返回，对位/缩放在 WeaponSystem.setCustomHands 里按骨骼位置计算
-  if (handsGltf?.scene) out.hands = handsGltf.scene
+  if (handsGltf?.scene) {
+    applyHandsTextures(handsGltf.scene) // 袖/肤/手套 → 布料/皮肤/聚合物贴图
+    out.hands = handsGltf.scene
+  }
   return out
 }

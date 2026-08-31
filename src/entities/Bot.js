@@ -60,9 +60,9 @@ export class Bot {
       Bot._baseMats = {
         suit: pbr({ maps: Tex.suit(), roughness: 0.9 }),
         vest: pbr({ maps: Tex.vest(), roughness: 0.7 }),
-        head: new THREE.MeshStandardMaterial({ color: 0x474045, roughness: 0.5, metalness: 0.15 }),
+        head: pbr({ maps: Tex.robotJoint(), color: 0xb8bdc4, roughness: 0.5, metalness: 0.3 }),
         visor: visorMat,
-        glove: new THREE.MeshStandardMaterial({ color: 0x1c1e23, roughness: 0.9 }),
+        glove: pbr({ maps: Tex.fabric(), color: 0x4a4f57, roughness: 0.88 }),
         accent: new THREE.MeshStandardMaterial({ color: 0xd8454e, roughness: 0.55, emissive: 0x2a0708 }),
         gun: pbr({ maps: Tex.metal(), roughness: 0.45, metalness: 0.75 }),
       }
@@ -74,11 +74,12 @@ export class Bot {
     if (Bot.customTemplate) return this._buildCustom()
     const g = new THREE.Group()
     const M = this.mats = {}
+    // 记录原始自发光（受击闪红后按此恢复）。注意 Material.clone 会深拷贝 userData，
+    // 克隆之后才往基材写的字段不会出现在克隆体上 → 必须写在克隆体自己身上
     for (const [k, m] of Object.entries(Bot.baseMats())) {
       M[k] = m.clone()
-      // 记录原始自发光（受击闪红后按此恢复；克隆体会继承 userData）
-      m.userData.em ??= m.emissive?.getHex() ?? 0
-      m.userData.emI ??= m.emissiveIntensity ?? 1
+      M[k].userData.em = m.emissive?.getHex() ?? 0
+      M[k].userData.emI = m.emissiveIntensity ?? 1
     }
     const matsKey = Object.keys(M)
 
@@ -186,6 +187,11 @@ export class Bot {
     this.deathT = 0
     this.hitFlash = 0
     this.allMats = matsKey.map(k => M[k]).concat(this.blobMat)
+    // 本实例独占的资源（dispose 用；克隆材质共享基材纹理，Geometry 均为逐 bot 合并产物）
+    this._ownGeos = []
+    g.traverse(o => { if (o.isMesh) this._ownGeos.push(o.geometry) })
+    this._ownGeos.push(blob.geometry)
+    this._ownMats = [...matsKey.map(k => M[k]), this.blobMat]
   }
 
   // 用户自有 GLB 人物（agent.glb）：骨骼模型需 SkeletonUtils 克隆 + 每 bot 材质克隆
@@ -193,11 +199,14 @@ export class Bot {
     const g = new THREE.Group()
     const clone = SkeletonUtils.clone(Bot.customTemplate)
     this.mats = {}
+    this._ownMats = []
     let i = 0
     clone.traverse(o => {
       if (o.isMesh) {
         o.material = Array.isArray(o.material) ? o.material.map(m => m.clone()) : o.material.clone()
-        const m0 = Array.isArray(o.material) ? o.material[0] : o.material
+        const all = Array.isArray(o.material) ? o.material : [o.material]
+        this._ownMats.push(...all)
+        const m0 = all[0]
         this.mats['m' + i++] = m0
         m0.userData.em ??= m0.emissive?.getHex() ?? 0   // 受击闪红后按原始值恢复
         m0.userData.emI ??= m0.emissiveIntensity ?? 1
@@ -242,6 +251,18 @@ export class Bot {
     this.deathT = 0
     this.hitFlash = 0
     this.allMats = [...Object.values(this.mats), this.blobMat]
+    // 克隆体与模板共享几何（不可释放）；仅接触阴影盘为本实例独占
+    this._ownGeos = [blob.geometry]
+    this._ownMats.push(this.blobMat)
+  }
+
+  // 从场景移除并释放本实例独占资源（回合重置时调用，防止切模式/重开局无限累积节点）
+  dispose() {
+    this.hide()
+    this.scene.remove(this.mesh)
+    this.scene.remove(this.blob)
+    for (const m of this._ownMats ?? []) m.dispose?.()
+    for (const geo of this._ownGeos ?? []) geo.dispose()
   }
 
   // 骨骼动画权重：idle ↔ walk ↔ run 按移速平滑过渡；
@@ -298,6 +319,8 @@ export class Bot {
     this.spawnGuardUntil = this.now() + CONFIG.bot.spawnGuardMs / 1000
     this.firstVisibleAt = -1
     this.flinch = 0 // 复用的 Bot 不带旧受击踉跄
+    this.hitFlash = 0
+    this._restoreEmissive() // 也不带旧受击红光（如被击杀后立刻复用）
     if (this.mixer) { // 骨骼假人归位站姿，不带上一条的残留步态
       this.anim.walk.time = 0
       if (this.anim.run) this.anim.run.time = 0
@@ -337,6 +360,19 @@ export class Bot {
     this.velX = 0
     this.deathRoll = (vary() - 0.5) * 0.55 // 带随机侧倒更自然
     this.flinch = 0
+    // 死亡分支不走上面的闪光恢复路径（step 提前返回）——在此立即还原，
+    // 否则击杀瞬间的受击红光会贯穿整个倒地动画与重生
+    this.hitFlash = 0
+    this._restoreEmissive()
+  }
+
+  // 还原各材质的原始自发光（受击闪红后的恢复路径统一走这里）
+  _restoreEmissive() {
+    for (const m of Object.values(this.mats)) {
+      if (!m.emissive) continue
+      m.emissive.setHex(m.userData?.em ?? 0)
+      if (m.userData?.emI !== undefined) m.emissiveIntensity = m.userData.emI
+    }
   }
 
   step(dt, ctx) {
@@ -369,13 +405,7 @@ export class Bot {
     // 命中闪光：恢复原始自发光（受击时被 flashHit 置红/白）
     if (this.hitFlash > 0) {
       this.hitFlash -= dt
-      if (this.hitFlash <= 0) {
-        for (const m of Object.values(this.mats)) {
-          if (!m.emissive) continue
-          m.emissive.setHex(m.userData?.em ?? 0)
-          if (m.userData?.emI !== undefined) m.emissiveIntensity = m.userData.emI
-        }
-      }
+      if (this.hitFlash <= 0) this._restoreEmissive()
     }
 
     // 朝向：移动时朝行进方向（与脚步方向一致），急停/静止时朝玩家；平滑转身

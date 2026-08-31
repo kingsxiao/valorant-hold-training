@@ -52,7 +52,7 @@ export class BotManager {
   }
 
   resetRound() {
-    for (const b of this.bots) b.hide()
+    for (const b of this.bots) b.dispose() // 从场景移除并释放，防止网格无限累积
     this.bots.length = 0
     this.stats = this._freshStats()
     this.running = true

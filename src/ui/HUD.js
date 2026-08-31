@@ -77,7 +77,7 @@ export class HUD {
 
   setHP(hpVal) {
     this.setText(this.hp.querySelector('span'), 'hp', String(hpVal))
-    this.hp.querySelector('.bar i').style.width = hpVal + '%'
+    if (this._cache.hpBar !== hpVal) { this._cache.hpBar = hpVal; this.hp.querySelector('.bar i').style.width = hpVal + '%' }
   }
 
   setSpeed(v) { this.setText(this.speed, 'speed', v.toFixed(1) + ' m/s') }

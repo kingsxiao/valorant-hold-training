@@ -124,6 +124,8 @@ export const CONFIG = {
     maxPixelRatio: 2,
     shadows: false,         // 默认关（性能优先），菜单可开
     fovH: 103,              // Valorant 水平 FOV 103°（垂直随窗口比例换算）
+    viewmodelFov: 55,       // 持枪视角独立垂直 FOV（CS/Valorant 同做法：与主 FOV 解耦，
+                            // 枪/手臂比例不随主视野拉伸，且单独一趟渲染不穿墙）
   },
 
   colors: {

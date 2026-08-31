@@ -164,11 +164,12 @@ export class FX {
     }
     this.decalIdx = 0
 
-    // 枪口焰：星形贴图加法精灵（挂相机）+ 世界空间动态点光
+    // 枪口焰：星形贴图加法精灵（世界坐标，跟 viewmodel 实测枪口）+ 动态点光
     const fMat = new THREE.SpriteMaterial({ map: Tex.flash(), color: 0xffffff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })
     this.flash = new THREE.Sprite(fMat)
     this.flash.scale.set(0.3, 0.3, 1)
     this.flash.visible = false
+    scene.add(this.flash)
     this.flashLife = 0
     this.flashLight = new THREE.PointLight(0xffbe7a, 0, 11, 2)
     this.flashLight.castShadow = false
@@ -203,11 +204,6 @@ export class FX {
       this.rings.push({ mesh: s, life: 0, dur: 0.35, maxScale: 1.6 })
     }
     this.ringIdx = 0
-  }
-
-  attachFlash(camera, offset) {
-    this.flash.position.copy(offset)
-    camera.add(this.flash)
   }
 
   // 每帧校准粒子尺寸（窗口/FOV 变化时调用；不调只影响点大小尺度）
@@ -247,6 +243,7 @@ export class FX {
   }
 
   muzzle(worldPos) {
+    if (worldPos) this.flash.position.copy(worldPos)
     this.flash.visible = true
     this.flash.material.opacity = 0.9
     this.flash.material.rotation = vary() * Math.PI * 2

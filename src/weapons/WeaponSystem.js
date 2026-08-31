@@ -15,15 +15,15 @@ const _eject = new THREE.Vector3()
 const _hitP = new THREE.Vector3()
 
 export class WeaponSystem {
-  constructor({ camera, world, bots, fx, audio, player }) {
-    this.camera = camera; this.world = world; this.bots = bots
+  constructor({ camera, vmCamera, world, bots, fx, audio, player }) {
+    this.camera = camera; this.vmCamera = vmCamera; this.world = world; this.bots = bots
     this.fx = fx; this.audio = audio; this.player = player
 
     // 当前武器与副武器（菜单可改）
     this.primaryId = 'vandal'
     this.secondaryId = 'classic'
     this.currentId = 'vandal'
-    this.baseVmScale = 0.55 // 视角模型基础缩放（宽 FOV 下控制占屏比例）
+    this.baseVmScale = 0.43 // 视角模型基础缩放（独立窄 FOV pass 下的占屏比例）
     this.state = {}    // 每把枪独立弹匣状态
     this.lastShotAt = -10
     this.lastFireTime = -10
@@ -47,6 +47,16 @@ export class WeaponSystem {
 
   get weapon() { return CONFIG.weapons[this.currentId] }
 
+  // 持枪模型本地点 → 世界坐标：vmCamera 固定原点无旋转，其世界系 == 主相机本地系，
+  // 故 holder.localToWorld 得到相机本地坐标，再过主相机矩阵落进世界（FX 都在世界场景）
+  _vmToWorld(v) {
+    this.vmCamera.updateMatrixWorld(true)
+    this.vmHolder.localToWorld(v)
+    this.camera.updateMatrixWorld()
+    this.camera.localToWorld(v)
+    return v
+  }
+
   // ---- 第一人称持枪模型：按武器类型分别建模（原创程序化几何，-Z 朝前）----
   // 支持 public/models/viewmodel.glb 用户自有模型整体替换（见 setCustomViewmodel）
   _buildViewmodel() {
@@ -60,14 +70,15 @@ export class WeaponSystem {
       wood: new THREE.MeshStandardMaterial({ color: 0xb08a5e, map: woodMaps.map, normalMap: woodMaps.normalMap, roughness: 0.55, metalness: 0.05 }),
       poly: new THREE.MeshStandardMaterial({ color: 0xcfd4da, map: polyMaps.map, roughnessMap: polyMaps.roughnessMap, normalMap: polyMaps.normalMap, roughness: 0.82, metalness: 0.08 }),
       silver: new THREE.MeshStandardMaterial({ color: 0xc9d2da, map: metalMaps.map, roughnessMap: metalMaps.roughnessMap, roughness: 0.3, metalness: 0.95 }),
-      gold: new THREE.MeshStandardMaterial({ color: 0xe0b53c, roughness: 0.3, metalness: 0.9, emissive: 0x332200 }),
+      gold: new THREE.MeshStandardMaterial({ color: 0xe0b53c, map: metalMaps.map, roughnessMap: metalMaps.roughnessMap, normalMap: metalMaps.normalMap, roughness: 0.3, metalness: 0.9, emissive: 0x332200 }),
       dot: new THREE.MeshStandardMaterial({ color: 0x7dff9a, emissive: 0x2fbf62, emissiveIntensity: 2.2, roughness: 0.4 }),
     }
-    // 第一人称手臂材质：战术袖料（浅灰纯色）+ 战术手套（中灰 + 聚合物法线/粗糙度贴图出橘皮微凹凸）
+    // 第一人称手臂材质：袖臂 = 战术布料织纹；手套 = 聚合物橘皮纹（法线加重出近景微凹凸）
+    const fabricMaps = Tex.fabric()
     this.armMats = {
-      sleeve: new THREE.MeshStandardMaterial({ color: 0x99a0a8, roughness: 0.93, metalness: 0 }),
+      sleeve: new THREE.MeshStandardMaterial({ color: 0x8d949c, map: fabricMaps.map, roughnessMap: fabricMaps.roughnessMap, normalMap: fabricMaps.normalMap, roughness: 0.93, metalness: 0 }),
       glove: (() => {
-        const m = new THREE.MeshStandardMaterial({ color: 0x5a626c, roughnessMap: polyMaps.roughnessMap, normalMap: polyMaps.normalMap, roughness: 0.85, metalness: 0.05 })
+        const m = new THREE.MeshStandardMaterial({ color: 0xa8aeb5, map: polyMaps.map, roughnessMap: polyMaps.roughnessMap, normalMap: polyMaps.normalMap, roughness: 0.85, metalness: 0.05 })
         m.normalScale = new THREE.Vector2(1.3, 1.3) // 近景微凹凸加重
         return m
       })(),
@@ -85,13 +96,17 @@ export class WeaponSystem {
     for (const [id, kind] of Object.entries(armFor)) this.viewmodels[id].add(this._buildArms(kind))
     const holder = new THREE.Group()
     for (const vm of Object.values(this.viewmodels)) holder.add(vm)
-    holder.position.set(0.17, -0.15, -0.22) // 右下、贴近相机（Valorant 风格取景）
+    // 持枪取景（对齐 Valorant）：枪在右下、贴近相机、枪身内偏使枪口汇聚准星。
+    // 独立窄 FOV(55°) pass 下透视压缩小，稍拉远拉开层次；肘部/枪托出画的裁切
+    // 由该位置 + 手臂长度共同决定
+    holder.position.set(0.18, -0.14, -0.32)
     holder.scale.setScalar(this.baseVmScale)
-    this.camera.add(holder)
+    this.vmCamera.add(holder)
     this.vmHolder = holder
     this.vmBase = holder.position.clone()
     this.vmKick = 0
     this.swayX = 0; this.swayY = 0; this.bobT = 0
+    this.strafeRoll = 0 // 侧移侧倾（平滑趋近目标）
     this.vmBolt = 0   // 机件后坐相位 0..1（枪机/套筒，击发置 1 快速回位）
     this.vmSwing = 0  // 挥刀相位 0..1（sin 包络弧线）
     this.idleT = 0    // 呼吸微摆计时
@@ -288,8 +303,10 @@ export class WeaponSystem {
   _buildKnife() {
     const k = new THREE.Group()
     const { M } = this._vmHelpers()
-    const steel = new THREE.MeshStandardMaterial({ color: 0xaab4bd, roughness: 0.28, metalness: 0.92 })
-    const gripM = new THREE.MeshStandardMaterial({ color: 0x1f2227, roughness: 0.85 })
+    const metalMaps = Tex.metal()
+    const polyMaps = Tex.polymer()
+    const steel = new THREE.MeshStandardMaterial({ color: 0xdfe4ea, map: metalMaps.map, roughnessMap: metalMaps.roughnessMap, normalMap: metalMaps.normalMap, roughness: 0.26, metalness: 0.94 })
+    const gripM = new THREE.MeshStandardMaterial({ color: 0x31353c, map: polyMaps.map, roughnessMap: polyMaps.roughnessMap, normalMap: polyMaps.normalMap, roughness: 0.85, metalness: 0.05 })
     const bladeGeo = new THREE.BoxGeometry(0.018, 0.045, 0.24)
     bladeGeo.translate(0, 0, -0.14)
     const blade = new THREE.Mesh(bladeGeo, steel)
@@ -317,6 +334,8 @@ export class WeaponSystem {
 
     // ---- 第一人称持枪手臂（静态姿势）：袖臂圆柱 + 解剖学手部，全部合并成 2 个网格 ----
     // 坐标为各武器本地系（-Z 朝前），随武器继承持枪位置/缩放/后坐摆动，不做独立动画
+    // 手臂比例按 FPS 惯例明显缩短（约解剖学 60%）：只保留小臂+手，上臂残段
+    // 加粗压低 —— 肘部贴画面底边出画，避免"手臂过长穿帮"与近裁剪问题
     // 手部结构：三球掌型（掌跟/掌中/指根脊）+ 三节分段手指（指节球+扣握弧+微扁指尖）
     //           + 三段拇指 + 指节护甲板 + 护腕束带 —— 全部合并，零 draw call 增量
     _buildArms(kind) {
@@ -394,9 +413,9 @@ export class WeaponSystem {
         [gx + 0.034, gy + 0.049, thumbZ - 0.022],
       )
       ball(sleeve, gx + 0.052, gy - 0.045, gz + 0.06, 0.036)                          // 腕
-      tube(sleeve, gx + 0.056, gy - 0.05, gz + 0.07, gx + 0.13, gy - 0.13, gz + 0.26, 0.043, 0.052) // 小臂
-      tube(sleeve, gx + 0.13, gy - 0.13, gz + 0.26, gx + 0.26, gy - 0.26, gz + 0.46, 0.052, 0.058)  // 上臂（出画）
-      cuff(glove, [gx + 0.056, gy - 0.05, gz + 0.07], [gx + 0.13, gy - 0.13, gz + 0.26], 0.04, 0.17, 0.0465)
+      tube(sleeve, gx + 0.056, gy - 0.05, gz + 0.07, gx + 0.10, gy - 0.125, gz + 0.185, 0.043, 0.054) // 小臂（短，肘端加粗）
+      tube(sleeve, gx + 0.10, gy - 0.125, gz + 0.185, gx + 0.155, gy - 0.245, gz + 0.27, 0.054, 0.062) // 上臂残段（出画）
+      cuff(glove, [gx + 0.056, gy - 0.05, gz + 0.07], [gx + 0.10, gy - 0.125, gz + 0.185], 0.04, 0.17, 0.0465)
     }
     // 左臂（护木/握把下）：三球掌（宽扁托底）+ 四指三节上翻扣顶 + 三段拇指 + 小臂/上臂探出画面左下
     const leftArm = (gx, gy, gz, gripW, fingerZ) => {
@@ -415,9 +434,9 @@ export class WeaponSystem {
         [gx + gripW + 0.006, gy + 0.014, gz - 0.008],
       )
       ball(sleeve, gx - 0.052, gy - 0.055, gz + 0.11, 0.035)                          // 腕
-      tube(sleeve, gx - 0.056, gy - 0.06, gz + 0.12, gx - 0.15, gy - 0.16, gz + 0.3, 0.043, 0.052) // 小臂
-      tube(sleeve, gx - 0.15, gy - 0.16, gz + 0.3, gx - 0.27, gy - 0.28, gz + 0.52, 0.052, 0.058)  // 上臂（出画）
-      cuff(glove, [gx - 0.056, gy - 0.06, gz + 0.12], [gx - 0.15, gy - 0.16, gz + 0.3], 0.04, 0.17, 0.0465)
+      tube(sleeve, gx - 0.056, gy - 0.06, gz + 0.12, gx - 0.105, gy - 0.15, gz + 0.235, 0.043, 0.054) // 小臂（短）
+      tube(sleeve, gx - 0.105, gy - 0.15, gz + 0.235, gx - 0.165, gy - 0.27, gz + 0.30, 0.054, 0.062) // 上臂残段（出画）
+      cuff(glove, [gx - 0.056, gy - 0.06, gz + 0.12], [gx - 0.105, gy - 0.15, gz + 0.235], 0.04, 0.17, 0.0465)
     }
 
     if (kind === 'rifle') {
@@ -442,13 +461,13 @@ export class WeaponSystem {
       for (const dz of [0.03, 0.05, 0.07]) curlFinger(glove, [-0.054, -0.044, dz], [0.026, -0.056, dz], 0.0092, [0, 0.003, 0.008, 0.012])
       thumb3(glove, [-0.06, -0.052, 0.024], [-0.052, -0.038, 0.006], [-0.044, -0.03, -0.008])
       ball(sleeve, 0.048, -0.092, 0.1, 0.036)
-      tube(sleeve, 0.052, -0.096, 0.11, 0.12, -0.175, 0.29, 0.043, 0.052)
-      tube(sleeve, 0.12, -0.175, 0.29, 0.24, -0.3, 0.49, 0.052, 0.058)
-      cuff(glove, [0.052, -0.096, 0.11], [0.12, -0.175, 0.29], 0.04, 0.17, 0.0465)
+      tube(sleeve, 0.052, -0.096, 0.11, 0.10, -0.19, 0.235, 0.043, 0.054)
+      tube(sleeve, 0.10, -0.19, 0.235, 0.155, -0.30, 0.33, 0.054, 0.062)
+      cuff(glove, [0.052, -0.096, 0.11], [0.10, -0.19, 0.235], 0.04, 0.17, 0.0465)
       ball(sleeve, -0.05, -0.098, 0.085, 0.035)
-      tube(sleeve, -0.054, -0.102, 0.095, -0.125, -0.18, 0.27, 0.042, 0.051)
-      tube(sleeve, -0.125, -0.18, 0.27, -0.24, -0.3, 0.47, 0.051, 0.057)
-      cuff(glove, [-0.054, -0.102, 0.095], [-0.125, -0.18, 0.27], 0.04, 0.17, 0.0445)
+      tube(sleeve, -0.054, -0.102, 0.095, -0.10, -0.19, 0.225, 0.042, 0.053)
+      tube(sleeve, -0.10, -0.19, 0.225, -0.155, -0.29, 0.31, 0.053, 0.061)
+      cuff(glove, [-0.054, -0.102, 0.095], [-0.10, -0.19, 0.225], 0.04, 0.17, 0.0445)
     } else if (kind === 'knife') {
       // 反握刀柄：三球掌 + 指节护甲 + 三指扣柄 + 拇指压柄脊
       palm3(glove,
@@ -460,9 +479,9 @@ export class WeaponSystem {
       for (const dz of [0.03, 0.06, 0.09]) curlFinger(glove, [0.024, 0.0, dz], [-0.022, -0.018, dz], 0.01)
       thumb3(glove, [-0.026, 0.0, 0.04], [-0.022, 0.01, 0.026], [-0.018, 0.016, 0.012])
       ball(sleeve, 0.042, -0.058, 0.12, 0.036)
-      tube(sleeve, 0.046, -0.062, 0.13, 0.12, -0.15, 0.29, 0.043, 0.052)
-      tube(sleeve, 0.12, -0.15, 0.29, 0.24, -0.27, 0.49, 0.052, 0.058)
-      cuff(glove, [0.046, -0.062, 0.13], [0.12, -0.15, 0.29], 0.04, 0.17, 0.0465)
+      tube(sleeve, 0.046, -0.062, 0.13, 0.095, -0.175, 0.25, 0.043, 0.054)
+      tube(sleeve, 0.095, -0.175, 0.25, 0.15, -0.28, 0.32, 0.054, 0.062)
+      cuff(glove, [0.046, -0.062, 0.13], [0.095, -0.175, 0.25], 0.04, 0.17, 0.0465)
     } else { // custom：用户自有枪模（customArms 原点=模型包围盒中心，-Z 朝枪口；经投影校准）
       // 手掌贴在枪身近侧（-X 面）外，手指穿过侧面 → 可见的"包握"
       rightArm(-0.12, 0.03, 0.126, 0.05, [0.1, 0.13, 0.16], 0.13)                     // 右手握握把（枪身后段）
@@ -487,57 +506,129 @@ export class WeaponSystem {
     if (this.customHands) this.customHands.visible = useCustom // GLB 手臂随步枪显隐
   }
 
-  // 用户自有 GLB 手臂（public/models/hands.glb）：按"左手/右手"骨骼位置做刚性对位 ——
-  // 缩放到目标双手间距 → 模型手轴对齐目标轴 → 滚转使肘部朝画面后下方 → 双手中点对准目标中点 →
-  // 手腕下压成持握姿势。tL/tR 为 holder 系落点（经截图迭代校准，使双手贴合枪身握把/护木）。
+  // 用户自有 GLB 手臂（public/models/hands.glb）→ IK 式持枪姿态
+  // 成熟 FPS 做法（CS2 / Valorant / OW 通用）：
+  //   1) 手臂明显短于解剖学比例 —— viewmodel 只保留小臂+手，肘/肩永远在画外，
+  //      既避免"手臂过长穿帮"，也省去近裁剪面/穿模问题
+  //   2) 握点从枪模几何自动推导（换 viewmodel.glb 无需重调姿态）
+  //   3) 肩位 = 握点 + 肘方向 × 臂长：肘方向压低朝画面下侧 → 肘部尽快出画
+  // 骨架适配（J-Toastie Rigged FPS Arms，绑定姿态=双臂前伸、指与前臂共线）：
+  //   aimArm 整臂绕肩旋转（直链，腕到肩距离=臂长恒定）；orientHand 三点基定腕朝向；
+  //   aimFinger 指链先瞄特征点再逐节向掌心卷曲。
   // 注意：hands 需为未经本方法处理过的新实例（loadUserAssets 每次返回新场景）。
-  setCustomHands(hands, tL = new THREE.Vector3(0.15, -0.17, -1.0), tR = new THREE.Vector3(0.15, -0.19, -0.5)) {
+  setCustomHands(hands) {
+    if (!this.customVm) return false // 无自有枪模时握点无法推导，直接回退内置手臂
     hands.updateMatrixWorld(true)
     const byName = {}
     hands.traverse(o => { if (o.name) byName[o.name] = o })
-    const find = (re) => Object.keys(byName).find(k => re.test(k))
-    const handR = byName[find(/^HandR/)]      // GLTFLoader 会清理点号：Hand.R.001 → HandR001
-    const handL = byName[find(/^HandL/)]
-    const elbowL = byName[find(/^UpperArmL/)]
-    if (handL && handR) {
-      const pL = handL.getWorldPosition(new THREE.Vector3())
-      const pR = handR.getWorldPosition(new THREE.Vector3())
-      // 缩放：模型双手间距 → 目标双手间距
-      const span = pR.distanceTo(pL)
-      hands.scale.multiplyScalar(tR.distanceTo(tL) / Math.max(1e-4, span))
+    const pick = (re) => byName[Object.keys(byName).find(k => re.test(k))]
+    const armR = { up: pick(/^UpperArmR/), hand: pick(/^HandR/) }
+    const armL = { up: pick(/^UpperArmL$/), hand: pick(/^HandL$/) }
+    const chain = (a, b, c) => [pick(a), pick(b), pick(c)]
+    const F = {
+      R: { // 点号已被 GLTFLoader 清理：Hand.R.001 → HandR001
+        dbl: chain(/^DoubleFingersBeginning001/, /^DoubleFingersR/, /^DoubleFingersTipR/),
+        idx: chain(/^IndexBeginningR/, /^IndexR/, /^IndexTipR/),
+        thb: chain(/^ThumbBeginningR/, /^ThumbR/, /^ThumbTipR/),
+      },
+      L: {
+        dbl: chain(/^DoubleFingersBeginning$/, /^DoubleFingersL$/, /^DoubleFingersTipL$/),
+        idx: chain(/^IndexBeginningL$/, /^IndexL$/, /^IndexTipL$/),
+        thb: chain(/^ThumbBeginningL$/, /^ThumbL$/, /^ThumbTipL$/),
+      },
+    }
+    // 骨架防御：用户换用其它骨架的 hands.glb 时骨骼名对不上，后续 IK 取世界矩阵会抛
+    // TypeError → 跳过贴合，回退内置程序化手臂
+    const needed = [armR.up, armR.hand, armL.up, armL.hand,
+      ...F.R.dbl, ...F.R.idx, ...F.R.thb, ...F.L.dbl, ...F.L.idx, ...F.L.thb]
+    if (needed.some(b => !b)) {
+      console.warn('[VHT] hands.glb 骨架不符合预期（缺少 UpperArm/Hand/指骨），已回退内置手臂')
+      return false
+    }
+    const wp = (o) => o.getWorldPosition(new THREE.Vector3())
+    // 世界系旋转单根骨骼（保持父链不变）
+    const worldRotate = (bone, q) => {
       hands.updateMatrixWorld(true)
-      // 轴对齐：左手→右手方向
-      const modelDir = handR.getWorldPosition(new THREE.Vector3()).sub(handL.getWorldPosition(new THREE.Vector3())).normalize()
-      const targetDir = tR.clone().sub(tL).normalize()
-      hands.quaternion.setFromUnitVectors(modelDir, targetDir)
-      hands.updateMatrixWorld(true)
-      // 滚转：绕手轴旋转，使"手→肘"指向画面后下方（臂膀出画）
-      if (elbowL) {
-        const elbowDir = elbowL.getWorldPosition(new THREE.Vector3()).sub(handL.getWorldPosition(new THREE.Vector3())).applyQuaternion(hands.quaternion).normalize()
-        const want = new THREE.Vector3(0, -0.85, 0.53).normalize()
-        const a = elbowDir.sub(targetDir.clone().multiplyScalar(elbowDir.dot(targetDir))).normalize()
-        const b = want.clone().sub(targetDir.clone().multiplyScalar(want.dot(targetDir))).normalize()
-        const sign = Math.sign(a.cross(b).dot(targetDir)) || 1
-        const angle = Math.acos(THREE.MathUtils.clamp(a.dot(b), -1, 1)) * sign
-        hands.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(targetDir, angle))
-        hands.updateMatrixWorld(true)
-      }
-      // 平移：双手中点 → 目标中点
-      const mid = handL.getWorldPosition(new THREE.Vector3()).add(handR.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5)
-      hands.position.add(tL.clone().add(tR).multiplyScalar(0.5).sub(mid))
-      // 手腕下压：内置模型静息姿势手指朝上（与前臂同轴），绕世界 -X 轴弯腕 ~137°
-      // 手指从"前伸"转为"下扣"在枪身上（旋转手骨，手掌位置不变，蒙皮随动）
-      const bendWrist = (hand, angle) => {
-        if (!hand) return
-        hands.updateMatrixWorld(true)
-        const dW = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(-1, 0, 0), angle)
-        const parentQ = hand.parent.getWorldQuaternion(new THREE.Quaternion())
-        hand.quaternion.premultiply(parentQ.clone().invert().multiply(dW).multiply(parentQ))
-      }
-      bendWrist(handL, -2.4)
-      bendWrist(handR, -2.4)
+      const pq = bone.parent.getWorldQuaternion(new THREE.Quaternion())
+      bone.quaternion.premultiply(pq.clone().invert().multiply(q).multiply(pq))
       hands.updateMatrixWorld(true)
     }
+    // 单指节向掌心卷曲：绕（指节方向 × 指根→腕方向）轴
+    const curlJoint = (bone, handBone, angle) => {
+      hands.updateMatrixWorld(true)
+      const a = wp(bone)
+      const child = bone.children.find(c => c.isBone || c.name)
+      const dir = wp(child).sub(a).normalize()
+      const radial = a.sub(wp(handBone)).normalize()
+      worldRotate(bone, new THREE.Quaternion().setFromAxisAngle(dir.cross(radial).normalize(), angle))
+    }
+    const aimFinger = (ch, handBone, aim, curlDegs) => {
+      hands.updateMatrixWorld(true)
+      const base = wp(ch[0])
+      const cur = wp(ch[2]).sub(base).normalize()
+      const des = new THREE.Vector3(...aim).sub(base).normalize()
+      worldRotate(ch[0], new THREE.Quaternion().setFromUnitVectors(cur, des))
+      curlDegs.forEach((deg, i) => { if (deg) curlJoint(ch[i], handBone, THREE.MathUtils.degToRad(deg)) })
+    }
+    // 手腕姿态：三点基（指/拇/掌）→ 目标基（掌心朝 pDes、指朝 fDes）
+    const orientHand = (arm, fing, fDes, pDes) => {
+      hands.updateMatrixWorld(true)
+      const Fd = wp(fing.idx[2]).sub(wp(arm.hand)).normalize()
+      const Td = wp(fing.thb[2]).sub(wp(arm.hand)).normalize()
+      const Pd = Fd.clone().cross(Td).normalize()
+      const tDes = pDes.clone().cross(fDes).normalize()
+      const qCur = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(Fd, Td, Pd))
+      const qTar = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(fDes.clone().normalize(), tDes, pDes.clone().normalize()))
+      worldRotate(arm.hand, qTar.multiply(qCur.invert()))
+    }
+    const aimArm = (arm, anchor) => {
+      hands.updateMatrixWorld(true)
+      const s = wp(arm.up)
+      const dRest = wp(arm.hand).sub(s).normalize()
+      worldRotate(arm.up, new THREE.Quaternion().setFromUnitVectors(dRest, anchor.clone().sub(s).normalize()))
+    }
+
+    // ---- 姿态（vmScene 世界系 == 相机本地系；vmCamera 固定原点无旋转）----
+    // 1) 绑定姿态量出肩→腕臂长，缩放到目标"FPS 短臂"（约真人 55%）
+    hands.quaternion.identity()
+    hands.position.set(0, 0, 0)
+    hands.scale.setScalar(1)
+    hands.updateMatrixWorld(true)
+    const restLen = wp(armR.hand).distanceTo(wp(armR.up))
+    const armLen = 0.36
+    hands.scale.setScalar(armLen / restLen)
+    hands.updateMatrixWorld(true)
+
+    // 2) 握点：从自有枪模几何推导（模型系坐标 → 相机系；AK 布局：木握把后下、护木前下）
+    this.customVm.updateMatrixWorld(true)
+    const vmP = (x, y, z) => this.customVm.localToWorld(new THREE.Vector3(x, y, z))
+    const gripR = vmP(0.02, -0.048, 0.13)
+    const gripL = vmP(-0.005, -0.042, -0.22)
+    // 3) 肩位沿"肘方向"反推：肘方向压低朝画面下侧偏外 → 肘部贴着画面底边出画
+    const elbowDirR = new THREE.Vector3(0.42, -0.82, 0.39).normalize()
+    const shoulderR = gripR.clone().addScaledVector(elbowDirR, armLen)
+    // 根节点：期望（右肩落位，相机系）→ 换算到 holder 本地（holder 带位置/缩放/持枪微旋）
+    this.vmHolder.updateMatrixWorld(true)
+    const rootM = new THREE.Matrix4().compose(shoulderR, new THREE.Quaternion(), hands.scale.clone())
+    this.vmHolder.matrixWorld.clone().invert().multiply(rootM).decompose(hands.position, hands.quaternion, hands.scale)
+    hands.updateMatrixWorld(true)
+
+    // 4) 双臂瞄准：右腕→握把、左腕→护木（方向瞄准；直链距离恒为 armLen）
+    aimArm(armR, gripR)
+    aimArm(armL, gripL)
+    // 5) 掌心朝向：右手压握把右侧面（朝 -X），左手托护木底面（朝上偏右）
+    const V = (x, y, z) => new THREE.Vector3(x, y, z).normalize()
+    orientHand(armR, F.R, V(-0.6, -0.4, -0.68), V(-0.95, -0.2, -0.25))
+    orientHand(armL, F.L, V(0.35, 0.55, -0.75), V(0.3, 0.9, 0.2))
+    // 6) 指链瞄准点：R 四指→握把前缘 / 食指→扳机护圈 / 拇指→机匣左缘；L 四指→护木右侧面
+    const off = (p, dx, dy, dz) => p.clone().add(new THREE.Vector3(dx, dy, dz))
+    aimFinger(F.R.dbl, armR.hand, off(gripR, -0.075, -0.03, -0.10), [28, 46, 40])
+    aimFinger(F.R.idx, armR.hand, off(gripR, -0.055, 0.01, -0.105), [8, 14, 12])
+    aimFinger(F.R.thb, armR.hand, off(gripR, -0.07, 0.075, -0.05), [8, 12, 0])
+    aimFinger(F.L.dbl, armL.hand, off(gripL, 0.135, 0.06, -0.07), [24, 44, 40])
+    aimFinger(F.L.idx, armL.hand, off(gripL, 0.13, 0.075, -0.09), [20, 38, 34])
+    aimFinger(F.L.thb, armL.hand, off(gripL, 0.06, 0.08, -0.18), [6, 6, 0])
+
     hands.traverse(o => { if (o.isMesh) o.frustumCulled = false }) // 蒙皮包围盒不随骨骼更新
     if (this.customHands && this.customHands !== hands) this.vmHolder.remove(this.customHands) // 替换旧手臂
     this.customHands = hands
@@ -637,7 +728,10 @@ export class WeaponSystem {
     if (this.burstLeft > 0) this.burstLeft--
 
     this._fireOne()
-    this.nextShotAt = Math.max(this.nextShotAt + 1 / w.fireRate, this.now)
+    // 下一发时刻 = max(上一次限定, 当前时刻) + 射击间隔。
+    // 若写成 max(上一次限定 + 间隔, 当前时刻)，停火后再次开火的首发会把下一发
+    // 放到"现在"，第二个逻辑帧立刻击发 → 前两发仅隔 1 tick（射速超标）
+    this.nextShotAt = Math.max(this.nextShotAt, this.now) + 1 / w.fireRate
     if (st.mag === 0 && !w.auto) this.startReload()
   }
 
@@ -681,12 +775,12 @@ export class WeaponSystem {
 
     // 枪口焰（含动态点光）+ 抛壳 + 曳光
     _muzzle.copy(this.muzzleOffset)
-    this.vmHolder.localToWorld(_muzzle)
+    this._vmToWorld(_muzzle)
     this.fx.muzzle(_muzzle)
-    const vm = this.customVm ?? this.viewmodels[this.currentVmId]
+    const vm = this.customVm ?? this.viewmodels[this.currentId]
     if (vm.userData.eject) {
       _eject.copy(vm.userData.eject)
-      this.vmHolder.localToWorld(_eject)
+      this._vmToWorld(_eject)
       this.fx.shell(_eject)
     }
     const end = _hitP.copy(_dir)
@@ -795,7 +889,7 @@ export class WeaponSystem {
 
   // ---- 渲染帧：持枪模型摆动 ----
   // 基础持枪姿势对齐 Valorant：枪在右下、贴近相机，枪身向内偏转使枪口朝准星汇聚
-  static vmBaseYaw = 0.18     // 向内偏航（枪口指向屏幕中心）
+  static vmBaseYaw = 0.20     // 向内偏航（枪口指向屏幕中心）
   static vmBaseRoll = -0.06   // 轻微侧倾（露出枪顶）
 
   updateViewmodel(dt, mouseDx, mouseDy) {
@@ -830,15 +924,19 @@ export class WeaponSystem {
       swYaw = s * 0.3
       swFwd = -s * 0.12
     }
+    // 侧移微侧倾（CS/Valorant 手感：平移时枪身轻微反向倾，急停摆回）
+    const strafe = p.vel.x * Math.cos(p.yaw) - p.vel.z * Math.sin(p.yaw)
+    const rollT = -strafe / CONFIG.movement.runSpeed * 0.045
+    this.strafeRoll += (rollT - this.strafeRoll) * Math.min(1, dt * 9)
     this.vmHolder.position.set(
       this.vmBase.x + this.swayX + bobX + breatheX,
       this.vmBase.y + this.swayY + bob - lower - crouchDrop + breatheY,
       this.vmBase.z + this.vmKick + swFwd,
     )
     this.vmHolder.rotation.set(
-      this.vmKick * 2.2 + this.swayY * 2 + 0.04 - swPitch,
+      this.vmKick * 2.2 + this.swayY * 2 - swPitch,
       WeaponSystem.vmBaseYaw + this.swayX * 2 + swYaw,
-      WeaponSystem.vmBaseRoll + (reloading ? 0.3 : 0),
+      WeaponSystem.vmBaseRoll + this.strafeRoll + (reloading ? 0.3 : 0),
     )
     this._updateVmParts(dt, reloading)
   }

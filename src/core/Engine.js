@@ -32,7 +32,20 @@ export class Engine {
 
     this.camera = new THREE.PerspectiveCamera(71, 1, 0.05, 300)
     this.camera.rotation.order = 'YXZ'
-    this.scene.add(this.camera) // 相机入场景图：持枪模型/枪口焰作为相机子节点才会被渲染
+    this.scene.add(this.camera) // 相机入场景图：枪口焰点光等作为相机子节点才会被渲染
+
+    // ---- 第一人称持枪独立渲染 pass（成熟 FPS 通用做法）----
+    // viewmodel 用自己的窄 FOV 相机单独一趟渲染：枪/手臂比例不随主视野(103°)变形，
+    // 清深度后叠加 → 永不穿墙、不被墙裁剪。vmCamera 固定于原点无旋转：
+    // 其"世界系"即相机本地系，持枪模型挂它下面天然只随视角动、不随位置动。
+    this.vmScene = new THREE.Scene()
+    this.vmScene.environment = this.scene.environment
+    this.vmCamera = new THREE.PerspectiveCamera(CONFIG.graphics.viewmodelFov, 1, 0.01, 8)
+    this.vmScene.add(this.vmCamera)
+    const vmHemi = new THREE.HemisphereLight(0xcfe5f2, 0x8a7a63, 0.72)
+    const vmSun = new THREE.DirectionalLight(0xfff2dc, 1.05)
+    vmSun.position.set(28, 46, 18) // 与主场景太阳同向 → 枪身光影与场景一致
+    this.vmScene.add(vmHemi, vmSun)
 
     // 光照：半球光（天空补光）+ 平行光（太阳）+ 环境反射，强度按 ACES 色调映射调校避免过曝
     const hemi = new THREE.HemisphereLight(0xcfe5f2, 0x8a7a63, 0.72)
@@ -76,6 +89,8 @@ export class Engine {
     const tanHalfH = Math.tan((CONFIG.graphics.fovH * Math.PI / 360))
     this.camera.fov = THREE.MathUtils.radToDeg(Math.atan(tanHalfH / this.camera.aspect)) * 2
     this.camera.updateProjectionMatrix()
+    this.vmCamera.aspect = w / h
+    this.vmCamera.updateProjectionMatrix()
   }
 
   // 天空穹顶：程序化渐变贴图 + 太阳精灵（跟随相机，永不触及雾）
@@ -142,7 +157,12 @@ export class Engine {
       if (steps === CONFIG.sim.maxStepsPerFrame) this.accumulator = 0 // 过载保护
 
       this.renderFrame?.(this.accumulator / this.fixedDt, dtMs)
+      // 双 pass：主场景 → 清深度 → 持枪视角（永远画在世界之上、不穿墙）
+      this.renderer.autoClear = false
+      this.renderer.clear()
       this.renderer.render(this.scene, this.camera)
+      this.renderer.clearDepth()
+      this.renderer.render(this.vmScene, this.vmCamera)
     }
     this._raf = requestAnimationFrame(loop)
   }

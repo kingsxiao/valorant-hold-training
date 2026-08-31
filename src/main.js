@@ -1,4 +1,3 @@
-import * as THREE from 'three'
 import { CONFIG } from './core/Config.js'
 import { Engine } from './core/Engine.js'
 import { Input } from './core/Input.js'
@@ -43,7 +42,7 @@ const state = {
 
 // ---- 武器系统 ----
 const weapons = new WeaponSystem({
-  camera: engine.camera, world, bots, fx, audio, player,
+  camera: engine.camera, vmCamera: engine.vmCamera, world, bots, fx, audio, player,
 })
 weapons.onShotFired = () => bots.registerShot()
 
@@ -71,7 +70,7 @@ weapons.onHitBot = (bot, zone, dmg, killed, point) => {
 }
 weapons.onAmmoChange = () => hud.setAmmo(weapons.weapon, weapons._st(weapons.currentId))
 weapons.onDryRefill = () => hud.toastMsg('弹药已补给', 1000)
-fx.attachFlash(engine.camera, new THREE.Vector3(0.13, -0.16, -0.75)) // 跟随第一人称枪口位置
+// 枪口焰精灵/点光由 FX.muzzle 按 viewmodel 实测枪口世界坐标点亮（不再挂相机固定偏移）
 
 bots.onEvent = (type, data) => {
   if (type === 'lost-duel') {
@@ -213,7 +212,7 @@ loadUserAssets().then(({ agent, agentAnimations, viewmodel, hands }) => {
   let changed = false
   if (agent) { Bot.customTemplate = agent; Bot.customAnimations = agentAnimations; changed = true }
   if (viewmodel) { weapons.setCustomViewmodel(viewmodel); changed = true }
-  if (hands) { weapons.setCustomHands(hands); changed = true }
+  if (hands && weapons.setCustomHands(hands) !== false) changed = true
   if (changed) bots.resetRound() // 场上的 Bot 换新外观
 }).catch(() => {})
 

@@ -712,6 +712,230 @@ const stripes = () => get('stripes', () => {
   }
 })
 
+// ---- 机器人装甲板（GLB 假人外壳：烤漆双色面板 + 螺丝 + 风口 + 钢印 + 边缘磨损）----
+const robotShell = () => get('robotShell', () => {
+  const { color, height } = pair(1024, (cg, hg, s) => {
+    // 底色 = 拼缝深色（面板之间露出的缝）
+    cg.fillStyle = '#24262a'; cg.fillRect(0, 0, s, s)
+    hg.fillStyle = '#808080'; hg.fillRect(0, 0, s, s)
+    // 面板布局：4×4 粗格随机再分割 → 不规则板件
+    const panels = []
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+      const x = c * 256, y = r * 256
+      if (Math.random() < 0.55) { // 竖切一刀
+        const w = 96 + Math.random() * 64
+        panels.push([x, y, w, 256], [x + w, y, 256 - w, 256])
+      } else if (Math.random() < 0.5) { // 横切一刀
+        const h = 96 + Math.random() * 64
+        panels.push([x, y, 256, h], [x, y + h, 256, 256 - h])
+      } else panels.push([x, y, 256, 256])
+    }
+    const capsule = (g, x, y, w, h) => {
+      const r = h / 2
+      g.beginPath()
+      g.arc(x + r, y + r, r, Math.PI / 2, Math.PI * 1.5)
+      g.arc(x + w - r, y + r, r, -Math.PI / 2, Math.PI / 2)
+      g.closePath(); g.fill()
+    }
+    panels.forEach(([x, y, w, h], idx) => {
+      const roll = Math.random()
+      let base = '#d9d5cc'                                   // 主色：暖白烤漆
+      if (roll > 0.82) base = '#b8402e'                      // 敌方识别红橙板
+      else if (roll > 0.7) base = '#3f444c'                  // 深色技术板
+      else if (roll > 0.6) base = '#8b8e92'                  // 灰过渡板
+      const inset = 6
+      const px = x + inset, py = y + inset, pw = w - inset * 2, ph = h - inset * 2
+      cg.fillStyle = base; cg.fillRect(px, py, pw, ph)
+      // 面板顶部受光 / 底部阴影（烤漆体积感）
+      cg.fillStyle = 'rgba(255,255,255,0.12)'; cg.fillRect(px, py, pw, 3)
+      cg.fillStyle = 'rgba(0,0,0,0.22)'; cg.fillRect(px, py + ph - 3, pw, 3)
+      hg.fillStyle = `rgb(${135 + Math.random() * 14 | 0},${135 + Math.random() * 14 | 0},${135 + Math.random() * 14 | 0})`
+      hg.fillRect(px, py, pw, ph)
+      hg.fillStyle = 'rgba(255,255,255,0.12)'; hg.fillRect(px, py, pw, 3)
+      // 角螺丝 ×4（凹窝 + 亮月牙）
+      for (const [sx, sy] of [[px + 11, py + 11], [px + pw - 11, py + 11], [px + 11, py + ph - 11], [px + pw - 11, py + ph - 11]]) {
+        if (pw < 60 || ph < 60) break
+        cg.fillStyle = 'rgba(0,0,0,0.55)'; cg.beginPath(); cg.arc(sx, sy, 3.4, 0, 7); cg.fill()
+        cg.strokeStyle = 'rgba(255,255,255,0.35)'; cg.lineWidth = 1.2
+        cg.beginPath(); cg.arc(sx - 0.8, sy - 0.8, 2.4, Math.PI * 0.7, Math.PI * 1.6); cg.stroke()
+        hg.fillStyle = '#c8c8c8'; hg.beginPath(); hg.arc(sx, sy, 3.8, 0, 7); hg.fill()
+      }
+      // 大板加风口 / 钢印 / 警示角
+      if (pw > 120 && ph > 120) {
+        const deco = idx % 3
+        if (deco === 0) { // 风口列
+          const vx = px + pw * 0.5 - 34, vy = py + ph * 0.5 - 30
+          for (let i = 0; i < 4; i++) {
+            cg.fillStyle = 'rgba(10,11,13,0.85)'
+            capsule(cg, vx, vy + i * 16, 68, 7)
+            hg.fillStyle = '#3c3c3c'; hg.fillRect(vx, vy + i * 16, 68, 7)
+          }
+        } else if (deco === 1) { // 钢印编号
+          cg.fillStyle = 'rgba(20,22,26,0.5)'
+          cg.font = `bold ${Math.min(30, ph * 0.16) | 0}px monospace`; cg.textAlign = 'center'
+          cg.fillText('TRN-07', px + pw / 2, py + ph / 2 + 8)
+        } else { // 警示斜纹角
+          cg.save()
+          cg.beginPath(); cg.rect(px + 4, py + 4, 54, 26); cg.clip()
+          cg.fillStyle = '#d7a83c'; cg.fillRect(px + 4, py + 4, 54, 26)
+          cg.fillStyle = '#15181c'
+          for (let k = -30; k < 60; k += 16) {
+            cg.beginPath()
+            cg.moveTo(px + 4 + k, py + 30); cg.lineTo(px + 4 + k + 8, py + 30)
+            cg.lineTo(px + 4 + k + 22, py + 4); cg.lineTo(px + 4 + k + 14, py + 4)
+            cg.closePath(); cg.fill()
+          }
+          cg.restore()
+        }
+      }
+    })
+    // 全局磨损：边缘磕碰露底金属 + 划痕 + 污渍 + 噪点
+    scratches(cg, s, 60, 'rgba(250,250,246,0.12)')
+    for (let i = 0; i < 16; i++) {
+      blotch(cg, Math.random() * s, Math.random() * s, 24 + Math.random() * 60, 'rgba(40,36,30,0.12)')
+    }
+    noise(cg, s, 0.04, 900)
+    noise(hg, s, 0.05, 700)
+  })
+  return {
+    map: toTex(color, { srgb: true }),
+    normalMap: toTex(heightToNormal(height, 2.2)),
+  }
+})
+
+// ---- 机器人关节（深色橡胶/碳纤：斜纹织纹 + 六角螺栓 + 线槽）----
+const robotJoint = () => get('robotJoint', () => {
+  const { color, height } = pair(512, (cg, hg, s) => {
+    cg.fillStyle = '#23262b'; cg.fillRect(0, 0, s, s)
+    hg.fillStyle = '#808080'; hg.fillRect(0, 0, s, s)
+    // 斜纹织纹（±45° 交叉）
+    for (let i = -s; i < s * 2; i += 6) {
+      cg.strokeStyle = 'rgba(255,255,255,0.045)'; cg.lineWidth = 1.4
+      cg.beginPath(); cg.moveTo(i, 0); cg.lineTo(i + s, s); cg.stroke()
+      cg.strokeStyle = 'rgba(0,0,0,0.10)'
+      cg.beginPath(); cg.moveTo(i + 3, 0); cg.lineTo(i + 3 + s, s); cg.stroke()
+      hg.strokeStyle = 'rgba(255,255,255,0.10)'; hg.lineWidth = 1.4
+      hg.beginPath(); hg.moveTo(i, 0); hg.lineTo(i + s, s); hg.stroke()
+    }
+    for (let i = -s; i < s * 2; i += 9) {
+      cg.strokeStyle = 'rgba(255,255,255,0.03)'
+      cg.beginPath(); cg.moveTo(i + s, 0); cg.lineTo(i, s); cg.stroke()
+      hg.strokeStyle = 'rgba(0,0,0,0.08)'
+      hg.beginPath(); hg.moveTo(i + s, 0); cg.lineTo(i, s); hg.stroke()
+    }
+    // 六角螺栓（三颗，凸起 + 高光边）
+    for (const [bx, by] of [[110, 120], [360, 90], [240, 360]]) {
+      cg.fillStyle = '#31353c'; cg.beginPath()
+      for (let k = 0; k < 6; k++) {
+        const a = k * Math.PI / 3 + 0.3
+        const X = bx + Math.cos(a) * 13, Y = by + Math.sin(a) * 13
+        k === 0 ? cg.moveTo(X, Y) : cg.lineTo(X, Y)
+      }
+      cg.closePath(); cg.fill()
+      cg.strokeStyle = 'rgba(255,255,255,0.18)'; cg.lineWidth = 1.6; cg.stroke()
+      cg.fillStyle = 'rgba(0,0,0,0.5)'; cg.beginPath(); cg.arc(bx, by, 4.5, 0, 7); cg.fill()
+      hg.fillStyle = '#c2c2c2'; cg.beginPath(); cg.arc(bx, by, 14, 0, 7); cg.fill()
+    }
+    // 线槽（两条平行走线槽 + 点胶固定）
+    cg.strokeStyle = 'rgba(0,0,0,0.5)'; cg.lineWidth = 5
+    cg.beginPath(); cg.moveTo(0, 250); cg.bezierCurveTo(170, 240, 300, 290, s, 262); cg.stroke()
+    cg.strokeStyle = 'rgba(255,255,255,0.05)'; cg.lineWidth = 1.4
+    cg.beginPath(); cg.moveTo(0, 244); cg.bezierCurveTo(170, 234, 300, 284, s, 256); cg.stroke()
+    hg.strokeStyle = '#484848'; hg.lineWidth = 6
+    hg.beginPath(); hg.moveTo(0, 250); hg.bezierCurveTo(170, 240, 300, 290, s, 262); hg.stroke()
+    // 磨损发白 + 尘土
+    scratches(cg, s, 30, 'rgba(210,214,220,0.07)')
+    for (let i = 0; i < 8; i++) blotch(cg, Math.random() * s, Math.random() * s, 20 + Math.random() * 40, 'rgba(90,84,70,0.10)')
+    noise(cg, s, 0.05, 700)
+    noise(hg, s, 0.06, 500)
+  })
+  return {
+    map: toTex(color, { srgb: true }),
+    normalMap: toTex(heightToNormal(height, 1.8)),
+  }
+})
+
+// ---- 战术布料（GLB 袖臂：科尔迪拉织纹 + 绗缝线 + 织标，无大图案 —— 供任意 GLB 裁片）----
+const fabric = () => get('fabric', () => {
+  const { color, height } = pair(512, (cg, hg, s) => {
+    cg.fillStyle = '#cfd3d8'; cg.fillRect(0, 0, s, s)
+    hg.fillStyle = '#808080'; hg.fillRect(0, 0, s, s)
+    // 粗横棱（科尔迪拉风格，4px 周期）
+    for (let y = 0; y < s; y += 4) {
+      cg.fillStyle = 'rgba(255,255,255,0.10)'; cg.fillRect(0, y, s, 1)
+      cg.fillStyle = 'rgba(0,0,0,0.10)'; cg.fillRect(0, y + 2, s, 1)
+      hg.fillStyle = 'rgba(255,255,255,0.14)'; hg.fillRect(0, y, s, 1)
+      hg.fillStyle = 'rgba(0,0,0,0.14)'; hg.fillRect(0, y + 2, s, 1)
+    }
+    // 纵向纤维
+    for (let x = 0; x < s; x += 3) {
+      cg.fillStyle = `rgba(0,0,0,${0.03 + Math.random() * 0.03})`
+      cg.fillRect(x, 0, 1, s)
+    }
+    // 绗缝线（竖两道，压出衣服裁片感）
+    for (const x of [s * 0.33, s * 0.78]) {
+      stitches(cg, x - 14, 12, [28, s - 24], 'rgba(0,0,0,0.16)')
+      cg.strokeStyle = 'rgba(0,0,0,0.20)'; cg.lineWidth = 2
+      cg.beginPath(); cg.moveTo(x, 0); cg.lineTo(x, s); cg.stroke()
+      hg.strokeStyle = '#5c5c5c'; hg.lineWidth = 3
+      hg.beginPath(); hg.moveTo(x, 0); hg.lineTo(x, s); hg.stroke()
+    }
+    // 小织标
+    cg.fillStyle = 'rgba(30,34,40,0.85)'; cg.fillRect(392, 40, 66, 26)
+    cg.fillStyle = 'rgba(230,232,236,0.8)'; cg.font = 'bold 13px monospace'; cg.textAlign = 'center'
+    cg.fillText('R-07', 425, 57)
+    hg.fillStyle = '#929292'; hg.fillRect(392, 40, 66, 26)
+    // 磨损与尘土
+    scratches(cg, s, 22, 'rgba(255,255,255,0.06)')
+    for (let i = 0; i < 6; i++) blotch(cg, Math.random() * s, Math.random() * s, 24 + Math.random() * 46, 'rgba(60,55,45,0.10)')
+    noise(cg, s, 0.05, 700)
+    noise(hg, s, 0.07, 600)
+  })
+  return {
+    map: toTex(color, { srgb: true }),
+    roughnessMap: toTex(height),
+    normalMap: toTex(heightToNormal(height, 1.1)),
+  }
+})
+
+// ---- 皮肤（GLB 手臂裸露部分：底色近中性供材质 tint 上色 + 毛孔噪点 + 红晕 + 静脉淡痕）----
+const skin = () => get('skin', () => {
+  const { color, height } = pair(512, (cg, hg, s) => {
+    cg.fillStyle = '#e7c9ae'; cg.fillRect(0, 0, s, s)
+    hg.fillStyle = '#808080'; hg.fillRect(0, 0, s, s)
+    // 毛孔噪点（细密、极低对比）
+    noise(cg, s, 0.035, 3200, 1)
+    noise(hg, s, 0.05, 2600, 1)
+    // 红晕斑（关节/指节常见泛红）
+    for (let i = 0; i < 10; i++) {
+      blotch(cg, Math.random() * s, Math.random() * s, 26 + Math.random() * 60, 'rgba(205,120,100,0.05)')
+    }
+    // 静脉淡痕（两条极淡青色细线）
+    cg.strokeStyle = 'rgba(120,140,160,0.05)'; cg.lineWidth = 3 + Math.random() * 2
+    cg.beginPath(); cg.moveTo(60, 0)
+    cg.bezierCurveTo(120, s * 0.3, 40, s * 0.6, 110, s); cg.stroke()
+    cg.beginPath(); cg.moveTo(330, 0)
+    cg.bezierCurveTo(390, s * 0.4, 300, s * 0.7, 380, s); cg.stroke()
+    // 皱纹细线（横向极淡）
+    for (let i = 0; i < 26; i++) {
+      const y = Math.random() * s
+      cg.strokeStyle = `rgba(150,95,75,${0.03 + Math.random() * 0.03})`
+      cg.lineWidth = 1
+      cg.beginPath(); cg.moveTo(Math.random() * s * 0.5, y)
+      cg.lineTo(Math.random() * s * 0.5 + s * 0.4, y + (Math.random() - 0.5) * 8); cg.stroke()
+      if (i % 3 === 0) {
+        hg.strokeStyle = 'rgba(0,0,0,0.10)'; hg.lineWidth = 1
+        hg.beginPath(); hg.moveTo(Math.random() * s * 0.5, y)
+        hg.lineTo(Math.random() * s * 0.5 + s * 0.4, y + (Math.random() - 0.5) * 8); hg.stroke()
+      }
+    }
+  })
+  return {
+    map: toTex(color, { srgb: true }),
+    normalMap: toTex(heightToNormal(height, 0.5)),
+  }
+})
+
 // ---- PBR 材质工厂 ----
 export function pbr({ maps, color = 0xffffff, roughness = 1, metalness = 0, repeat = null, emissive = null, emissiveIntensity = 1 } = {}) {
   const m = new THREE.MeshStandardMaterial({ color, roughness, metalness })
@@ -740,4 +964,5 @@ export const Tex = {
   suit, vest, visor, visorGlow, metal, polymer, wood,
   floor, wall, crate, target,
   flash, blob, hole, spark, smoke, ring, stripes,
+  robotShell, robotJoint, fabric, skin,
 }

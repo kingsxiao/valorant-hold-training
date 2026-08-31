@@ -235,6 +235,7 @@ export class Bot {
 
   hide() {
     this.active = false
+    this.mode = 'idle' // 死亡动画播完：归位让对象池可复用（respawnAt 靠 BotManager 找回靶位）
     this.mesh.visible = false
     this.blob.visible = false
     this.visibleNow = false
@@ -255,8 +256,9 @@ export class Bot {
     this.walkPhase = 0
     this.setOpacity(1)
     this.blobMat.opacity = 1
-    this.spawnGuardUntil = performance.now() / 1000 + CONFIG.bot.spawnGuardMs / 1000
+    this.spawnGuardUntil = this.now() + CONFIG.bot.spawnGuardMs / 1000
     this.firstVisibleAt = -1
+    this.flinch = 0 // 复用的 Bot 不带旧受击踉跄
   }
 
   setOpacity(o) {
@@ -267,7 +269,7 @@ export class Bot {
   }
 
   get invulnerable() { return this.now() < (this.spawnGuardUntil ?? 0) || !this.active || this.mode === 'dying' }
-  now() { return performance.now() / 1000 }
+  now() { return this.manager ? this.manager.now() : performance.now() / 1000 } // 跟随游戏时钟（暂停时冻结）
 
   moveToward(targetVelX, dt) {
     const B = CONFIG.bot

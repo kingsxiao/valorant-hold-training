@@ -39,14 +39,13 @@ export class Engine {
     this.scene.add(hemi)
     const sun = new THREE.DirectionalLight(0xfff2dc, 1.05)
     sun.position.set(28, 46, 18)
-    if (CONFIG.graphics.shadows) {
-      sun.castShadow = true
-      sun.shadow.mapSize.set(1024, 1024)
-      sun.shadow.camera.left = -45; sun.shadow.camera.right = 45
-      sun.shadow.camera.top = 45; sun.shadow.camera.bottom = -45
-      sun.shadow.camera.far = 120
-    }
+    sun.castShadow = true // 阴影贴图只在 renderer.shadowMap.enabled 时分配/使用，可运行时切换
+    sun.shadow.mapSize.set(1024, 1024)
+    sun.shadow.camera.left = -45; sun.shadow.camera.right = 45
+    sun.shadow.camera.top = 45; sun.shadow.camera.bottom = -45
+    sun.shadow.camera.far = 120
     this.scene.add(sun)
+    this.sun = sun
 
     // 主循环状态
     this.fixedDt = 1 / CONFIG.sim.tickHz
@@ -154,15 +153,30 @@ export class Engine {
     this.frameMs = dtMs
     this.frameTimes[this.frameIdx] = dtMs
     this.frameIdx = (this.frameIdx + 1) % this.frameTimes.length
-    // 每 30 帧结算一次 fps 与 1% low（取最差的 6 帧）
+    // 每 30 帧结算一次：fps 取有效帧均值；1% low 取最差 1%（600 帧中的 6 帧）均值
     if (this.frameIdx % 30 === 0) {
-      let sum = 0, worst = 0
+      let sum = 0, n = 0, worst = 0
       for (let i = 0; i < this.frameTimes.length; i++) {
         const t = this.frameTimes[i]
-        if (t > 0) { sum += t; if (t > worst) worst = t }
+        if (t > 0) { sum += t; n++; if (t > worst) worst = t }
       }
-      this.fps = Math.round(1000 / (sum / this.frameTimes.length))
-      this.low1Pct = Math.round(1000 / worst)
+      if (n > 0) {
+        this.fps = Math.round(1000 / (sum / n))
+        // 最差 6 帧均值：用一次部分选择避免整段排序
+        const lows = [0, 0, 0, 0, 0, 0]
+        for (let i = 0; i < this.frameTimes.length; i++) {
+          const t = this.frameTimes[i]
+          if (t > lows[0]) {
+            lows[0] = t
+            for (let k = 1; k < lows.length && lows[k - 1] > lows[k]; k++) {
+              const tmp = lows[k - 1]; lows[k - 1] = lows[k]; lows[k] = tmp
+            }
+          }
+        }
+        let lowSum = 0, m = 0
+        for (const t of lows) { if (t > 0) { lowSum += t; m++ } }
+        this.low1Pct = m > 0 ? Math.round(1000 / (lowSum / m)) : 0
+      }
     }
   }
 

@@ -37,6 +37,10 @@ export class AudioSys {
     this.revGain = this.ctx.createGain()
     this.revGain.gain.value = 0.9
     this.reverb.connect(this.revGain).connect(this.master)
+    // 非空间音效的总混响发送：只建一次（每次开火重建会造成并行增益叠加+节点泄漏）
+    this.drySend = this.ctx.createGain()
+    this.drySend.gain.value = 0.22
+    this.master.connect(this.drySend).connect(this.reverb)
     // 共享白噪声
     const len = this.ctx.sampleRate
     this._noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate)
@@ -85,7 +89,6 @@ export class AudioSys {
 
   // 空间化输出节点（相对听者，返回 { node, revSend }）
   _spatial(pos, listener) {
-    let out = this.master
     if (pos && listener) {
       const dx = pos.x - listener.pos.x, dz = pos.z - listener.pos.z
       const c = Math.cos(-listener.yaw), s = Math.sin(-listener.yaw)
@@ -100,12 +103,9 @@ export class AudioSys {
       p.connect(this.master)
       const send = this.ctx.createGain(); send.gain.value = 0.35
       p.connect(send).connect(this.reverb)
-      out = p
-    } else {
-      const send = this.ctx.createGain(); send.gain.value = 0.22
-      this.master.connect(send); send.connect(this.reverb)
+      return p
     }
-    return out
+    return this.master // 非空间：直接走主总线（混响发送已在 ensure 里一次性接好）
   }
 
   _noiseBurst(dest, { dur = 0.08, freq = 1800, freqEnd = null, q = 0.8, gain = 1, type = 'bandpass', delay = 0 } = {}) {
@@ -195,7 +195,6 @@ export class AudioSys {
       this._osc(this.master, { type: 'triangle', freq: 1867, dur: 0.1, gain: 0.28 })
       this._noiseBurst(this.master, { dur: 0.008, freq: 6000, q: 0.6, gain: 0.4, type: 'highpass' })
     } else {
-      if (this.user.hurt) { /* 命中身体用轻 tick，不占用 hurt */ }
       this._noiseBurst(this.master, { dur: 0.03, freq: 900, q: 1.2, gain: 0.4 })
       this._osc(this.master, { type: 'sine', freq: 320, freqEnd: 190, dur: 0.05, gain: 0.22 })
     }

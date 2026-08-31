@@ -29,6 +29,8 @@ export class Menu {
       aimTimeMs: CONFIG.bot.aimTimeMs,
       volume: 0.7,
       showFps: true,
+      shadows: CONFIG.graphics.shadows,
+      resScale: 1.0,
       crosshair: {},
       ...loadSettings(),
     }
@@ -59,6 +61,10 @@ export class Menu {
       <div class="slider-row"><label>Bot 横移速度</label><input type="range" data-key="speedMult" min="0.4" max="1.3" step="0.05"><span class="val"></span></div>
       <div class="slider-row"><label>Bot 反杀时间</label><input type="range" data-key="aimTimeMs" min="250" max="1200" step="50"><span class="val"></span></div>
       <div class="slider-row"><label>音量</label><input type="range" data-key="volume" min="0" max="1" step="0.05"><span class="val"></span></div>
+
+      <h2>画质</h2>
+      <div class="slider-row"><label>分辨率缩放</label><input type="range" data-key="resScale" min="0.5" max="2" step="0.05"><span class="val"></span></div>
+      <div class="opt-grid" data-group="gfxOpts"></div>
 
       <h2>准星</h2>
       <div class="slider-row"><label>线长</label><input type="range" data-ch="length" min="1" max="12" step="1"><span class="val"></span></div>
@@ -130,6 +136,17 @@ export class Menu {
       oBox.appendChild(b)
     }
 
+    // 画质开关（阴影 / FPS 显示）
+    const gBox = p.querySelector('[data-group=gfxOpts]')
+    for (const [key, label] of [['shadows', '阴影'], ['showFps', 'FPS 面板']]) {
+      const b = document.createElement('button')
+      b.className = 'opt-btn'
+      b.textContent = label
+      b.dataset.value = key
+      b.onclick = () => { this.cfg[key] = !this.cfg[key]; this.syncButtons(); saveSettings({ [key]: this.cfg[key] }); this.applyAll?.() }
+      gBox.appendChild(b)
+    }
+
     // 滑条绑定
     this.sliders = []
     for (const inp of p.querySelectorAll('input[data-key]')) {
@@ -143,6 +160,7 @@ export class Menu {
         speedMult: v => Math.round(v * 100) + '%',
         aimTimeMs: v => v + 'ms',
         volume: v => Math.round(v * 100) + '%',
+        resScale: v => Math.round(v * 100) + '%',
       }[key] ?? (v => v)
       inp.value = this.cfg[key]
       val.textContent = fmt(this.cfg[key])
@@ -184,6 +202,9 @@ export class Menu {
     }
     for (const b of this.panel.querySelectorAll('[data-group=chOpts] .opt-btn')) {
       b.classList.toggle('active', !!this.cfg.crosshair[b.dataset.value])
+    }
+    for (const b of this.panel.querySelectorAll('[data-group=gfxOpts] .opt-btn')) {
+      b.classList.toggle('active', !!this.cfg[b.dataset.value])
     }
   }
 

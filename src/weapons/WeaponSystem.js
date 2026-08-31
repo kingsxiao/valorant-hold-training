@@ -38,6 +38,8 @@ export class WeaponSystem {
     this.onHitBot = null    // (bot, zone, dmg, killed)
     this.onShotFired = null // () → 统计
     this.onAmmoChange = null
+    this.onDryRefill = null // 备弹耗尽自动补给时通知（HUD 提示）
+    this.drySince = 0       // 当前武器彻底打空的时刻（自动补给倒计时）
 
     this._buildViewmodel()
     this.switchTo(this.currentId, true)
@@ -427,7 +429,7 @@ export class WeaponSystem {
     this.burstLeft = 0
     this.equipUntil = this.now + CONFIG.weapons[id].equipTime * (instant ? 0 : 1)
     this.sprayIndex = 0
-    if (!this._knife) this._buildKnife()
+    this.drySince = 0
     this.weaponMeshFor(id)
     this.onAmmoChange?.(this)
   }
@@ -521,8 +523,9 @@ export class WeaponSystem {
     // 视觉上踢（不影响弹道，弹道由表驱动 —— 与游戏一致）
     p.addPunch(THREE.MathUtils.degToRad(pat.p) * w.recoil.viewPunch * 0.25 + 0.002, THREE.MathUtils.degToRad(pat.y) * w.recoil.viewPunch * 0.12)
 
-    // 命中判定：世界 vs 机器人取最近
-    const eye = this.camera.position
+    // 命中判定：世界 vs 机器人取最近（射线原点用当前逻辑帧的玩家眼睛，
+    // 而非渲染帧相机位置——后者在固定步长内最多滞后一帧）
+    const eye = _eye.set(p.pos.x, p.pos.y + p.eyeHeight, p.pos.z)
     const maxDist = 250
     const wallHit = this.world.raycast(eye.x, eye.y, eye.z, _dir.x, _dir.y, _dir.z, maxDist)
     const botHit = this.bots.pickHit(eye, _dir, wallHit ? wallHit.t : maxDist)
@@ -565,8 +568,9 @@ export class WeaponSystem {
     const w = this.weapon
     this.audio.shot(w.sound, null, { pos: this.camera.position, yaw: this.player.yaw })
     this.vmKick = 0.09
-    const eye = this.camera.position
-    const hit = this.bots.pickHit(eye, _dir.set(0, 0, -1).applyEuler(_euler.set(this.player.pitch, this.player.yaw, 0)), w.range)
+    const p = this.player
+    const eye = _eye.set(p.pos.x, p.pos.y + p.eyeHeight, p.pos.z)
+    const hit = this.bots.pickHit(eye, _dir.set(0, 0, -1).applyEuler(_euler.set(p.pitch, p.yaw, 0)), w.range)
     if (hit) {
       const killed = this.bots.damage(hit.bot, w.damage.body, 'body')
       this.onHitBot?.(hit.bot, 'body', w.damage.body, killed, hit.point)
@@ -591,9 +595,11 @@ export class WeaponSystem {
     this.tryFire(edges.fireEdge, input.mouse0, edges.altEdge)
     edges.fireEdge = edges.altEdge = false
 
+    const w = this.weapon
+    const st = this._st(this.currentId)
+
     // 换弹完成
     if (this.reloadEnd > 0 && this.now >= this.reloadEnd) {
-      const w = this.weapon, st = this._st(this.currentId)
       const need = w.magSize - st.mag
       const take = Math.min(need, st.reserve)
       st.mag += take
@@ -602,8 +608,25 @@ export class WeaponSystem {
       this.sprayIndex = 0
       this.onAmmoChange?.(this)
     }
+
+    // 弹药耗尽自动补给（无限时长回合不会卡死：打空 2.5s 后补满，模拟靶场随时买枪）
+    if (w.slot !== 'melee' && st.mag <= 0 && st.reserve <= 0) {
+      if (this.drySince === 0) this.drySince = this.now
+      else if (this.now - this.drySince >= 2.5) {
+        st.mag = w.magSize
+        st.reserve = w.reserve ?? Infinity
+        this.drySince = 0
+        this.sprayIndex = 0
+        this.audio.reload()
+        this.onDryRefill?.()
+        this.onAmmoChange?.(this)
+      }
+    } else {
+      this.drySince = 0
+    }
+
     // 停火重置弹道（刀无后坐力参数）
-    const rec = this.weapon.recoil
+    const rec = w.recoil
     if (!rec || this.now - this.lastFireTime > rec.recoverTime) this.sprayIndex = 0
   }
 
@@ -650,3 +673,4 @@ export class WeaponSystem {
 const UP = new THREE.Vector3(0, 1, 0)
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ')
 const _rx = new THREE.Vector3()
+const _eye = new THREE.Vector3()

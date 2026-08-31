@@ -47,12 +47,12 @@ const weapons = new WeaponSystem({
 })
 weapons.onShotFired = () => bots.registerShot()
 
-// 击杀反馈主链路：命中标记 / 伤害数字 / 粒子爆发 / 击杀横幅 / 击杀信息流（音效在 BotManager.damage 内）
+// 击杀反馈主链路：命中标记 / 伤害数字 / 粒子爆发 / 击杀横幅 / 击杀信息流
+// （命中/击杀音效统一在 BotManager.damage 内播放，这里不再重复触发）
 const killTimes = [] // 连杀统计：4.5s 窗口内的击杀数
 weapons.onHitBot = (bot, zone, dmg, killed, point) => {
   const head = zone === 'head'
   hud.showHitmarker(head, killed)
-  audio.hitMark(head)
   if (point) {
     hud.spawnDamage(point.x, point.y + 0.15, point.z, dmg, head, engine.camera, killed)
     if (killed) fx.killBurst(point, head)
@@ -70,6 +70,7 @@ weapons.onHitBot = (bot, zone, dmg, killed, point) => {
   }
 }
 weapons.onAmmoChange = () => hud.setAmmo(weapons.weapon, weapons._st(weapons.currentId))
+weapons.onDryRefill = () => hud.toastMsg('弹药已补给', 1000)
 fx.attachFlash(engine.camera, new THREE.Vector3(0.13, -0.16, -0.75)) // 跟随第一人称枪口位置
 
 bots.onEvent = (type, data) => {
@@ -113,6 +114,9 @@ menu.applyAll = () => {
   bots.params.speedMult = cfg.speedMult
   bots.params.aimTimeMs = cfg.aimTimeMs
   bots.params.roundSeconds = cfg.roundSeconds
+  engine.setResolutionScale(cfg.resScale ?? 1)
+  engine.setShadows(!!cfg.shadows)
+  hud.fpsBox.style.display = cfg.showFps === false ? 'none' : ''
 }
 menu.applyAll()
 
@@ -167,8 +171,8 @@ engine.simStep = (dt) => {
   if (player.alive) weapons.step(dt, input)
   bots.step(dt, 1)
 
-  // 玩家死亡（对枪失败）→ 1.2s 后原地复活继续训练
-  if (!player.alive && performance.now() - player.deathAt > 1200) {
+  // 玩家死亡（对枪失败）→ 1.2s 后原地复活继续训练（逻辑帧计时，暂停时冻结）
+  if (!player.alive && player.deadT > 1.2) {
     player.respawn(player.pos.x, player.pos.z, player.yaw)
   }
 }
@@ -187,7 +191,7 @@ engine.renderFrame = (alpha, dtMs) => {
   hud.setHP(player.hp)
   hud.setMode(MODES[state.cfg.mode].label,
     bots.params.roundSeconds > 0 && bots.running && bots.roundEndAt > 0
-      ? `${Math.max(0, bots.roundEndAt - performance.now() / 1000).toFixed(1)}s`
+      ? `${Math.max(0, bots.roundEndAt - bots.now()).toFixed(1)}s` // 游戏时钟：暂停时倒计时冻结
       : MODES[state.cfg.mode].desc)
   _hudAccum.stats += dtMs
   if (_hudAccum.stats > 200) { _hudAccum.stats = 0; hud.setStats(bots.stats, engine) }

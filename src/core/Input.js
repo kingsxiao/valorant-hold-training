@@ -15,8 +15,8 @@ export class Input {
       if (e.repeat) return
       this.keys.add(e.code)
       this.onKey?.(e.code)
-      // 阻止 Tab / 空格 等默认行为
-      if (['Tab', 'Space', 'KeyR'].includes(e.code)) e.preventDefault()
+      // 游戏中拦截 Tab / 空格 / R 的默认行为（菜单打开时不拦，保证表单可用键盘）
+      if (this.locked && ['Tab', 'Space', 'KeyR'].includes(e.code)) e.preventDefault()
     })
     addEventListener('keyup', (e) => this.keys.delete(e.code))
     addEventListener('blur', () => { this.keys.clear(); this.mouse0 = this.mouse1 = false })

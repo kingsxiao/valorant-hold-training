@@ -35,6 +35,7 @@ export class BotManager {
     this.stats = this._freshStats()
     this.roundEndAt = 0
     this.running = false
+    this.t = 0 // 游戏时钟：只在 step 里累加 → ESC 暂停时回合计时/Bot 计时一并冻结
   }
 
   _freshStats() {
@@ -67,12 +68,13 @@ export class BotManager {
   }
 
   _bot() {
-    let b = this.bots.find(x => !x.active && x.mode !== 'dying')
-    if (!b) { b = new Bot(this.scene, this.world); this.bots.push(b) }
+    let b = this.bots.find(x => !x.active && x.mode !== 'dying') // 复用已播完死亡动画的 Bot（隐藏后 mode 已归位 idle）
+    if (!b) { b = new Bot(this.scene, this.world); b.manager = this; this.bots.push(b) }
+    else { b.flickDieAt = 0; b.respawnAt = 0; b.peek = null } // 清上一条命的管理器状态
     return b
   }
 
-  now() { return performance.now() / 1000 }
+  now() { return this.t }
 
   _spawnRange() {
     for (const stand of this.map.rangeStands) {
@@ -98,6 +100,7 @@ export class BotManager {
   // ---- 每个固定步长驱动 ----
   step(dt, alpha) {
     if (!this.running) return
+    this.t += dt
 
     // 回合计时
     if (this.roundEndAt > 0 && this.now() >= this.roundEndAt) {
@@ -108,10 +111,10 @@ export class BotManager {
 
     const ctx = { player: this.player, alpha, drive: null }
 
-    // 靶场/压枪模式：死亡目标延时重生
+    // 靶场/压枪模式：死亡目标延时重生（死亡动画播完 hide 后 mode 已归位，靠 respawnAt 找回）
     if (this.mode === 'range' || this.mode === 'spray') {
       for (const b of this.bots) {
-        if (b.mode === 'dying' && b.respawnAt && this.now() >= b.respawnAt) {
+        if (!b.active && b.respawnAt && this.now() >= b.respawnAt) {
           b.place(b.home.x, b.home.z, 'idle')
           b.respawnAt = 0
         }
@@ -189,9 +192,10 @@ export class BotManager {
     const activeCount = this.bots.filter(b => b.active).length
     if (activeCount < count && this.now() >= (h.nextAt ?? 0)) {
       // 在玩家前方 ±60°、8~26m 的空地随机出生（避开掩体：失败重试）
+      // 朝向 yaw 的前向为 (−sin yaw, −cos yaw)，扇区 = yaw ± 1.05rad
       const p = this.player
       for (let tries = 0; tries < 20; tries++) {
-        const ang = p.yaw + Math.PI + rand(-1.05, 1.05) // 前方扇区（yaw+π = -Z 前向）
+        const ang = p.yaw + rand(-1.05, 1.05)
         const d = rand(8, 26)
         const x = p.pos.x - Math.sin(ang) * d
         const z = p.pos.z - Math.cos(ang) * d
@@ -209,7 +213,7 @@ export class BotManager {
       if (b.active && b.flickDieAt && this.now() > b.flickDieAt) {
         b.flickDieAt = 0
         b.startDeath()
-        this.hold.nextAt = this.now() * 1000 + 600
+        this.hold.nextAt = this.now() + 0.6
       }
     }
   }
@@ -218,9 +222,9 @@ export class BotManager {
     const t = this.track
     const b = this.bots.find(b => b.active && b.mode === 'track')
     if (!b) {
-      // 目标死亡后重生
-      const any = this.bots.some(x => x.mode === 'dying')
-      if (!any) this._spawnTrack()
+      // 目标死亡：等死亡动画播完（mode 归位 idle）后重生
+      const dying = this.bots.some(x => x.active && x.mode === 'dying')
+      if (!dying) this._spawnTrack()
       return
     }
     if (this.now() >= t.nextFlipAt) {
@@ -270,8 +274,7 @@ export class BotManager {
 
   _loseDuel(bot) {
     this.stats.duelsLost++
-    this.player.onShot(100)
-    this.audio.death()
+    this.player.onShot(100) // 致死伤害，内部已播放 hurt + death 音效
     this.onEvent?.('lost-duel', { bot })
     bot.startDeath()
     // 短暂停顿后重新开始架枪

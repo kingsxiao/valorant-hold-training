@@ -31,7 +31,7 @@ export class Player {
 
     this.hp = 100
     this.alive = true
-    this.deathAt = 0
+    this.deadT = 0 // 死亡后累计时长（逻辑帧推进，暂停时冻结）
 
     this.moveSpeed = 0                          // 当前水平速度（HUD 显示用）
     this.running = false                        // 是否发出脚步声（全速跑）
@@ -70,13 +70,13 @@ export class Player {
     this.hp -= dmg
     this.tagger = CONFIG.movement.tagDuration
     this.audio.hurt()
-    if (this.hp <= 0) { this.hp = 0; this.alive = false; this.deathAt = performance.now(); this.audio.death() }
+    if (this.hp <= 0) { this.hp = 0; this.alive = false; this.deadT = 0; this.audio.death() }
   }
 
   // 固定 128Hz 物理步进
   step(dt, input, weapon) {
     this.prevPos.copy(this.pos)
-    if (!this.alive) return
+    if (!this.alive) { this.deadT += dt; return }
 
     const M = CONFIG.movement
     const wishDir = V.wish.set(0, 0, 0)
@@ -180,7 +180,7 @@ export class Player {
   // 渲染帧：把相机摆到位（位置做 128Hz 插值，视角直通）
   updateCamera(cam, alpha) {
     const p = _cpos.copy(this.prevPos).lerp(this.pos, alpha)
-    cam.position.set(p.x, p.y + this.eyeHeight + (this.grounded ? 0 : 0), p.z)
+    cam.position.set(p.x, p.y + this.eyeHeight, p.z)
     cam.rotation.set(this.pitch + this.punchPitch, this.yaw + this.punchYaw, 0)
   }
 }

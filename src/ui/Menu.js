@@ -42,8 +42,13 @@ export class Menu {
     const p = document.createElement('div')
     p.className = 'panel'
     p.innerHTML = `
-      <h1>架枪训练 <em>HOLD ANGLE TRAINER</em></h1>
-      <div class="tagline">WebGL 第一人称训练器 · 移速/射速/后坐力按 Valorant 公开参数调校 · 原创程序化建模</div>
+      <header class="panel-head">
+        <div>
+          <h1>架枪训练 <em>HOLD ANGLE TRAINER</em></h1>
+          <div class="tagline">WebGL 第一人称训练器 · 移速/射速/后坐力按 Valorant 公开参数调校 · 原创程序化建模</div>
+        </div>
+        <div class="head-badge">VHT // 01<small>AIM · HOLD · WIN</small></div>
+      </header>
 
       <h2>训练模式</h2>
       <div class="opt-grid" data-group="mode"></div>
@@ -54,22 +59,28 @@ export class Menu {
       <div class="opt-grid" data-group="secondary"></div>
 
       <h2>参数</h2>
-      <div class="slider-row"><label>灵敏度（游戏同换算）</label><input type="range" data-key="sens" min="0.05" max="1.5" step="0.01"><span class="val"></span></div>
-      <div class="slider-row"><label>回合时长</label><input type="range" data-key="roundSeconds" min="0" max="180" step="30"><span class="val"></span></div>
-      <div class="slider-row"><label>Bot 出现最小延迟</label><input type="range" data-key="delayMin" min="200" max="2000" step="100"><span class="val"></span></div>
-      <div class="slider-row"><label>Bot 出现最大延迟</label><input type="range" data-key="delayMax" min="500" max="5000" step="100"><span class="val"></span></div>
-      <div class="slider-row"><label>Bot 横移速度</label><input type="range" data-key="speedMult" min="0.4" max="1.3" step="0.05"><span class="val"></span></div>
-      <div class="slider-row"><label>Bot 反杀时间</label><input type="range" data-key="aimTimeMs" min="250" max="1200" step="50"><span class="val"></span></div>
-      <div class="slider-row"><label>音量</label><input type="range" data-key="volume" min="0" max="1" step="0.05"><span class="val"></span></div>
+      <div class="slider-grid">
+        <div class="slider-row"><label>灵敏度（游戏同换算）</label><input type="range" data-key="sens" min="0.05" max="1.5" step="0.01"><span class="val"></span></div>
+        <div class="slider-row"><label>回合时长</label><input type="range" data-key="roundSeconds" min="0" max="180" step="30"><span class="val"></span></div>
+        <div class="slider-row"><label>Bot 出现最小延迟</label><input type="range" data-key="delayMin" min="200" max="2000" step="100"><span class="val"></span></div>
+        <div class="slider-row"><label>Bot 出现最大延迟</label><input type="range" data-key="delayMax" min="500" max="5000" step="100"><span class="val"></span></div>
+        <div class="slider-row"><label>Bot 横移速度</label><input type="range" data-key="speedMult" min="0.4" max="1.3" step="0.05"><span class="val"></span></div>
+        <div class="slider-row"><label>Bot 反杀时间</label><input type="range" data-key="aimTimeMs" min="250" max="1200" step="50"><span class="val"></span></div>
+        <div class="slider-row"><label>音量</label><input type="range" data-key="volume" min="0" max="1" step="0.05"><span class="val"></span></div>
+      </div>
 
       <h2>画质</h2>
-      <div class="slider-row"><label>分辨率缩放</label><input type="range" data-key="resScale" min="0.5" max="2" step="0.05"><span class="val"></span></div>
+      <div class="slider-grid">
+        <div class="slider-row"><label>分辨率缩放</label><input type="range" data-key="resScale" min="0.5" max="2" step="0.05"><span class="val"></span></div>
+      </div>
       <div class="opt-grid" data-group="gfxOpts"></div>
 
       <h2>准星</h2>
-      <div class="slider-row"><label>线长</label><input type="range" data-ch="length" min="1" max="12" step="1"><span class="val"></span></div>
-      <div class="slider-row"><label>线粗</label><input type="range" data-ch="thickness" min="1" max="4" step="1"><span class="val"></span></div>
-      <div class="slider-row"><label>间距</label><input type="range" data-ch="gap" min="0" max="10" step="1"><span class="val"></span></div>
+      <div class="slider-grid">
+        <div class="slider-row"><label>线长</label><input type="range" data-ch="length" min="1" max="12" step="1"><span class="val"></span></div>
+        <div class="slider-row"><label>线粗</label><input type="range" data-ch="thickness" min="1" max="4" step="1"><span class="val"></span></div>
+        <div class="slider-row"><label>间距</label><input type="range" data-ch="gap" min="0" max="10" step="1"><span class="val"></span></div>
+      </div>
       <div class="opt-grid" data-group="chColor"></div>
       <div style="height:8px"></div>
       <div class="opt-grid" data-group="chOpts"></div>
@@ -147,7 +158,11 @@ export class Menu {
       gBox.appendChild(b)
     }
 
-    // 滑条绑定
+    // 滑条绑定（--p 驱动轨道已填充部分）
+    const setFill = (inp) => {
+      const min = parseFloat(inp.min), max = parseFloat(inp.max)
+      inp.style.setProperty('--p', ((parseFloat(inp.value) - min) / (max - min) * 100).toFixed(2) + '%')
+    }
     this.sliders = []
     for (const inp of p.querySelectorAll('input[data-key]')) {
       const key = inp.dataset.key
@@ -164,9 +179,11 @@ export class Menu {
       }[key] ?? (v => v)
       inp.value = this.cfg[key]
       val.textContent = fmt(this.cfg[key])
+      setFill(inp)
       inp.oninput = () => {
         this.cfg[key] = parseFloat(inp.value)
         val.textContent = fmt(this.cfg[key])
+        setFill(inp)
         saveSettings({ [key]: this.cfg[key] })
         this.applyAll?.()
       }
@@ -178,9 +195,11 @@ export class Menu {
       this.cfg.crosshair[key] ??= { length: 5, thickness: 2, gap: 3 }[key]
       inp.value = this.cfg.crosshair[key]
       val.textContent = this.cfg.crosshair[key]
+      setFill(inp)
       inp.oninput = () => {
         this.cfg.crosshair[key] = parseInt(inp.value)
         val.textContent = inp.value
+        setFill(inp)
         saveSettings({ crosshair: this.cfg.crosshair })
         this.applyAll?.()
       }
@@ -198,7 +217,8 @@ export class Menu {
     }
     for (const b of this.panel.querySelectorAll('[data-group=chColor] .opt-btn')) {
       b.classList.toggle('active', b.dataset.value === this.cfg.crosshair.color)
-      b.style.borderColor = b.classList.contains('active') ? '' : b.dataset.value
+      // 非选中时用同色内描边标识色板
+      b.style.boxShadow = b.classList.contains('active') ? '' : `inset 0 0 0 1px ${b.dataset.value}66`
     }
     for (const b of this.panel.querySelectorAll('[data-group=chOpts] .opt-btn')) {
       b.classList.toggle('active', !!this.cfg.crosshair[b.dataset.value])
@@ -234,7 +254,10 @@ export class Menu {
         ${cell(avg ? avg + 'ms' : '—', '平均反应')}
         ${cell(best ? best + 'ms' : '—', '最快反应')}
       </div>`
-      this.panel.prepend(s)
+      // 插到面板头部之后、第一个分节之前（不遮住标题）
+      const head = this.panel.querySelector('.panel-head')
+      const firstH2 = this.panel.querySelector('h2')
+      this.panel.insertBefore(s, head?.nextSibling ?? firstH2)
     }
     this.refreshSliders()
     this.syncButtons()

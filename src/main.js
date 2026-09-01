@@ -207,12 +207,14 @@ engine.start()
 // 调试句柄（自动化测试 / 控制台调参用）
 window.__game = { engine, input, audio, world, map, player, weapons, bots, hud, state, CONFIG }
 
-// 用户/开源资产（可选）：public/models/ 下的 agent.glb、viewmodel.glb 与 hands.glb
-loadUserAssets().then(({ agent, agentAnimations, viewmodel, hands }) => {
+// 用户/开源资产（可选）：public/models/ 下的 agent.glb、viewmodel.glb、glove.glb 与 hands.glb
+loadUserAssets().then(({ agent, agentAnimations, viewmodel, glove, hands }) => {
   let changed = false
   if (agent) { Bot.customTemplate = agent; Bot.customAnimations = agentAnimations; changed = true }
   if (viewmodel) { weapons.setCustomViewmodel(viewmodel); changed = true }
-  if (hands && weapons.setCustomHands(hands) !== false) changed = true
+  // 高精度手套优先；骨架不符/文件缺失时回退 hands.glb 整臂方案
+  if (glove && weapons.setGloveHands(glove) !== false) changed = true
+  else if (hands && weapons.setCustomHands(hands) !== false) changed = true
   if (changed) bots.resetRound() // 场上的 Bot 换新外观
 }).catch(e => console.error('[VHT] asset load failed', e))
 

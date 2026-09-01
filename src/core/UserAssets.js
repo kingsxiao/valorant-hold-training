@@ -3,14 +3,16 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { applyAgentTextures, applyViewmodelTextures, applyHandsTextures } from '../world/ModelTexturing.js'
 
 // 用户/开源模型加载：
-//   public/models/agent.glb      → 训练机器人外观（当前内置：Khronos "BrainStem"，CC-BY 4.0 by Microsoft，
+//   public/models/agent.glb      → 训练机器人外观（当前内置：Mixamo "X Bot"，CC-BY，
 //                                  含骨骼走路动画；自动缩放到总高 1.8m、脚底对地、面向 -Z）
 //   public/models/viewmodel.glb  → 第一人称枪模（当前内置：Quaternius AK47，CC0；最长轴对齐 -Z 枪管向）
-//   public/models/hands.glb      → 第一人称手臂（当前内置：J-Toastie "Rigged FPS Arms"，CC-BY 3.0，
-//                                  poly.pizza 分发；按骨骼左右手位置自动对位到枪的握把/护木）
+//   public/models/glove.glb      → 第一人称高精度手套（当前内置：J-Toastie "Gloved Hand"，CC-BY 3.0，
+//                                  五指独立三关节骨骼；WeaponSystem 双实例化 + 五指 IK 持枪）
+//   public/models/hands.glb      → 第一人称手臂备选（当前内置：J-Toastie "Rigged FPS Arms"，CC-BY 3.0；
+//                                  glove.glb 缺失时回退使用）
 // 文件缺失时静默跳过，回退到内置程序化模型。
 export async function loadUserAssets() {
-  const out = { agent: null, agentAnimations: null, viewmodel: null, hands: null }
+  const out = { agent: null, agentAnimations: null, viewmodel: null, hands: null, glove: null }
   const loader = new GLTFLoader()
   const tryLoad = (file) => new Promise((res) => {
     loader.load(
@@ -20,7 +22,9 @@ export async function loadUserAssets() {
       () => res(null),
     )
   })
-  const [agentGltf, vmGltf, handsGltf] = await Promise.all([tryLoad('agent.glb'), tryLoad('viewmodel.glb'), tryLoad('hands.glb')])
+  const [agentGltf, vmGltf, handsGltf, gloveGltf] = await Promise.all([
+    tryLoad('agent.glb'), tryLoad('viewmodel.glb'), tryLoad('hands.glb'), tryLoad('glove.glb'),
+  ])
 
   if (agentGltf?.scene) {
     const agent = agentGltf.scene
@@ -84,6 +88,11 @@ export async function loadUserAssets() {
   if (handsGltf?.scene) {
     applyHandsTextures(handsGltf.scene) // 袖/肤/手套 → 布料/皮肤/聚合物贴图
     out.hands = handsGltf.scene
+  }
+  // 高精度手套：同样原样返回（WeaponSystem.setGloveHands 双实例化 + 五指 IK）
+  if (gloveGltf?.scene) {
+    applyHandsTextures(gloveGltf.scene)
+    out.glove = gloveGltf.scene
   }
   return out
 }

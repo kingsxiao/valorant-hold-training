@@ -101,13 +101,14 @@ export function applyViewmodelTextures(root) {
   })
 }
 
-// ---- 第一人称手臂（hands.glb，如 J-Toastie Rigged FPS Arms）----
-// 袖臂 → 战术布料（保留原色 tint）；皮肤 → 皮肤贴图；手套 → 聚合物橘皮纹
+// ---- 第一人称手臂（hands.glb / glove.glb，如 J-Toastie 系列模型）----
+// 手套 → 深色战术手套（聚合物橘皮纹，固定深灰蓝调出"战术装备"观感）；
+// 皮肤 → 皮肤贴图；其余（袖臂）→ 战术布料
 export function applyHandsTextures(root) {
   eachMat(root, m => {
     if (!m.isMeshStandardMaterial) return
     if (/glove|mitt/i.test(m.name)) {
-      assign(m, Tex.polymer(), { tint: liftedTint(m.color, 0.4, 0.75), roughness: 0.88, metalness: 0.05, normalScale: 1.4 })
+      assign(m, Tex.polymer(), { tint: 0x454a52, roughness: 0.84, metalness: 0.05, normalScale: 1.5 })
     } else if (/skin|face|body/i.test(m.name)) {
       assign(m, Tex.skin(), { roughness: 0.62, metalness: 0, normalScale: 0.8 })
     } else {

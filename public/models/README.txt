@@ -18,9 +18,15 @@
                   - 当前内置：J-Toastie "Rigged FPS Arms"（CC-BY 3.0，署名见仓库 README）
                   - 删除此文件则回退到内置程序化手臂
 
+  glove.glb       第一人称高精度手套（含 Wrist + 五指三关节骨骼的蒙皮单手模型）
+                  - 优先于 hands.glb 使用：双手实例化后五指分别 IK 到握把/护木，
+                    配程序化袖管（比 hands.glb 的低模"连指手套"精细得多）
+                  - 删除此文件则回退到 hands.glb / 程序化手臂
+                  - 当前内置：J-Toastie "Gloved Hand"（CC-BY 3.0，poly.pizza 分发）
+
 注意：
 - 本仓库不附带任何游戏原始模型；请仅使用你拥有合法权利的文件。
-- 材质建议 PBR（baseColor/normal/roughnessMetalness），本项目已开启环境反射与 ACES 色调映射。
+- 材料建议 PBR（baseColor/normal/roughnessMetalness），本项目已开启环境反射与 ACES 色调映射。
 - 文件缺失时自动使用内置模型，不影响运行。
 
 当前内置资产与来源：
@@ -30,3 +36,4 @@
                   agent.brainstem.bak.glb（Microsoft, CC-BY 4.0），改名即可换回。
   viewmodel.glb   Quaternius AK47（CC0）
   hands.glb       J-Toastie "Rigged FPS Arms"（CC-BY 3.0，poly.pizza 分发）
+  glove.glb       J-Toastie "Gloved Hand"（CC-BY 3.0，poly.pizza 分发）

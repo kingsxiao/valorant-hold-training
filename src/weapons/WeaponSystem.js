@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js'
 import { CONFIG, makeSprayPattern } from '../core/Config.js'
 import { Tex } from '../world/Textures.js'
 
@@ -505,6 +506,168 @@ export class WeaponSystem {
     this.muzzleOffset.copy((useCustom ? this.customVm : this.viewmodels[id]).userData.muzzle)
     if (this.customArms) this.customArms.visible = useCustom && !this.customHands // 自有枪模手臂随其显隐
     if (this.customHands) this.customHands.visible = useCustom // GLB 手臂随步枪显隐
+  }
+
+  // ---- 高精度手套双手（public/models/glove.glb：单手 + Wrist/五指三关节骨骼）----
+  // 实例化两份（SkeletonUtils.clone）→ 各自根节点落位（腕骨精确到握点 + 掌姿态
+  // 对齐握持面）→ 五指链分别瞄向枪上特征点并逐节向掌心卷曲；袖管用程序化
+  // 圆柱（布料贴图）自腕部探向画面下侧出画。相比 hands.glb 的低模三指合并
+  // 手套，五指独立 + 高模细节显著更好；glove.glb 缺失/骨架不符时回退 hands.glb。
+  setGloveHands(scene) {
+    if (!this.customVm) return false
+    // 绑定几何测量（原始场景孤立态：根单位变换）——先于任何挂载/缩放
+    scene.quaternion.identity()
+    scene.position.set(0, 0, 0)
+    scene.scale.setScalar(1)
+    scene.updateMatrixWorld(true)
+    const byName = {}
+    scene.traverse(o => { if (o.name) byName[o.name] = o })
+    if (localStorage.getItem('vhtdbg')) console.log('[dbg] glove bones:', Object.keys(byName).join(','))
+    const pickAny = (...res) => byName[Object.keys(byName).find(k => res.some(re => re.test(k)))]
+    // GLTFLoader 名称清洗：空格→下划线、点删除（"Index Finger"→Index_Finger / "Lower.001"→Lower001）
+    const wristB = pickAny(/^Wrist$/)
+    const handB = pickAny(/^Hand$/)
+    const F = {
+      thumb: [pickAny(/^Thumb$/), pickAny(/^Lower$/), pickAny(/^Middle$/), pickAny(/^Top$/)],
+      index: [pickAny(/^Index_?Finger$/), pickAny(/^Lower001$/), pickAny(/^Middle001$/), pickAny(/^Top001$/)],
+      middle: [pickAny(/^Middle_?Finger$/), pickAny(/^Lower002$/), pickAny(/^Middle002$/), pickAny(/^Top002$/)],
+      ring: [pickAny(/^Ring_?Finger$/), pickAny(/^Lower003$/), pickAny(/^Middle003$/), pickAny(/^Top003$/)],
+      pinky: [pickAny(/^Pinky$/), pickAny(/^Lower004$/), pickAny(/^Middle004$/), pickAny(/^Top004$/)],
+    }
+    const needed = [wristB, handB, ...F.thumb, ...F.index, ...F.middle, ...F.ring, ...F.pinky]
+    if (needed.some(b => !b)) {
+      console.warn('[VHT] glove.glb 骨架不符合预期（缺少 Wrist/五指骨），已回退 hands.glb')
+      return false
+    }
+    const bp = (o) => o.getWorldPosition(new THREE.Vector3())
+    const fBind = bp(F.middle[3]).sub(bp(wristB)).normalize()      // 腕→中指尖 = 手指方向
+    const sBind0 = bp(F.thumb[0]).sub(bp(handB)).normalize()       // 掌根→拇指根 = 拇指侧向
+    const pBind = fBind.clone().cross(sBind0).normalize()          // 掌心法向
+    const sBind = pBind.clone().cross(fBind).normalize()           // 正交化拇指侧向
+    const handLenBind = bp(F.middle[3]).distanceTo(bp(wristB))     // 腕→中指尖实测长度
+    const qBind = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(fBind, sBind, pBind))
+
+    // ---- 挂载组与矩阵工具（沿用 setCustomHands 的教训：先挂载、vmScene 根级联刷新）----
+    if (this.customHands) this.vmHolder.remove(this.customHands)
+    const group = new THREE.Group()
+    this.customHands = group
+    this.vmHolder.add(group)
+    if (this.customArms) this.customArms.visible = false
+    this.vmScene.updateMatrixWorld(true)
+    const vmP = (x, y, z) => this.customVm.localToWorld(new THREE.Vector3(x, y, z))
+    const wp = (o) => { this.vmScene.updateMatrixWorld(true); return o.getWorldPosition(new THREE.Vector3()) }
+    const rotBone = (bone, q) => {
+      this.vmScene.updateMatrixWorld(true)
+      const pq = bone.parent.getWorldQuaternion(new THREE.Quaternion())
+      bone.quaternion.premultiply(pq.clone().invert().multiply(q).multiply(pq))
+      this.vmScene.updateMatrixWorld(true)
+    }
+    const aimChain = (ch, wristBone, aim, curls) => {
+      const base = wp(ch[0])
+      const cur = wp(ch[3]).sub(base).normalize()
+      rotBone(ch[0], new THREE.Quaternion().setFromUnitVectors(cur, aim.clone().sub(base).normalize()))
+      curls.forEach((deg, i) => {
+        if (!deg) return
+        const a = wp(ch[i])
+        const dir = wp(ch[i + 1]).sub(a).normalize()
+        const radial = a.clone().sub(wp(wristBone)).normalize()
+        rotBone(ch[i], new THREE.Quaternion().setFromAxisAngle(dir.cross(radial).normalize(), THREE.MathUtils.degToRad(deg)))
+      })
+    }
+    const holderScale = this.vmHolder.scale.x
+    const handScale = 0.066 / handLenBind / holderScale // 腕→指尖 6.6cm（与枪缩放比例匹配）
+
+    // 单手实例：腕骨精确落位 + 掌姿态 → 五指 IK
+    const poseHand = (cfg) => {
+      const root = cloneSkinned(scene)
+      root.traverse(o => { if (o.isMesh) o.frustumCulled = false })
+      group.add(root)
+      root.quaternion.identity()
+      root.scale.setScalar(handScale)
+      root.position.set(0, 0, 0)
+      // 掌姿态：绑定基 → 目标基（fDes 手指向 / sDes 拇指侧向），再换算到 holder 本地
+      const fD = cfg.fDes.clone().normalize()
+      const sD0 = cfg.sDes.clone().normalize()
+      const pD = fD.clone().cross(sD0).normalize()
+      const sD = pD.clone().cross(fD).normalize()
+      const qDes = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(fD, sD, pD)).multiply(qBind.clone().invert())
+      const qHolder = this.vmHolder.getWorldQuaternion(new THREE.Quaternion())
+      root.quaternion.copy(qHolder.clone().invert().multiply(qDes))
+      this.vmScene.updateMatrixWorld(true)
+      // 腕骨落位：t = (RS)⁻¹·(锚点 − pivot)（pivot = 本地零平移时的腕骨世界位）
+      const bones = {}
+      root.traverse(o => { if (o.isBone) bones[o.name] = o })
+      const wristLocal = bones[wristB.name]
+      const pivot = wp(wristLocal)
+      const rsInv = this.vmHolder.matrixWorld.clone()
+      rsInv.setPosition(0, 0, 0)
+      rsInv.invert()
+      root.position.copy(cfg.wrist.clone().sub(pivot).applyMatrix4(rsInv))
+      this.vmScene.updateMatrixWorld(true)
+      // 五指 IK（本实例的骨骼）
+      const CH = {}
+      for (const [k, ch] of Object.entries(F)) CH[k] = ch.map(b => bones[b.name])
+      for (const [k, t] of Object.entries(cfg.fingers)) aimChain(CH[k], wristLocal, t.aim, t.curls)
+      return { root, wristBone: wristLocal }
+    }
+
+    // ---- 右手：握把（掌压右侧面，四指绕前缘，食指沿扳机护圈，拇指搭后脊）----
+    const handR = poseHand({
+      wrist: vmP(0.055, -0.05, -0.01),
+      fDes: new THREE.Vector3(-0.2, -0.5, -0.84),
+      sDes: new THREE.Vector3(0.15, 0.6, -0.78),
+      fingers: {
+        pinky: { aim: vmP(0.03, -0.10, -0.09), curls: [55, 45, 30] },
+        ring: { aim: vmP(0.028, -0.088, -0.105), curls: [50, 42, 30] },
+        middle: { aim: vmP(0.028, -0.075, -0.115), curls: [46, 40, 28] },
+        index: { aim: vmP(0.03, -0.05, -0.155), curls: [14, 20, 12] },
+        thumb: { aim: vmP(0.05, -0.005, 0.045), curls: [18, 12, 0] },
+      },
+    })
+    // ---- 左手：护木中段（弹匣侧后，掌托底面，四指卷握右侧面，拇指沿左侧前伸）----
+    const handL = poseHand({
+      wrist: vmP(-0.035, -0.215, -0.42),
+      fDes: new THREE.Vector3(0.62, 0.5, -0.4),
+      sDes: new THREE.Vector3(-0.3, 0.4, -0.85),
+      fingers: {
+        pinky: { aim: vmP(0.062, -0.105, -0.36), curls: [48, 40, 26] },
+        ring: { aim: vmP(0.066, -0.10, -0.42), curls: [44, 38, 26] },
+        middle: { aim: vmP(0.068, -0.095, -0.47), curls: [40, 36, 24] },
+        index: { aim: vmP(0.066, -0.09, -0.52), curls: [36, 32, 22] },
+        thumb: { aim: vmP(-0.06, -0.135, -0.5), curls: [10, 8, 0] },
+      },
+    })
+
+    // ---- 程序化袖管：自腕部沿肘方向探出画面下侧（布料贴图，合并单网格）----
+    const sleeveGeos = []
+    const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3()
+    const addTube = (A, B, r1, r2) => { // 相机系两点 → holder 本地圆柱
+      const d = B.clone().sub(A)
+      const len = d.length()
+      const geo = new THREE.CylinderGeometry(r2, r1, len, 12)
+      geo.translate(0, len / 2, 0)
+      _q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize())
+      _m4.compose(A, _q, _s.set(1, 1, 1))
+      const toLocal = this.vmHolder.matrixWorld.clone().invert()
+      geo.applyMatrix4(_m4).applyMatrix4(toLocal)
+      sleeveGeos.push(geo)
+    }
+    const sleeveFor = (handBone, dir) => {
+      const w = wp(handBone)
+      const elbow = w.clone().addScaledVector(dir, 0.17)
+      addTube(w, elbow, 0.028, 0.05)
+      const cuffC = w.clone().addScaledVector(dir, 0.012)
+      const cuff = new THREE.SphereGeometry(0.037, 14, 10)
+      cuff.translate(cuffC.x, cuffC.y, cuffC.z)
+      cuff.applyMatrix4(this.vmHolder.matrixWorld.clone().invert())
+      sleeveGeos.push(cuff)
+    }
+    sleeveFor(handR.wristBone, new THREE.Vector3(0.42, -0.85, 0.3).normalize())
+    sleeveFor(handL.wristBone, new THREE.Vector3(-0.42, -0.85, 0.3).normalize())
+    group.add(new THREE.Mesh(mergeGeometries(sleeveGeos, false), this.armMats.sleeve))
+
+    this.weaponMeshFor(this.currentVmId)
+    return true
   }
 
   // 用户自有 GLB 手臂（public/models/hands.glb）→ IK 式持枪姿态

@@ -214,7 +214,7 @@ loadUserAssets().then(({ agent, agentAnimations, viewmodel, hands }) => {
   if (viewmodel) { weapons.setCustomViewmodel(viewmodel); changed = true }
   if (hands && weapons.setCustomHands(hands) !== false) changed = true
   if (changed) bots.resetRound() // 场上的 Bot 换新外观
-}).catch(() => {})
+}).catch(e => console.error('[VHT] asset load failed', e))
 
 // 首屏菜单
 hud.setAmmo(CONFIG.weapons.vandal, { mag: 25, reserve: 75 })

@@ -2,19 +2,8 @@ import * as THREE from 'three'
 import { Bot } from './Bot.js'
 import { CONFIG } from '../core/Config.js'
 
-// 训练模式管理器
-//  range  靶场       多个静态靶，击杀后延时重生（练定位/预瞄）
-//  hold   架枪对枪   随机延迟后 Bot 从缺口拉出横移，玩家须在 aimTime 内击杀，否则判负
-//  flick  快速拉枪   目标随机出现在前方扇区，限时站立
-//  spray  压枪       正前方固定靶连续重生（配合曳光/弹孔校准弹道）
-//  track  跟枪       目标全速左右横移（随机变向），练跟枪
-export const MODES = {
-  range: { label: '靶场预瞄', desc: '静态靶 · 击杀后重生' },
-  hold: { label: '架枪对枪', desc: 'Bot 从缺口拉出 · 打慢了会被反杀' },
-  flick: { label: '快速拉枪', desc: '目标随机出现 · 练甩枪' },
-  spray: { label: '压枪训练', desc: '连续扫射固定靶 · 看弹孔校弹道' },
-  track: { label: '跟枪训练', desc: '全速横移目标 · 练跟踪' },
-}
+// 纯架枪对枪训练：随机延迟后 Bot 从缺口拉出横移，玩家须在 aimTime 内击杀，否则判负
+export const MODE_INFO = { label: '架枪对枪', desc: 'Bot 从缺口拉出 · 打慢了会被反杀' }
 
 const rand = (a, b) => a + Math.random() * (b - a)
 
@@ -23,7 +12,6 @@ export class BotManager {
     this.scene = scene; this.world = world; this.map = map
     this.audio = audio; this.player = player
     this.bots = []
-    this.mode = 'hold'
     this.params = {
       delayMin: CONFIG.training.peekDelayMinMs,
       delayMax: CONFIG.training.peekDelayMaxMs,
@@ -46,11 +34,6 @@ export class BotManager {
     }
   }
 
-  setMode(mode) {
-    this.mode = mode
-    this.resetRound()
-  }
-
   resetRound() {
     for (const b of this.bots) b.dispose() // 从场景移除并释放，防止网格无限累积
     this.bots.length = 0
@@ -58,44 +41,17 @@ export class BotManager {
     this.running = true
     this.roundEndAt = this.params.roundSeconds > 0 ? this.now() + this.params.roundSeconds : 0
     this.hold = { nextAt: 0, gapIdx: 0, fromLeft: true }
-    this.track = { dir: 1, nextFlipAt: 0 }
-    // 各模式首次布场
-    if (this.mode === 'range') this._spawnRange()
-    else if (this.mode === 'spray') this._spawnSpray()
-    else if (this.mode === 'track') this._spawnTrack()
-    else if (this.mode === 'flick') { this.flickUntil = 0; this.hold.nextAt = 0 }
     this.audio?.roundStart()
   }
 
   _bot() {
     let b = this.bots.find(x => !x.active && x.mode !== 'dying') // 复用已播完死亡动画的 Bot（隐藏后 mode 已归位 idle）
     if (!b) { b = new Bot(this.scene, this.world); b.manager = this; this.bots.push(b) }
-    else { b.flickDieAt = 0; b.respawnAt = 0; b.peek = null } // 清上一条命的管理器状态
+    else { b.peek = null } // 清上一条命的管理器状态
     return b
   }
 
   now() { return this.t }
-
-  _spawnRange() {
-    for (const stand of this.map.rangeStands) {
-      const b = this._bot()
-      b.place(stand.x, stand.z, 'idle')
-      b.home = { x: stand.x, z: stand.z }
-    }
-  }
-
-  _spawnSpray() {
-    const b = this._bot()
-    b.place(12, -12, 'idle')   // 压枪墙前
-    b.home = { x: 12, z: -12 }
-  }
-
-  _spawnTrack() {
-    const b = this._bot()
-    b.place(0, -16, 'track')
-    b.trackCenter = 0
-    this.track = { dir: Math.random() > 0.5 ? 1 : -1, nextFlipAt: this.now() + rand(0.4, 1.2) }
-  }
 
   // ---- 每个固定步长驱动 ----
   step(dt, alpha) {
@@ -110,34 +66,17 @@ export class BotManager {
     }
 
     const ctx = { player: this.player, alpha, drive: null }
-
-    // 靶场/压枪模式：死亡目标延时重生（死亡动画播完 hide 后 mode 已归位，靠 respawnAt 找回）
-    if (this.mode === 'range' || this.mode === 'spray') {
-      for (const b of this.bots) {
-        if (!b.active && b.respawnAt && this.now() >= b.respawnAt) {
-          b.place(b.home.x, b.home.z, 'idle')
-          b.respawnAt = 0
-        }
-      }
-    }
-
-    switch (this.mode) {
-      case 'hold': this._stepHold(dt, ctx); break
-      case 'flick': this._stepFlick(dt, ctx); break
-      case 'track': this._stepTrack(dt, ctx); break
-    }
+    this._stepHold(dt, ctx)
 
     for (const b of this.bots) {
       if (b.active || b.mode === 'dying') b.step(dt, ctx)
     }
 
-    // 架枪模式：Bot 可见时间超过 aimTime → 判负
-    if (this.mode === 'hold') {
-      for (const b of this.bots) {
-        if (b.active && b.mode === 'peek' && b.visibleNow && b.firstVisibleAt > 0) {
-          if ((this.now() - b.firstVisibleAt) * 1000 >= this.params.aimTimeMs) {
-            this._loseDuel(b)
-          }
+    // Bot 可见时间超过 aimTime → 判负
+    for (const b of this.bots) {
+      if (b.active && b.mode === 'peek' && b.visibleNow && b.firstVisibleAt > 0) {
+        if ((this.now() - b.firstVisibleAt) * 1000 >= this.params.aimTimeMs) {
+          this._loseDuel(b)
         }
       }
     }
@@ -151,7 +90,6 @@ export class BotManager {
       h.nextAt = nowMs + rand(this.params.delayMin, this.params.delayMax)
       h.gapIdx = Math.floor(Math.random() * this.map.gaps.length)
       h.fromLeft = Math.random() > 0.5
-      h.stopped = false
       return
     }
     const activeBot = this.bots.find(b => b.active && b.mode === 'peek')
@@ -161,12 +99,12 @@ export class BotManager {
       const startX = h.fromLeft ? gap.x0 - 2.2 : gap.x1 + 2.2
       const endX = h.fromLeft ? gap.x1 + 2.2 : gap.x0 - 2.2
       b.place(startX, this.map.peekLineZ, 'peek')
+      b.gapName = gap.name
       b.peek = { startX, endX, dir: Math.sign(endX - startX), stopAt: rand(0.3, 0.7), stopped: false, stopUntil: 0 }
       h.nextAt = 0
-      // 站位提醒：远离缺口时提示
       void ctx
     }
-    if (activeBot) {
+    if (activeBot?.peek) {
       const pk = activeBot.peek
       if (pk.stopUntil > this.now()) {
         activeBot.moveToward(0, dt) // 急停（counter-strafe）
@@ -184,58 +122,6 @@ export class BotManager {
         }
       }
     }
-  }
-
-  _stepFlick(dt, ctx) {
-    const h = this.hold
-    const count = CONFIG.training.flickCount
-    const activeCount = this.bots.filter(b => b.active).length
-    if (activeCount < count && this.now() >= (h.nextAt ?? 0)) {
-      // 在玩家前方 ±60°、8~26m 的空地随机出生（避开掩体：失败重试）
-      // 朝向 yaw 的前向为 (−sin yaw, −cos yaw)，扇区 = yaw ± 1.05rad
-      const p = this.player
-      for (let tries = 0; tries < 20; tries++) {
-        const ang = p.yaw + rand(-1.05, 1.05)
-        const d = rand(8, 26)
-        const x = p.pos.x - Math.sin(ang) * d
-        const z = p.pos.z - Math.cos(ang) * d
-        if (x < -15 || x > 15 || z < -44 || z > 7) continue
-        // 不许出生在掩体里
-        if (!this.world.lineOfSight(p.pos.x, p.pos.y + 1.6, p.pos.z, x, 1.5, z)) continue
-        const b = this._bot()
-        b.place(x, z, 'idle')
-        b.flickDieAt = this.now() + 2.2
-        break
-      }
-      h.nextAt = this.now() + 0.25
-    }
-    for (const b of this.bots) {
-      if (b.active && b.flickDieAt && this.now() > b.flickDieAt) {
-        b.flickDieAt = 0
-        b.startDeath()
-        this.hold.nextAt = this.now() + 0.6
-      }
-    }
-  }
-
-  _stepTrack(dt, ctx) {
-    const t = this.track
-    const b = this.bots.find(b => b.active && b.mode === 'track')
-    if (!b) {
-      // 目标死亡：等死亡动画播完（mode 归位 idle）后重生
-      const dying = this.bots.some(x => x.active && x.mode === 'dying')
-      if (!dying) this._spawnTrack()
-      return
-    }
-    if (this.now() >= t.nextFlipAt) {
-      t.dir = -t.dir
-      t.nextFlipAt = this.now() + rand(0.5, 1.4)
-    }
-    // 到边界强制折返
-    if (b.pos.x < -13) t.dir = 1
-    if (b.pos.x > 13) t.dir = -1
-    b.moveToward(t.dir * CONFIG.bot.moveSpeed * this.params.speedMult, dt)
-    // 朝向由 Bot.step 统一处理（移动朝行进方向、静止朝玩家，带平滑转身）
   }
 
   // ---- 命中入口（WeaponSystem 调用）----
@@ -263,8 +149,9 @@ export class BotManager {
     if (bot.hp <= 0) {
       this.stats.kills++
       bot.startDeath()
-      bot.respawnAt = this.now() + 1.2
-      this.audio.kill()
+      // 击杀确认：爆头击杀先"叮"再确认音（与游戏一致，爆头永远叮）；击杀音略延后让开层次
+      if (zone === 'head') { this.audio.hitMark(true); this.audio.kill(0.06) }
+      else this.audio.kill()
       this.onEvent?.('killed', { bot, zone })
       return true
     }
@@ -274,6 +161,8 @@ export class BotManager {
 
   _loseDuel(bot) {
     this.stats.duelsLost++
+    // 敌方枪声从 Bot 位置响起（可听声辨位：死也要知道子弹从哪个缺口来的），随后受击/倒地
+    this.audio.shot('rifle', { x: bot.pos.x, y: 1.3, z: bot.pos.z }, { pos: this.player.pos, yaw: this.player.yaw })
     this.player.onShot(100) // 致死伤害，内部已播放 hurt + death 音效
     this.onEvent?.('lost-duel', { bot })
     bot.startDeath()

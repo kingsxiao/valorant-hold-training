@@ -991,7 +991,8 @@ export class WeaponSystem {
     }
 
     // 持枪模型后坐 + 机件循环（枪机/套筒后坐回位，Sheriff 转轮分度）
-    this.vmKick = Math.min(this.vmKick + 0.035, 0.08)
+    const kick = w.vmKick ?? 0.032 // 每把枪独立开火冲量（重枪锤感 / 消音轻感）
+    this.vmKick = Math.min(this.vmKick + kick, kick * 2.3)
     this.vmBolt = 1
     if (this.currentId === 'sheriff') this._indexCylinder()
     this.lastFireTime = this.now

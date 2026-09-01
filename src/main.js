@@ -7,10 +7,11 @@ import { MapBuilder } from './world/MapBuilder.js'
 import { FX } from './world/FX.js'
 import { Player } from './player/Player.js'
 import { WeaponSystem } from './weapons/WeaponSystem.js'
-import { BotManager, MODES } from './entities/BotManager.js'
+import { BotManager, MODE_INFO } from './entities/BotManager.js'
 import { Crosshair } from './ui/Crosshair.js'
 import { HUD } from './ui/HUD.js'
 import { Menu } from './ui/Menu.js'
+import { ResultPanel } from './ui/ResultPanel.js'
 import { loadUserAssets } from './core/UserAssets.js'
 import { Bot } from './entities/Bot.js'
 
@@ -33,6 +34,12 @@ const bots = new BotManager({ scene: engine.scene, world, map, audio, player })
 const hud = new HUD(hudRoot)
 const crosshair = new Crosshair(hudRoot)
 const menu = new Menu({ overlay, onReady: startRound })
+// 回合结算：独立面板，与设置面板互斥显示
+const result = new ResultPanel({
+  overlay,
+  onRestart: () => startRound(state.cfg),
+  onSettings: () => { result.hide(); menu.show() },
+})
 
 // ---- 状态 ----
 const state = {
@@ -75,11 +82,12 @@ weapons.onDryRefill = () => hud.toastMsg('弹药已补给', 1000)
 bots.onEvent = (type, data) => {
   if (type === 'lost-duel') {
     hud.hurtFlash()
-    hud.toastMsg('对枪失败 —— 慢了', 1400)
+    hud.toastMsg(`对枪失败 —— 慢了（${data.bot.gapName ?? '?'} 缺口）`, 1400)
   } else if (type === 'round-end') {
     state.playing = false
     document.exitPointerLock?.()
-    menu.show(data)
+    menu.hide()
+    result.show(data)
   }
 }
 
@@ -126,16 +134,8 @@ function startRound(cfg) {
   audio.ensure()
   audio.setVolume(cfg.volume)
 
-  // 出生点按模式
-  const spawns = {
-    range: { x: 0, z: 3, yaw: 0 },
-    hold: { x: 0, z: -14, yaw: 0 },
-    flick: { x: 0, z: 3, yaw: 0 },
-    spray: { x: 4, z: -12, yaw: -Math.PI / 2 },
-    track: { x: 0, z: -8, yaw: 0 },
-  }
-  const s = spawns[cfg.mode] ?? spawns.range
-  player.respawn(s.x, s.z, s.yaw)
+  // 出生点：架枪位正后，面向两个缺口
+  player.respawn(0, -14, 0)
   player.hp = 100
 
   weapons.primaryId = cfg.primary
@@ -143,11 +143,12 @@ function startRound(cfg) {
   weapons.state = {} // 重置弹匣
   weapons.switchTo(cfg.primary, true)
 
-  bots.setMode(cfg.mode)
+  bots.resetRound()
   hud.setAmmo(weapons.weapon, weapons._st(weapons.currentId))
-  hud.setMode(MODES[cfg.mode].label, MODES[cfg.mode].desc)
+  hud.setMode(MODE_INFO.label, MODE_INFO.desc)
 
   menu.hide()
+  result.hide()
   const pl = canvas.requestPointerLock()
   if (pl?.catch) pl.catch(() => {}) // 自动化/无手势环境下静默（正常点击不会走到这）
   state.playing = true
@@ -188,10 +189,10 @@ engine.renderFrame = (alpha, dtMs) => {
   // HUD（节流写入，避免每帧 DOM 重排）
   hud.setSpeed(player.moveSpeed)
   hud.setHP(player.hp)
-  hud.setMode(MODES[state.cfg.mode].label,
+  hud.setMode(MODE_INFO.label,
     bots.params.roundSeconds > 0 && bots.running && bots.roundEndAt > 0
       ? `${Math.max(0, bots.roundEndAt - bots.now()).toFixed(1)}s` // 游戏时钟：暂停时倒计时冻结
-      : MODES[state.cfg.mode].desc)
+      : MODE_INFO.desc)
   _hudAccum.stats += dtMs
   if (_hudAccum.stats > 200) { _hudAccum.stats = 0; hud.setStats(bots.stats, engine) }
   hud.pushFps(dtMs)

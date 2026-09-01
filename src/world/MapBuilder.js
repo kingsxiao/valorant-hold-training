@@ -4,10 +4,8 @@ import { Tex, pbr } from './Textures.js'
 
 // 训练馆布局（原创设计，尺寸按游戏内比例）：
 //   主厅 x∈[-16,16], z∈[6,-46]
-//   - 直线靶道：-Z 方向，靶位 z=-8/-13/-18/-23/-28/-33
 //   - 架枪巷道：z=-24 处横墙带两个缺口，Bot 在墙后 z=-30 横向拉出
-//   - 压枪墙：东侧 x=12 面墙 + 前方靶位
-//   - 中场木箱掩体若干（高 1.2 / 2.4，练习绕点预瞄）
+//   - 中场木箱掩体若干（高 1.2 / 2.4，换点位架枪 / 练习绕点预瞄）
 // v2 视觉：地面距离标线+数字 / 缺口字母牌+警示条纹横梁 / 墙面灯带 / 踢脚线 / 远端场馆标牌
 export class MapBuilder {
   constructor(world, scene) {
@@ -16,7 +14,6 @@ export class MapBuilder {
     this.spawn = { x: 0, z: 0, yaw: 0 }
     this.holdSpots = []   // 架枪推荐站位
     this.gaps = []        // 巷道缺口 { x0, x1 }
-    this.rangeStands = [] // 靶位
     this._signCache = {}
     this.build()
   }
@@ -47,14 +44,13 @@ export class MapBuilder {
       floor: pbr({ maps: Tex.floor(), roughness: 0.92, repeat: [17, 28] }),
       wall: pbr({ maps: Tex.wall(), color: 0xd8ccba, roughness: 0.85, repeat: [8, 2] }),
       crate: pbr({ maps: Tex.crate(), roughness: 0.8 }),
-      target: pbr({ maps: Tex.target(), roughness: 0.85 }),
       accent: new THREE.MeshStandardMaterial({ color: 0x3d7068, roughness: 0.6, metalness: 0.1 }),
       red: new THREE.MeshStandardMaterial({ color: 0xc23b4e, roughness: 0.6 }),
       trim: new THREE.MeshStandardMaterial({ color: 0x2a2f36, roughness: 0.75, metalness: 0.25 }),
       lamp: new THREE.MeshStandardMaterial({ color: 0x11150f, emissive: 0xffedc8, emissiveIntensity: 2.0, roughness: 0.4 }),
       stripe: pbr({ maps: Tex.stripes(), roughness: 0.6 }),
     }
-    const geos = { floor: [], wall: [], crate: [], target: [], accent: [], red: [], trim: [], lamp: [], stripe: [] }
+    const geos = { floor: [], wall: [], crate: [], accent: [], red: [], trim: [], lamp: [], stripe: [] }
     const box = (arr, x, y, z, w, h, d, solid = true) => {
       const geo = new THREE.BoxGeometry(w, h, d)
       geo.translate(x, y + h / 2, z)
@@ -127,19 +123,6 @@ export class MapBuilder {
     box(geos.wall, -16.5, 0, -30, 1, 4, 13)
     box(geos.wall, 16.5, 0, -30, 1, 4, 13)
 
-    // ===== 直线靶位（桩 + 靶板位置标记）=====
-    for (const [zi, z] of [-8, -13, -18, -23, -28, -33].entries()) {
-      for (const x of [-6, 0, 6]) {
-        // 地面站位环（不挡子弹的薄盘，仅视觉）
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.05, 6, 24), mats.accent)
-        ring.rotation.x = -Math.PI / 2
-        ring.position.set(x, 0.02, z)
-        this.scene.add(ring)
-        if (zi === 0 && x === 0) continue
-        this.rangeStands.push({ x, z })
-      }
-    }
-
     // ===== 地面距离标线 + 数字（每 10m 一道，练测距/预瞄）=====
     const distMark = (meters, z) => {
       box(geos.accent, 0, 0.005, z, 14, 0.012, 0.14, false) // 横向标线
@@ -160,17 +143,6 @@ export class MapBuilder {
     }
     distMark(10, -7); distMark(20, -17); distMark(30, -27); distMark(40, -37)
 
-    // ===== 压枪墙（东侧）：4×2m 靶纸 + 站位 =====
-    // 沿视线由远及近分层：墙面 16.5 → 衬板 16.498 → 靶纸 16.497 → 弹孔 16.495
-    // 各层间隙 1~2mm 远大于该距离下的深度精度，避免共面 Z-fighting；
-    // 弹孔（贴墙 16.495 + polygonOffset）始终绘制在靶纸与衬板之上，压枪模式可直接读弹着点
-    const spray = new THREE.Mesh(new THREE.PlaneGeometry(4, 2), mats.target)
-    spray.rotation.y = -Math.PI / 2
-    spray.position.set(16.497, 1.6, -12)
-    this.scene.add(spray)
-    this.sprayWall = { x: 16.4, y: 1.6, z: -12 }
-    box(geos.accent, 16.648, 0, -12, 0.3, 3, 4.6, false)
-
     // ===== 远端场馆标牌（南墙内面）=====
     const board = this._sign('title', 7.2, 1.7, (g, W, H) => {
       g.fillStyle = 'rgba(14,20,26,0.94)'; g.fillRect(0, 0, W, H)
@@ -178,10 +150,10 @@ export class MapBuilder {
       g.textAlign = 'center'
       g.fillStyle = '#ece8e1'
       g.font = `bold ${Math.round(H * 0.34)}px sans-serif`
-      g.fillText('RANGE-07 猎手训练馆', W / 2, H * 0.42)
+      g.fillText('RANGE-07 架枪训练馆', W / 2, H * 0.42)
       g.fillStyle = 'rgba(236,232,225,0.55)'
       g.font = `${Math.round(H * 0.16)}px sans-serif`
-      g.fillText('架枪 · 预瞄 · 压枪 · 跟枪', W / 2, H * 0.72)
+      g.fillText('架枪 · 对枪 · 反应', W / 2, H * 0.72)
     })
     board.position.set(0, 4.5, -46.9)
     board.matrixAutoUpdate = false

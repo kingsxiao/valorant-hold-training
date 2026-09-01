@@ -257,8 +257,15 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
   padding: 0 7px; font-size: 11px; font-family: var(--font-num); font-weight: 600; margin: 0 2px;
 }
 
-/* 结算 */
-.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 8px; }
+/* 结算（独立面板） */
+.result-panel { width: min(780px, 94vw); }
+.result-panel .summary-grid { grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 26px; }
+.result-panel .sum-cell {
+  background: linear-gradient(180deg, rgba(236, 232, 225, 0.09), rgba(236, 232, 225, 0.03));
+  padding: 18px 10px 15px;
+}
+.result-panel .sum-cell .num { font-size: 38px; }
+.summary-grid { display: grid; gap: 10px; margin-top: 8px; }
 .sum-cell {
   position: relative;
   background: linear-gradient(180deg, rgba(236, 232, 225, 0.07), rgba(236, 232, 225, 0.025));

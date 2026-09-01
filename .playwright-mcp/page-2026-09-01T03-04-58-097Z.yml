@@ -1,0 +1,34 @@
+- generic [active] [ref=e1]:
+  - generic:
+    - generic:
+      - generic: VANDAL
+      - text: 25 / 75
+    - generic:
+      - generic: 架枪对枪
+      - generic: 36.9s
+    - generic:
+      - generic:
+        - generic: 击杀
+        - generic: "0"
+      - generic:
+        - generic: 对枪败
+        - generic: "6"
+      - generic:
+        - generic: 命中率
+        - generic: 0%
+      - generic:
+        - generic: 爆头率
+        - generic: 0%
+      - generic:
+        - generic: 反应均值
+        - generic: 0ms
+      - generic:
+        - generic: 最快反应
+        - generic: 0ms
+      - generic:
+        - generic: FPS / 1%low
+        - generic: 117 / 60
+    - generic: "100"
+    - generic: 0.0 m/s
+    - generic: 对枪失败 —— 慢了
+    - generic: 117 fps

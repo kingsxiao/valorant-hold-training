@@ -34,6 +34,7 @@ export class Bot {
     this.firstVisibleAt = -1
     this.visibleNow = false
     this.walkPhase = 0
+    this.stepDist = 0   // 脚步声里程（与位移同步）
     this.flinch = 0      // 受击踉跄相位（0~1+，衰减）
     this.flinchAmp = 0   // 本次踉跄后仰幅度
     this.deathRoll = 0   // 死亡侧倒角
@@ -295,7 +296,7 @@ export class Bot {
 
   hide() {
     this.active = false
-    this.mode = 'idle' // 死亡动画播完：归位让对象池可复用（respawnAt 靠 BotManager 找回靶位）
+    this.mode = 'idle' // 死亡动画播完：归位让对象池可复用
     this.mesh.visible = false
     this.blob.visible = false
     this.visibleNow = false
@@ -314,6 +315,7 @@ export class Bot {
     this.mesh.rotation.set(0, 0, 0)
     this.mesh.position.copy(this.pos)
     this.walkPhase = 0
+    this.stepDist = 0
     this.setOpacity(1)
     this.blobMat.opacity = 1
     this.spawnGuardUntil = this.now() + CONFIG.bot.spawnGuardMs / 1000
@@ -411,7 +413,7 @@ export class Bot {
     // 朝向：移动时朝行进方向（与脚步方向一致），急停/静止时朝玩家；平滑转身
     const stopped = this.mode === 'peek' && this.peek?.stopUntil > this.now()
     let targetYaw
-    if ((this.mode === 'peek' || this.mode === 'track') && Math.abs(this.velX) > 0.4 && !stopped) {
+    if (this.mode === 'peek' && Math.abs(this.velX) > 0.4 && !stopped) {
       targetYaw = this.velX > 0 ? -Math.PI / 2 : Math.PI / 2
     } else {
       targetYaw = Math.atan2(-(p.pos.x - this.pos.x), -(p.pos.z - this.pos.z))
@@ -422,6 +424,16 @@ export class Bot {
 
     // 移动表现：程序化假人腿部摆动；骨骼假人播放混合动画（脚步与位移同步）
     const speed = Math.abs(this.velX)
+    // 脚步声：与位移同步的 HRTF 空间音 —— 架枪时可听声预判拉出方向与时机
+    this.stepDist += speed * dt
+    if (this.stepDist > 1.15) {
+      this.stepDist = 0
+      this.manager?.audio?.footstep(
+        { x: this.pos.x, z: this.pos.z },
+        { pos: ctx.player.pos, yaw: ctx.player.yaw },
+        true,
+      )
+    }
     if (this.legL && this.legR) {
       if (speed > 0.3) {
         this.walkPhase += dt * (4 + speed * 2.4)

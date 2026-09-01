@@ -550,31 +550,6 @@ const crate = () => get('crate', () => {
   }
 })
 
-// ---- 压枪靶纸 v2（环数标注 + 弹着痕迹）----
-const target = () => get('target', () => {
-  const c = canvas(512)
-  const g = c.getContext('2d')
-  g.fillStyle = '#e9e3d4'; g.fillRect(0, 0, 512, 512)
-  noise(g, 512, 0.04, 600)
-  g.strokeStyle = '#b93548'; g.lineWidth = 7
-  for (let i = 1; i <= 4; i++) {
-    g.strokeRect(512 * i * 0.1, 512 * i * 0.1, 512 * (1 - i * 0.2), 512 * (1 - i * 0.2))
-  }
-  // 环数标注
-  g.font = 'bold 17px monospace'; g.fillStyle = 'rgba(60,50,40,0.55)'; g.textAlign = 'left'
-  g.fillText('10', 30, 44); g.fillText('8', 86, 100); g.fillText('6', 142, 156)
-  g.fillStyle = '#b93548'
-  g.fillRect(248, 248, 16, 16)
-  g.font = 'bold 30px monospace'; g.fillStyle = 'rgba(60,50,40,0.7)'
-  g.textAlign = 'left'
-  g.fillText('SPRAY', 216, 492)
-  // 旧弹着灰印（训练痕迹）
-  for (let i = 0; i < 10; i++) {
-    blotch(g, 80 + Math.random() * 352, 80 + Math.random() * 352, 4 + Math.random() * 5, 'rgba(40,36,30,0.35)')
-  }
-  return { map: toTex(c, { srgb: true }) }
-})
-
 // ---- 特效贴图 ----
 const flash = () => get('flash', () => {
   const c = canvas(256)
@@ -962,7 +937,7 @@ export function pbr({ maps, color = 0xffffff, roughness = 1, metalness = 0, repe
 
 export const Tex = {
   suit, vest, visor, visorGlow, metal, polymer, wood,
-  floor, wall, crate, target,
+  floor, wall, crate,
   flash, blob, hole, spark, smoke, ring, stripes,
   robotShell, robotJoint, fabric, skin,
 }

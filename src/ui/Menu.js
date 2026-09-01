@@ -1,7 +1,6 @@
-import { MODES } from '../entities/BotManager.js'
 import { CONFIG } from '../core/Config.js'
 
-// 菜单 / 暂停 / 结算面板（DOM），设置持久化 localStorage
+// 设置 / 暂停面板（DOM），设置持久化 localStorage；回合结算在 ResultPanel
 const LS_KEY = 'vht-settings-v1'
 
 export function loadSettings() {
@@ -18,7 +17,6 @@ export class Menu {
     this.overlay = overlay
     this.onReady = onReady   // (startCfg) => void
     this.cfg = {
-      mode: 'hold',
       primary: 'vandal',
       secondary: 'classic',
       sens: CONFIG.mouse.defaultSens,
@@ -49,9 +47,6 @@ export class Menu {
         </div>
         <div class="head-badge">VHT // 01<small>AIM · HOLD · WIN</small></div>
       </header>
-
-      <h2>训练模式</h2>
-      <div class="opt-grid" data-group="mode"></div>
 
       <h2>武器</h2>
       <div class="opt-grid" data-group="primary"></div>
@@ -100,17 +95,6 @@ export class Menu {
     `
     this.overlay.appendChild(p)
     this.panel = p
-
-    // 模式按钮
-    const modeBox = p.querySelector('[data-group=mode]')
-    for (const [id, m] of Object.entries(MODES)) {
-      const b = document.createElement('button')
-      b.className = 'opt-btn'
-      b.textContent = `${m.label} · ${m.desc}`
-      b.dataset.value = id
-      b.onclick = () => { this.cfg.mode = id; this.syncButtons(); saveSettings({ mode: id }); this.applyAll?.() }
-      modeBox.appendChild(b)
-    }
 
     // 武器按钮
     const wname = { vandal: 'Vandal（自动步战）', phantom: 'Phantom（消音/衰减）', sheriff: 'Sheriff（重左轮）', classic: 'Classic（手枪/右键三连发）', ghost: 'Ghost（消音手枪）' }
@@ -210,7 +194,7 @@ export class Menu {
   }
 
   syncButtons() {
-    for (const [group, key] of [['mode', 'mode'], ['primary', 'primary'], ['secondary', 'secondary']]) {
+    for (const [group, key] of [['primary', 'primary'], ['secondary', 'secondary']]) {
       for (const b of this.panel.querySelectorAll(`[data-group=${group}] .opt-btn`)) {
         b.classList.toggle('active', b.dataset.value === String(this.cfg[key]))
       }
@@ -235,33 +219,15 @@ export class Menu {
     }
   }
 
-  show(summary = null) {
+  show() {
     this.overlay.classList.add('visible')
-    const old = this.overlay.querySelector('.summary')
-    if (old) old.remove()
-    if (summary) {
-      const s = document.createElement('div')
-      s.className = 'summary'
-      const cell = (num, lbl) => `<div class="sum-cell"><div class="num">${num}</div><div class="lbl">${lbl}</div></div>`
-      const n = summary.reactions.length
-      const avg = n ? Math.round(summary.reactions.reduce((a, b) => a + b, 0) / n) : 0
-      const best = n ? Math.min(...summary.reactions) : 0
-      s.innerHTML = `<h2>回合结算</h2><div class="summary-grid">
-        ${cell(summary.kills, '击杀')}
-        ${cell(summary.duelsLost, '对枪败')}
-        ${cell((summary.shots ? Math.round(summary.hits / summary.shots * 100) : 0) + '%', '命中率')}
-        ${cell((summary.hits ? Math.round(summary.headshots / summary.hits * 100) : 0) + '%', '爆头率')}
-        ${cell(avg ? avg + 'ms' : '—', '平均反应')}
-        ${cell(best ? best + 'ms' : '—', '最快反应')}
-      </div>`
-      // 插到面板头部之后、第一个分节之前（不遮住标题）
-      const head = this.panel.querySelector('.panel-head')
-      const firstH2 = this.panel.querySelector('h2')
-      this.panel.insertBefore(s, head?.nextSibling ?? firstH2)
-    }
+    this.panel.hidden = false
     this.refreshSliders()
     this.syncButtons()
   }
 
-  hide() { this.overlay.classList.remove('visible') }
+  hide() {
+    this.panel.hidden = true
+    this.overlay.classList.remove('visible')
+  }
 }

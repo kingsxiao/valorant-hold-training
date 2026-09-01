@@ -46,6 +46,7 @@ export const CONFIG = {
       spread: { stand: 0.2, run: 4.5, walk: 1.1, crouchMult: 0.85, jump: 7 },
       recoil: { recoverTime: 0.4, viewPunch: 0.34 },             // 弹道后坐恢复
       moveSpeedMult: 1.0,
+      vmKick: 0.032,                                             // 开火冲量（持枪模型后坐手感）
       sound: 'rifle',
     },
     phantom: {
@@ -60,7 +61,8 @@ export const CONFIG = {
       spread: { stand: 0.15, run: 4.0, walk: 0.9, crouchMult: 0.85, jump: 6.5 },
       recoil: { recoverTime: 0.38, viewPunch: 0.3 },
       moveSpeedMult: 1.0,
-      sound: 'rifle',
+      vmKick: 0.028,                                             // 消音枪开火冲量更轻（音画一致）
+      sound: 'rifle_suppressed',
     },
     sheriff: {
       name: 'Sheriff', slot: 'primary', auto: false,
@@ -69,6 +71,7 @@ export const CONFIG = {
       spread: { stand: 0.25, run: 5.5, walk: 1.6, crouchMult: 0.85, jump: 8 },
       recoil: { recoverTime: 0.6, viewPunch: 0.9 },
       moveSpeedMult: 1.0,
+      vmKick: 0.05,                                              // 左轮重锤感
       sound: 'handcannon',
     },
     classic: {
@@ -79,6 +82,7 @@ export const CONFIG = {
       spread: { stand: 0.4, run: 4.0, walk: 1.4, crouchMult: 0.85, jump: 6 },
       recoil: { recoverTime: 0.35, viewPunch: 0.45 },
       moveSpeedMult: 1.0,
+      vmKick: 0.03,
       sound: 'pistol',
     },
     ghost: {
@@ -88,7 +92,8 @@ export const CONFIG = {
       spread: { stand: 0.12, run: 3.5, walk: 1.0, crouchMult: 0.85, jump: 5 },
       recoil: { recoverTime: 0.3, viewPunch: 0.35 },
       moveSpeedMult: 1.0,
-      sound: 'pistol',
+      vmKick: 0.024,                                             // 消音手枪更轻
+      sound: 'pistol_suppressed',
     },
     knife: {
       name: 'Tactical Knife', slot: 'melee', auto: false,
@@ -117,7 +122,6 @@ export const CONFIG = {
     peekDelayMinMs: 600,    // 架枪模式：Bot 出现前的随机等待
     peekDelayMaxMs: 2600,
     peekStopChance: 0.35,   // 横移中急停一瞬的概率（模拟真人 swing 抖动）
-    flickCount: 1,          // 同时在场目标数
   },
 
   graphics: {

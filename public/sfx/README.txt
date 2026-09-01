@@ -1,7 +1,9 @@
 把你有权使用的音效文件放进本目录，即可替换内置合成音效（按文件名自动匹配，支持 mp3 / wav / ogg）：
 
-  shot_rifle      Vandal / Phantom 开枪
-  shot_pistol     Classic / Ghost 开枪
+  shot_rifle      Vandal 开枪
+  shot_phantom    Phantom 开枪（缺失时回退 shot_rifle）
+  shot_pistol     Classic 开枪
+  shot_ghost      Ghost 开枪（缺失时回退 shot_pistol）
   shot_handcannon Sheriff 开枪
   shot_knife      刀挥击
   headshot        爆头"叮"声

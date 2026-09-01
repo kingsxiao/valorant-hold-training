@@ -1,0 +1,124 @@
+- generic [active] [ref=f3e1]:
+  - generic:
+    - generic:
+      - generic: VANDAL
+      - text: 25 / 75
+    - generic:
+      - generic: 架枪对枪
+      - generic: Bot 从缺口拉出 · 打慢了会被反杀
+    - generic: "100"
+    - generic: 0.0 m/s
+    - generic: "-- fps"
+  - generic [ref=f3e4]:
+    - banner [ref=f3e5]:
+      - generic [ref=f3e6]:
+        - heading [level=1] [ref=f3e7]:
+          - text: 架枪训练
+          - emphasis [ref=f3e8]: HOLD ANGLE TRAINER
+        - generic [ref=f3e9]: WebGL 第一人称训练器 · 移速/射速/后坐力按 Valorant 公开参数调校 · 原创程序化建模
+      - generic [ref=f3e10]:
+        - text: VHT // 01
+        - generic [ref=f3e11]: AIM · HOLD · WIN
+    - heading "训练模式" [level=2] [ref=f3e12]
+    - generic [ref=f3e13]:
+      - button "靶场预瞄 · 静态靶 · 击杀后重生" [ref=f3e14] [cursor=pointer]
+      - button "架枪对枪 · Bot 从缺口拉出 · 打慢了会被反杀" [ref=f3e15] [cursor=pointer]
+      - button "快速拉枪 · 目标随机出现 · 练甩枪" [ref=f3e16] [cursor=pointer]
+      - button "压枪训练 · 连续扫射固定靶 · 看弹孔校弹道" [ref=f3e17] [cursor=pointer]
+      - button "跟枪训练 · 全速横移目标 · 练跟踪" [ref=f3e18] [cursor=pointer]
+    - heading "武器" [level=2] [ref=f3e19]
+    - generic [ref=f3e20]:
+      - button "Vandal（自动步战）" [ref=f3e21] [cursor=pointer]
+      - button "Phantom（消音/衰减）" [ref=f3e22] [cursor=pointer]
+      - button "Sheriff（重左轮）" [ref=f3e23] [cursor=pointer]
+    - generic [ref=f3e25]:
+      - button "Classic（手枪/右键三连发）" [ref=f3e26] [cursor=pointer]
+      - button "Ghost（消音手枪）" [ref=f3e27] [cursor=pointer]
+    - heading "参数" [level=2] [ref=f3e28]
+    - generic [ref=f3e29]:
+      - generic [ref=f3e30]:
+        - generic [ref=f3e31]: 灵敏度（游戏同换算）
+        - slider [ref=f3e32] [cursor=pointer]: "0.4"
+        - generic [ref=f3e33]: "0.40"
+      - generic [ref=f3e34]:
+        - generic [ref=f3e35]: 回合时长
+        - slider [ref=f3e36] [cursor=pointer]: "60"
+        - generic [ref=f3e37]: 60s
+      - generic [ref=f3e38]:
+        - generic [ref=f3e39]: Bot 出现最小延迟
+        - slider [ref=f3e40] [cursor=pointer]: "600"
+        - generic [ref=f3e41]: 600ms
+      - generic [ref=f3e42]:
+        - generic [ref=f3e43]: Bot 出现最大延迟
+        - slider [ref=f3e44] [cursor=pointer]: "2600"
+        - generic [ref=f3e45]: 2600ms
+      - generic [ref=f3e46]:
+        - generic [ref=f3e47]: Bot 横移速度
+        - slider [ref=f3e48] [cursor=pointer]: "1"
+        - generic [ref=f3e49]: 100%
+      - generic [ref=f3e50]:
+        - generic [ref=f3e51]: Bot 反杀时间
+        - slider [ref=f3e52] [cursor=pointer]: "450"
+        - generic [ref=f3e53]: 450ms
+      - generic [ref=f3e54]:
+        - generic [ref=f3e55]: 音量
+        - slider [ref=f3e56] [cursor=pointer]: "0.7"
+        - generic [ref=f3e57]: 70%
+    - heading "画质" [level=2] [ref=f3e58]
+    - generic [ref=f3e60]:
+      - generic [ref=f3e61]: 分辨率缩放
+      - slider [ref=f3e62] [cursor=pointer]: "1"
+      - generic [ref=f3e63]: 100%
+    - generic [ref=f3e64]:
+      - button "阴影" [ref=f3e65] [cursor=pointer]
+      - button "FPS 面板" [ref=f3e66] [cursor=pointer]
+    - heading "准星" [level=2] [ref=f3e67]
+    - generic [ref=f3e68]:
+      - generic [ref=f3e69]:
+        - generic [ref=f3e70]: 线长
+        - slider [ref=f3e71] [cursor=pointer]: "5"
+        - generic [ref=f3e72]: "5"
+      - generic [ref=f3e73]:
+        - generic [ref=f3e74]: 线粗
+        - slider [ref=f3e75] [cursor=pointer]: "2"
+        - generic [ref=f3e76]: "2"
+      - generic [ref=f3e77]:
+        - generic [ref=f3e78]: 间距
+        - slider [ref=f3e79] [cursor=pointer]: "3"
+        - generic [ref=f3e80]: "3"
+    - generic [ref=f3e81]:
+      - button [ref=f3e82] [cursor=pointer]
+      - button [ref=f3e84] [cursor=pointer]
+      - button [ref=f3e86] [cursor=pointer]
+      - button [ref=f3e88] [cursor=pointer]
+      - button [ref=f3e90] [cursor=pointer]
+      - button [ref=f3e92] [cursor=pointer]
+    - generic [ref=f3e95]:
+      - button "中心点" [ref=f3e96] [cursor=pointer]
+      - button "T 形（去上线）" [ref=f3e97] [cursor=pointer]
+      - button "描边" [ref=f3e98] [cursor=pointer]
+    - generic [ref=f3e99]:
+      - button "开始训练" [ref=f3e100] [cursor=pointer]
+      - generic [ref=f3e101]: 点击后锁定鼠标 · ESC 暂停
+    - generic [ref=f3e102]:
+      - text: 操作：
+      - generic [ref=f3e103]: W A S D
+      - text: 移动（全速 5.4m/s）·
+      - generic [ref=f3e104]: Shift
+      - text: 静步（50%，无声）·
+      - generic [ref=f3e105]: Ctrl/C
+      - text: 蹲 ·
+      - generic [ref=f3e106]: Space
+      - text: 跳 ·
+      - generic [ref=f3e107]: R
+      - text: 换弹 ·
+      - generic [ref=f3e108]: "1"
+      - text: 主武器 ·
+      - generic [ref=f3e109]: "2"
+      - text: 副武器 ·
+      - generic [ref=f3e110]: "3"
+      - text: 刀（6.75m/s）·
+      - generic [ref=f3e111]: 左键
+      - text: 开火 ·
+      - generic [ref=f3e112]: 右键
+      - text: Classic 三连发 架枪对枪：目标从巷道缺口随机拉出，若在"反杀时间"内未击杀则判负 —— 比的就是你先开枪的能力。

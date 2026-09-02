@@ -1,6 +1,32 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js'
 import { applyAgentTextures, applyViewmodelTextures, applyHandsTextures } from '../world/ModelTexturing.js'
+
+// 手指修长化：J-Toastie 手为卡通比例（指节粗短）。该骨架指骨沿本地 +Y 延伸，
+// 平移 y 分量拉伸 12% 改善长宽比；Wrist/Hand 不动（手掌宽度不变）。
+// setGloveHands 以实测腕→中指尖长度定总长 → 总长恒定，仅手指比例变修长。
+function elongateFingers(root, k = 1.12) {
+  root.traverse(o => {
+    if (o.isBone && /^(Lower|Middle|Top)/.test(o.name)) o.position.y *= k
+  })
+}
+
+// 手部蒙皮网格平滑：源模型常为非索引几何（逐三角面独立顶点/法线 → 渲染呈棱面
+// "晶体感"，机械感的主要来源）。先删法线再按位置焊接顶点（蒙皮 JOINTS/WEIGHTS
+// 与 UV 作为合并键一同对齐，不影响绑定），最后重算平滑法线 → 同面数下观感
+// 从低模棱面变为雕塑曲面。UV 缝处顶点因 UV 不同不合并，留有极细微法线接缝。
+function smoothSkinGeometry(root) {
+  root.traverse(o => {
+    if (!o.isSkinnedMesh) return
+    const geo = o.geometry
+    if (!geo.index) {
+      geo.deleteAttribute('normal')
+      o.geometry = mergeVertices(geo, 1e-4)
+      o.geometry.computeVertexNormals()
+    }
+  })
+}
 
 // 用户/开源模型加载：
 //   public/models/agent.glb      → 训练机器人外观（当前内置：Mixamo "X Bot"，CC-BY，
@@ -92,6 +118,8 @@ export async function loadUserAssets() {
   // 高精度手套：同样原样返回（WeaponSystem.setGloveHands 双实例化 + 五指 IK）
   if (gloveGltf?.scene) {
     applyHandsTextures(gloveGltf.scene)
+    smoothSkinGeometry(gloveGltf.scene)
+    elongateFingers(gloveGltf.scene, 1.12)
     out.glove = gloveGltf.scene
   }
   return out

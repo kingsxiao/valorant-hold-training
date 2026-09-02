@@ -112,7 +112,8 @@ export async function loadUserAssets() {
   }
   // 手臂：原始场景原样返回，对位/缩放在 WeaponSystem.setCustomHands 里按骨骼位置计算
   if (handsGltf?.scene) {
-    applyHandsTextures(handsGltf.scene) // 袖/肤/手套 → 布料/皮肤/聚合物贴图
+    applyHandsTextures(handsGltf.scene) // 袖/肤/手套 → 布料/皮肤贴图
+    smoothSkinGeometry(handsGltf.scene) // 非索引蒙皮网格 → 焊接+平滑法线（消棱面）
     out.hands = handsGltf.scene
   }
   // 高精度手套：同样原样返回（WeaponSystem.setGloveHands 双实例化 + 五指 IK）

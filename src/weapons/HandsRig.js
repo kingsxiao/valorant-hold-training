@@ -9,6 +9,98 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js'
 // sys = WeaponSystem 实例（字段定义与调用时序见各函数注释）。
 // ============================================================================
 
+// ---- 两骨 IK 手臂落位（glove 路径的建模手臂）----
+// arms = hands.glb 场景（Shirt 袖 + Skin 皮肤小臂，Glove 手网格隐藏），
+// tR/tL = 目标腕点（相机系世界坐标，通常为手套实例的腕骨）。
+// 与 poseCustomHands 同一套数学：解剖学定尺（腕→食指尖恒 8.2cm，与手套同标定，
+// 保证袖口与手套腕口粗细衔接）+ 肩位自由放置（肘方向 × 0.86 全链长，留弯曲量）
+// + 两骨 IK（极向量约束肘部下弯出画）+ 战术腕带盖衔接缝。返回挂载的根节点。
+function placeArmsIK(sys, group, arms, tR, tL) {
+  const root = cloneSkinned(arms)
+  root.traverse(o => {
+    if (o.isMesh) {
+      o.frustumCulled = false
+      if (/glove/i.test(o.material?.name || '')) o.visible = false // 只留袖/皮肤小臂
+    }
+  })
+  // 绑定长度必须在挂载前量（挂载后 wp 读数被 holder 缩放污染）
+  root.quaternion.identity()
+  root.position.set(0, 0, 0)
+  root.scale.setScalar(1)
+  root.updateMatrixWorld(true)
+  const bonesA = {}
+  root.traverse(o => { if (o.isBone) bonesA[o.name] = o })
+  // GLTFLoader 清洗后名：UpperArm.R.001 → UpperArmR001、UpperArm.L → UpperArmL
+  const armR = { up: bonesA.UpperArmR001, low: bonesA.LowerArmR001, hand: bonesA.HandR001 }
+  const armL = { up: bonesA.UpperArmL, low: bonesA.LowerArmL, hand: bonesA.HandL }
+  if ([armR.up, armR.low, armR.hand, armL.up, armL.low, armL.hand, bonesA.IndexTipR001].some(b => !b)) {
+    console.warn('[VHT] hands.glb 臂骨不全，建模手臂未接入')
+    return null
+  }
+  const wp = (o) => { sys.vmScene.updateMatrixWorld(true); return o.getWorldPosition(new THREE.Vector3()) }
+  const worldRotate = (bone, q) => {
+    sys.vmScene.updateMatrixWorld(true)
+    const pq = bone.parent.getWorldQuaternion(new THREE.Quaternion())
+    bone.quaternion.premultiply(pq.clone().invert().multiply(q).multiply(pq))
+    sys.vmScene.updateMatrixWorld(true)
+  }
+  const pB = (o) => o.getWorldPosition(new THREE.Vector3())
+  const segR = { u: pB(armR.low).distanceTo(pB(armR.up)), f: pB(armR.hand).distanceTo(pB(armR.low)) }
+  const segL = { u: pB(armL.low).distanceTo(pB(armL.up)), f: pB(armL.hand).distanceTo(pB(armL.low)) }
+  const armHandLen = pB(bonesA.IndexTipR001).distanceTo(pB(armR.hand))
+  const holderScale = sys.vmHolder.scale.x
+  const rootScale = 0.082 / armHandLen / holderScale
+  root.scale.setScalar(rootScale)
+  group.add(root)
+  sys.vmScene.updateMatrixWorld(true)
+  const elbowDirR = new THREE.Vector3(0.5, -0.78, 0.38).normalize() // 肘压低偏右 → 肘部出画
+  const chainR = (segR.u + segR.f) * rootScale * holderScale
+  const sR = tR.clone().addScaledVector(elbowDirR, chainR * 0.86)
+  const pivot = wp(armR.up) // = hPos=0 时的右肩位
+  const rsInv = sys.vmHolder.matrixWorld.clone()
+  rsInv.setPosition(0, 0, 0) // 只消旋转+缩放；平移已包含在 pivot 中
+  rsInv.invert()
+  root.position.copy(sR.clone().sub(pivot).applyMatrix4(rsInv))
+  sys.vmScene.updateMatrixWorld(true)
+  const ik2 = (arm, seg, T, pole) => {
+    const u = seg.u * rootScale * holderScale, f = seg.f * rootScale * holderScale
+    const S = wp(arm.up)
+    const D = THREE.MathUtils.clamp(S.distanceTo(T), Math.abs(u - f) + 1e-4, u + f - 1e-4)
+    const a = (D * D + u * u - f * f) / (2 * D)
+    const h = Math.sqrt(Math.max(u * u - a * a, 0))
+    const dir = T.clone().sub(S).normalize()
+    const perp = pole.clone().addScaledVector(dir, -pole.dot(dir))
+    if (perp.lengthSq() < 1e-8) perp.set(-dir.y, dir.x, 0) // 极向量与臂轴共线时取正交fallback
+    perp.normalize()
+    const E = S.clone().addScaledVector(dir, a).addScaledVector(perp, h)
+    worldRotate(arm.up, new THREE.Quaternion().setFromUnitVectors(
+      wp(arm.low).sub(S).normalize(), E.clone().sub(S).normalize()))
+    worldRotate(arm.low, new THREE.Quaternion().setFromUnitVectors(
+      wp(arm.hand).sub(wp(arm.low)).normalize(), T.clone().sub(wp(arm.low)).normalize()))
+  }
+  // 右肘弯向右下（肘压低出画），左肘弯向左下（前臂自下而上托向护木）
+  ik2(armR, segR, tR, elbowDirR)
+  ik2(armL, segL, tL, new THREE.Vector3(-0.3, -0.95, -0.05).normalize())
+  // ---- 腕带：战术护腕环，盖住手套腕口与建模手臂的衔接（兼遮粗细差）----
+  const bandGeos = []
+  const _m4 = new THREE.Matrix4(), _q2 = new THREE.Quaternion(), _s2 = new THREE.Vector3(1, 1, 1)
+  const bandFor = (handBone, lowerBone) => {
+    const hw = wp(handBone)
+    const dir = hw.clone().sub(wp(lowerBone)).normalize() // 腕→小臂方向 = 前臂轴
+    const center = hw.clone().addScaledVector(dir, 0.012) // 骑在手套腕口与袖口衔接缝上
+    const ring = new THREE.TorusGeometry(0.015, 0.006, 10, 20)
+    _q2.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir)
+    _m4.compose(center, _q2, _s2)
+    ring.applyMatrix4(_m4).applyMatrix4(sys.vmHolder.matrixWorld.clone().invert())
+    bandGeos.push(ring)
+  }
+  bandFor(armR.hand, armR.low)
+  bandFor(armL.hand, armL.low)
+  group.add(new THREE.Mesh(mergeGeometries(bandGeos, false), sys.armMats.sleeve))
+  return root
+}
+
+
 // ---- 高精度手套双手（public/models/glove.glb：单手 + Wrist/五指三关节骨骼）----
 // 实例化两份（SkeletonUtils.clone）→ 各自根节点落位（腕骨精确到握点 + 掌姿态
 // 对齐握持面）→ 五指逐节本地卷曲成握持状；袖管用程序化圆柱（布料贴图）自腕部
@@ -117,28 +209,29 @@ export function poseGloveHands(sys, scene, arms) {
     return { root, wristBone: wristLocal }
   }
 
-  // ---- 右手（镜像）：握把。掌压握把右面，四指浅绕前缘（握把正前方是弹匣，
-  // 深绕必穿弹匣仓），食指沿扳机护圈，拇指搭后脊 ----
+  // ---- 右手（镜像）：握把。掌压握把右面，四指阶梯卷曲绕握把前缘（中指→小指
+  // 递增卷曲）、食指弯入扳机护圈扣扳机、拇指高位前伸贴机匣左侧（high-thumb）。
+  // 腕锚为枪模本地系；fDes/sDes/curls 为 2026-09-03 页面内坐标下降优化收敛值
+  // （十指指尖到各自握点误差：拇指 2.5cm、其余 ≤0.8cm）----
   const handR = poseHand({
     mirror: true,
-    wrist: vmP(0.065, -0.045, -0.01),
-    fDes: new THREE.Vector3(-0.42, -0.36, -0.83),
-    sDes: new THREE.Vector3(-0.38, 0.42, -0.82),
+    wrist: vmP(0.03, -0.045, 0.01),
+    fDes: new THREE.Vector3(-0.66, -0.36, -0.95),
+    sDes: new THREE.Vector3(-0.38, 0.81, -0.61),
     curls: {
-      pinky: [8, 42, 34, 20],
-      ring: [7, 40, 34, 22],
-      middle: [6, 38, 34, 24],
-      index: [0, 18, 24, 14],
-      thumb: [0, 14, 10, 5],
+      pinky: [12, 71, 68, 20],
+      ring: [17, 74, 68, 22],
+      middle: [22, 72, 73, 24],
+      index: [23, 34, 40, 14],
+      thumb: [5, 19, 10, 5],
     },
   })
-  // ---- 左手（原生左手）：护木前段（弹匣前方，避开弹匣再谈卷握——腕在弹匣
-  // 正下方时四指绕深了穿右侧、拇指上抬穿弹匣）。掌托底面，四指浅贴右侧面，
-  // 拇指沿左侧朝外前伸 ----
+  // ---- 左手（原生左手）：护木。掌从左下兜住护木底面，四指绕前右侧贴护木、
+  // 拇指沿左侧前伸对握（C 型托握）。同上为优化收敛值 ----
   const handL = poseHand({
-    wrist: vmP(-0.035, -0.225, -0.55),
-    fDes: new THREE.Vector3(0.55, 0.5, -0.6),
-    sDes: new THREE.Vector3(-0.4, 0.15, -0.9),
+    wrist: vmP(-0.505, -0.265, 0.12),
+    fDes: new THREE.Vector3(0.69, 0.67, -0.64),
+    sDes: new THREE.Vector3(-0.71, 0.63, -0.25),
     curls: {
       pinky: [4, 22, 18, 12],
       ring: [4, 23, 19, 13],
@@ -149,91 +242,9 @@ export function poseGloveHands(sys, scene, arms) {
   })
 
   // ---- 真人手臂（hands.glb 建模袖臂：Shirt 袖 + Skin 皮肤小臂；Glove 手网格
-  // 隐藏 —— 手由上面的高细节手套提供）。落位沿用 poseCustomHands 的数学：
-  // 根缩放扫描使双肩链长同时够到双腕目标（手套腕骨），再整链瞄准各自腕点。
-  if (arms) {
-    const root = cloneSkinned(arms)
-    root.traverse(o => {
-      if (o.isMesh) {
-        o.frustumCulled = false
-        if (/glove/i.test(o.material?.name || '')) o.visible = false // 只留袖/皮肤小臂
-      }
-    })
-    // 绑定长度必须在挂载前量（挂载后 wp 读数被 holder 0.43 缩放污染 → placeRoot
-    // 双重除 holderScale，手臂放大 2.3 倍、腕骨甩到画面中央——2026-09-02 实测翻车）
-    root.quaternion.identity()
-    root.position.set(0, 0, 0)
-    root.scale.setScalar(1)
-    root.updateMatrixWorld(true)
-    const bonesA = {}
-    root.traverse(o => { if (o.isBone) bonesA[o.name] = o })
-    // GLTFLoader 清洗后名：UpperArm.R.001 → UpperArmR001、UpperArm.L → UpperArmL
-    const armR = { up: bonesA.UpperArmR001, hand: bonesA.HandR001 }
-    const armL = { up: bonesA.UpperArmL, hand: bonesA.HandL }
-    const restLen = armR.up && armR.hand
-      ? armR.hand.getWorldPosition(new THREE.Vector3()).distanceTo(armR.up.getWorldPosition(new THREE.Vector3()))
-      : 0
-    group.add(root)
-    sys.vmScene.updateMatrixWorld(true)
-    if (armR.up && armR.hand && armL.up && armL.hand) {
-      const tR = wp(handR.wristBone), tL = wp(handL.wristBone)
-      const elbowDirR = new THREE.Vector3(0.7, -0.85, 0).normalize() // 枚举最优：双肩链长同时精确够到双腕（err<1mm）
-      const rsInv = sys.vmHolder.matrixWorld.clone()
-      rsInv.setPosition(0, 0, 0)
-      rsInv.invert()
-      const placeRoot = (len) => {
-        root.scale.setScalar(len / restLen / holderScale)
-        root.position.set(0, 0, 0)
-        sys.vmScene.updateMatrixWorld(true)
-        const pivot = wp(armR.up) // = hPos=0 时的右肩位
-        root.position.copy(tR.clone().addScaledVector(elbowDirR, len).sub(pivot).applyMatrix4(rsInv))
-        sys.vmScene.updateMatrixWorld(true)
-      }
-      const t0 = 0.36
-      placeRoot(t0)
-      const dShoulder = wp(armL.up).clone().sub(wp(armR.up)) // 相机系双肩间距（含 holder 旋转）
-      let armLen = t0, best = Infinity
-      for (let t = 0.22; t <= 0.55; t += 0.005) {
-        placeRoot(t)
-        const sR = tR.clone().addScaledVector(elbowDirR, t)
-        const sL = sR.clone().add(dShoulder.clone().multiplyScalar(t / t0))
-        const err = Math.abs(t - sL.distanceTo(tL))
-        if (err < best) { best = err; armLen = t }
-      }
-      placeRoot(armLen)
-      const worldRot = (bone, q) => {
-        sys.vmScene.updateMatrixWorld(true)
-        const pq = bone.parent.getWorldQuaternion(new THREE.Quaternion())
-        bone.quaternion.premultiply(pq.clone().invert().multiply(q).multiply(pq))
-        sys.vmScene.updateMatrixWorld(true)
-      }
-      const aimArm = (arm, target) => {
-        const s = wp(arm.up)
-        const dRest = wp(arm.hand).sub(s).normalize()
-        worldRot(arm.up, new THREE.Quaternion().setFromUnitVectors(dRest, target.clone().sub(s).normalize()))
-      }
-      aimArm(armR, tR)
-      aimArm(armL, tL)
-      // ---- 腕带：战术护腕环，盖住手套腕口与建模手臂的衔接（兼遮粗细差）----
-      const bandGeos = []
-      const _m4 = new THREE.Matrix4(), _q2 = new THREE.Quaternion(), _s2 = new THREE.Vector3(1, 1, 1)
-      const bandFor = (handBone, lowerBone) => {
-        const hw = wp(handBone)
-        const dir = hw.clone().sub(wp(lowerBone)).normalize() // 腕→小臂方向 = 前臂轴
-        const center = hw.clone().addScaledVector(dir, 0.012) // 骑在手套腕口与袖口衔接缝上
-        const ring = new THREE.TorusGeometry(0.015, 0.006, 10, 20)
-        _q2.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir)
-        _m4.compose(center, _q2, _s2)
-        ring.applyMatrix4(_m4).applyMatrix4(sys.vmHolder.matrixWorld.clone().invert())
-        bandGeos.push(ring)
-      }
-      bandFor(armR.hand, bonesA.LowerArmR001)
-      bandFor(armL.hand, bonesA.LowerArmL)
-      group.add(new THREE.Mesh(mergeGeometries(bandGeos, false), sys.armMats.sleeve))
-    } else {
-      console.warn('[VHT] hands.glb 臂骨不全，建模手臂未接入')
-    }
-  }
+  // 隐藏 —— 手由上面的高细节五指手套提供）。落位 = placeArmsIK：解剖学定尺 +
+  // 肩位自由放置 + 两骨 IK 精确够到双腕（手套腕骨），弯向同 2026-09-03 方案 ----
+  if (arms) placeArmsIK(sys, group, arms, wp(handR.wristBone), wp(handL.wristBone))
 
   sys.weaponMeshFor(sys.currentVmId)
   return true
@@ -255,8 +266,8 @@ export function poseCustomHands(sys, hands) {
   const byName = {}
   hands.traverse(o => { if (o.name) byName[o.name] = o })
   const pick = (re) => byName[Object.keys(byName).find(k => re.test(k))]
-  const armR = { up: pick(/^UpperArmR/), hand: pick(/^HandR/) }
-  const armL = { up: pick(/^UpperArmL$/), hand: pick(/^HandL$/) }
+  const armR = { up: pick(/^UpperArmR/), low: pick(/^LowerArmR/), hand: pick(/^HandR/) }
+  const armL = { up: pick(/^UpperArmL$/), low: pick(/^LowerArmL$/), hand: pick(/^HandL$/) }
   const chain = (a, b, c) => [pick(a), pick(b), pick(c)]
   const F = {
     R: { // 点号已被 GLTFLoader 清理：Hand.R.001 → HandR001
@@ -272,7 +283,7 @@ export function poseCustomHands(sys, hands) {
   }
   // 骨架防御：用户换用其它骨架的 hands.glb 时骨骼名对不上，后续 IK 取世界矩阵会抛
   // TypeError → 跳过贴合，回退内置程序化手臂
-  const needed = [armR.up, armR.hand, armL.up, armL.hand,
+  const needed = [armR.up, armR.low, armR.hand, armL.up, armL.low, armL.hand,
     ...F.R.dbl, ...F.R.idx, ...F.R.thb, ...F.L.dbl, ...F.L.idx, ...F.L.thb]
   if (needed.some(b => !b)) {
     console.warn('[VHT] hands.glb 骨架不符合预期（缺少 UpperArm/Hand/指骨），已回退内置手臂')
@@ -310,26 +321,24 @@ export function poseCustomHands(sys, hands) {
     const qTar = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(fDes.clone().normalize(), tDes, pDes.clone().normalize()))
     worldRotate(arm.hand, qTar.multiply(qCur.invert()))
   }
-  const aimArm = (arm, anchor) => {
-    const s = wp(arm.up)
-    const dRest = wp(arm.hand).sub(s).normalize()
-    worldRotate(arm.up, new THREE.Quaternion().setFromUnitVectors(dRest, anchor.clone().sub(s).normalize()))
-  }
 
   // ---- 姿态（vmScene 世界系 == 相机本地系；vmCamera 固定原点无旋转）----
   // 握点/指尖瞄准点全部用"枪模模型系"坐标经 vmP() 精确换算（含缩放/旋转/平移）。
-  // 本枪模（Quaternius AK47，归一化前）实测几何轮廓（原始系，X=枪管轴、枪口 -1.1、Y 上）：
-  //   枪管 -1.1..-0.7 / 前段护木+弹匣 -0.6..-0.4（弹匣下探至 y=-0.32）/
-  //   机匣 -0.3..0.0（底面 y≈0）/ 握把凹口 x -0.1..0.0（下探至 y=-0.1）/ 枪托 0.1..0.3
-  // vmP 坐标系 = 旋转后本地系（-Z 朝枪口）：c_z=原始x，c_y=原始y，c_x=-原始z
-  // ---- 姿态 ----
+  // 本枪模（Quaternius AK47，归一化前）实测几何轮廓（2026-09-03 顶点切片复测，X=枪管轴）：
+  //   枪管 -1.05..-0.7（轴心 y≈0.25）/ 护木 -0.6..-0.45（底面 y≈-0.24）/ 弹匣 -0.45..-0.3
+  //   （下探 y=-0.32）/ 机匣 -0.3..-0.1（底面 y≈0）/ 握把 -0.1..0.1（下探 y=-0.1）/ 枪托 0.1..0.41
+  // vmP 坐标系 = 枪模本地系：(x=枪管轴向, y=垂直, z=横向)。customVm 自带 -90°Y 旋转，
+  // 本地 -X（枪口方向）映到相机 -Z、本地 -Z 映到相机 +X（右侧）——横向偏移取负即在相机右侧。
   // 挂载前先量绑定几何（挂载后距离读数会被 holder 缩放污染）：
-  // restLen = 绑定姿态肩→腕距离（孤立根、scale=1）
+  // u/f = 上臂/小臂绑定长度，handLen = 腕→食指尖（解剖学定尺用）
   hands.quaternion.identity()
   hands.position.set(0, 0, 0)
   hands.scale.setScalar(1)
   hands.updateMatrixWorld(true)
-  const restLen = armR.hand.getWorldPosition(new THREE.Vector3()).distanceTo(armR.up.getWorldPosition(new THREE.Vector3()))
+  const pB = (o) => o.getWorldPosition(new THREE.Vector3())
+  const segR = { u: pB(armR.low).distanceTo(pB(armR.up)), f: pB(armR.hand).distanceTo(pB(armR.low)) }
+  const segL = { u: pB(armL.low).distanceTo(pB(armL.up)), f: pB(armL.hand).distanceTo(pB(armL.low)) }
+  const handLen = pB(F.R.idx[2]).distanceTo(pB(armR.hand))
   // 挂进 holder 后做姿态：wp/worldRotate 一律从 vmScene 根级联刷新矩阵，
   // 所有量（锚点、骨骼位置、旋转）始终同帧，免疫挂载时序问题
   if (sys.customHands && sys.customHands !== hands) sys.vmHolder.remove(sys.customHands)
@@ -339,53 +348,63 @@ export function poseCustomHands(sys, hands) {
   sys.vmScene.updateMatrixWorld(true)
   // 握点/指尖瞄准点全部用"枪模模型系"坐标经 vmP() 精确换算（含缩放/旋转/平移）。
   const vmP = (x, y, z) => sys.customVm.localToWorld(new THREE.Vector3(x, y, z))
-  // 腕锚点：右手贴握把右侧（掌压握把右面）、左手托护木前段左下（弹匣前、前置握法）
-  const wristR = vmP(0.045, -0.055, -0.02)
-  const wristL = vmP(-0.05, -0.235, -0.62)
-  // 根落位：目标 shoulder = pivot + RS·t（pivot = hPos=0 时的肩位，RS = holder 旋转+缩放，
-  // 平移已含在 pivot 里不能消）→ t = (RS)⁻¹·(S_target − pivot)，数学上精确（本地旋转恒为单位）
+  // 腕锚点（枪模本地系）：右手在握把右后下方（掌压握把右面）、左手在弹匣交界
+  // 后下方（掌托护木底、指朝前上绕护木前缘 → C 型托握）；横向 z 取负 = 相机右侧
+  const wristR = vmP(-0.02, -0.055, -0.045)
+  const wristL = vmP(-0.42, -0.27, 0.03)
+  // 解剖学定尺：腕→指尖恒 8.2cm（与 setGloveHands 同一标定），根缩放与臂长解耦——
+  // 旧方案"扫描臂长使双肩恰好够到双腕"把手的尺寸绑死在肩腕距离上，左腕移近后
+  // 整条手臂+手缩到 60%（戴手套的玩偶手）。肩位在画外可自由放置，够距交给两骨 IK。
   const holderScale = sys.vmHolder.scale.x
-  const placeRoot = (armLen, S_target) => {
-    hands.quaternion.identity()
-    hands.scale.setScalar(armLen / restLen / holderScale)
-    hands.position.set(0, 0, 0)
-    const pivot = wp(armR.up) // = holderW·(s·bindUp)（hPos=0 时）
-    const rsInv = sys.vmHolder.matrixWorld.clone()
-    rsInv.setPosition(0, 0, 0) // 只消旋转+缩放；平移已包含在 pivot 中
-    rsInv.invert()
-    hands.position.copy(S_target.clone().sub(pivot).applyMatrix4(rsInv))
-    sys.vmScene.updateMatrixWorld(true)
+  const rootScale = 0.082 / handLen / holderScale
+  hands.quaternion.identity()
+  hands.scale.setScalar(rootScale)
+  hands.position.set(0, 0, 0)
+  // 肩位放置：右肩 = 右腕锚 + 肘方向 × 弯曲度×全链长（0.86 留 14% 弯曲量给 IK），
+  // 根平移 t = (RS)⁻¹·(S_target − pivot)（pivot = hPos=0 时的右肩位，RS 只逆旋转+缩放）
+  const elbowDirR = new THREE.Vector3(0.5, -0.78, 0.38).normalize() // 肘压低偏右 → 肘部出画
+  const chainR = (segR.u + segR.f) * rootScale * holderScale
+  const sR = wristR.clone().addScaledVector(elbowDirR, chainR * 0.86)
+  const pivot = wp(armR.up)
+  const rsInv = sys.vmHolder.matrixWorld.clone()
+  rsInv.setPosition(0, 0, 0) // 只消旋转+缩放；平移已包含在 pivot 中
+  rsInv.invert()
+  hands.position.copy(sR.clone().sub(pivot).applyMatrix4(rsInv))
+  sys.vmScene.updateMatrixWorld(true)
+  // 两骨 IK（肩-肘-腕）：极向量约束肘部弯向；肘位 = 肩 + dir·a + perp·h（余弦定理），
+  // 先整链瞄肘位、再小臂骨旋转把腕精确落到目标。腕不可达时夹紧 D（腕落短在线上）
+  const ik2 = (arm, seg, T, pole) => {
+    const u = seg.u * rootScale * holderScale, f = seg.f * rootScale * holderScale
+    const S = wp(arm.up)
+    const D = THREE.MathUtils.clamp(S.distanceTo(T), Math.abs(u - f) + 1e-4, u + f - 1e-4)
+    const a = (D * D + u * u - f * f) / (2 * D)
+    const h = Math.sqrt(Math.max(u * u - a * a, 0))
+    const dir = T.clone().sub(S).normalize()
+    const perp = pole.clone().addScaledVector(dir, -pole.dot(dir))
+    if (perp.lengthSq() < 1e-8) perp.set(-dir.y, dir.x, 0) // 极向量与臂轴共线时取正交fallback
+    perp.normalize()
+    const E = S.clone().addScaledVector(dir, a).addScaledVector(perp, h)
+    worldRotate(arm.up, new THREE.Quaternion().setFromUnitVectors(
+      wp(arm.low).sub(S).normalize(), E.clone().sub(S).normalize()))
+    worldRotate(arm.low, new THREE.Quaternion().setFromUnitVectors(
+      wp(arm.hand).sub(wp(arm.low)).normalize(), T.clone().sub(wp(arm.low)).normalize()))
   }
-  const elbowDirR = new THREE.Vector3(0.5, -0.78, 0.38).normalize() // 肘压低偏右 → 肘部出画且拉开与左腕距离
-  const t0 = 0.36
-  placeRoot(t0, wristR.clone().addScaledVector(elbowDirR, t0))
-  // 臂长自动标定：直链 IK 腕到肩距离恒等于臂长 → 扫描臂长使"左肩到左腕锚"也恰好等于臂长
-  // （双臂共用根节点，臂长取两臂可达性的平衡点 → 双手都精确落在握点上）
-  const dShoulder = wp(armL.up).clone().sub(wp(armR.up)) // 相机系双肩间距（含 holder 旋转）
-  let armLen = t0, best = Infinity
-  for (let t = 0.28; t <= 0.48; t += 0.005) {
-    const sR = wristR.clone().addScaledVector(elbowDirR, t)
-    const sL = sR.clone().add(dShoulder.clone().multiplyScalar(t / t0))
-    const err = Math.abs(t - sL.distanceTo(wristL))
-    if (err < best) { best = err; armLen = t }
-  }
-  placeRoot(armLen, wristR.clone().addScaledVector(elbowDirR, armLen))
-
-  // 双臂瞄准：右腕→握把、左腕→护木（方向瞄准；距离已由臂长标定保证）
-  aimArm(armR, wristR)
-  aimArm(armL, wristL)
-  // 掌心朝向：右手压握把右侧面（掌朝 -X），左手托护木底面（掌朝上偏右）
+  // 右肘弯向右下（肘压低出画），左肘弯向左下（前臂自下而上托向护木）
+  ik2(armR, segR, wristR, elbowDirR)
+  ik2(armL, segL, wristL, new THREE.Vector3(-0.3, -0.95, -0.05).normalize())
+  // 掌心朝向：右手压握把右侧面（掌朝 -X）；左手掌朝上（fDes 前上 55°、
+  // 卷曲把四指收在护木前下缘、拇指贴左侧面成对握 → 27 组网格搜索实测最优）
   const V = (x, y, z) => new THREE.Vector3(x, y, z).normalize()
   orientHand(armR, F.R, V(-0.6, -0.4, -0.68), V(-0.95, -0.2, -0.25))
-  orientHand(armL, F.L, V(0.35, 0.55, -0.75), V(0.3, 0.9, 0.2))
-  // 指尖瞄准点（枪模模型系）：R 四指绕握把前缘 / 食指沿扳机护圈 / 拇指压握把后脊；
-  // L 四指卷握护木右侧面 / 拇指沿护木左侧前伸
-  aimFinger(F.R.dbl, armR.hand, vmP(0.055, -0.075, -0.16), [28, 46, 40])
-  aimFinger(F.R.idx, armR.hand, vmP(0.03, -0.045, -0.17), [8, 14, 12])
-  aimFinger(F.R.thb, armR.hand, vmP(0.05, 0.0, 0.03), [8, 12, 0])
-  aimFinger(F.L.dbl, armL.hand, vmP(0.07, -0.115, -0.6), [24, 44, 40])
-  aimFinger(F.L.idx, armL.hand, vmP(0.075, -0.075, -0.63), [20, 38, 34])
-  aimFinger(F.L.thb, armL.hand, vmP(-0.065, -0.095, -0.66), [6, 6, 0])
+  orientHand(armL, F.L, V(0.22, 0.55, -0.8), V(0.2, 0.95, 0.15))
+  // 指尖瞄准点（枪模本地系）：R 四指绕握把前缘 / 食指沿扳机护圈 / 拇指压握把后脊；
+  // L 四指卷向护木右前侧面 / 拇指沿护木左侧上提对握
+  aimFinger(F.R.dbl, armR.hand, vmP(-0.16, -0.075, -0.055), [28, 46, 40])
+  aimFinger(F.R.idx, armR.hand, vmP(-0.17, -0.045, -0.03), [8, 14, 12])
+  aimFinger(F.R.thb, armR.hand, vmP(0.03, 0, -0.05), [8, 12, 0])
+  aimFinger(F.L.dbl, armL.hand, vmP(-0.53, -0.08, -0.08), [30, 50, 44])
+  aimFinger(F.L.idx, armL.hand, vmP(-0.55, -0.05, -0.085), [26, 43, 37])
+  aimFinger(F.L.thb, armL.hand, vmP(-0.57, -0.02, 0.085), [10, 10, 4])
 
   hands.traverse(o => { if (o.isMesh) o.frustumCulled = false }) // 蒙皮包围盒不随骨骼更新
   sys.weaponMeshFor(sys.currentVmId)

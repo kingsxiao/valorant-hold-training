@@ -226,11 +226,12 @@ loadUserAssets().then(({ agent, agentAnimations, viewmodel, glove, hands }) => {
   let changed = false
   if (agent) { Bot.customTemplate = agent; Bot.customAnimations = agentAnimations; changed = true }
   if (viewmodel) { weapons.setCustomViewmodel(viewmodel); changed = true }
-  // 手臂方案（2026-09-02 定稿）：hands.glb 整臂为主路径——臂/手/袖同资产同骨骼，
-  // 建模师绑定姿态即持枪姿势，天然无穿模（Krunker 系网页 FPS 的通行做法）。
-  // glove.glb 双实例方案保留为后备（细节更高但需运行时姿态拟合）。
-  if (hands && weapons.setCustomHands(hands) !== false) changed = true
-  else if (glove && weapons.setGloveHands(glove, hands) !== false) changed = true
+  // 手部方案（2026-09-03 定稿）：glove.glb 五指手套双手实例为主路径——五指独立
+  // 骨骼可逐指贴合真实握枪姿势（合并指的 hands.glb 做不到逐指）；建模袖臂仍取
+  // hands.glb（placeArmsIK 两骨 IK + 解剖学定尺精确衔接手套腕口）。
+  // hands.glb 整臂（四指合并）保留为后备（glove 缺失/骨架不符时回退）。
+  if (glove && weapons.setGloveHands(glove, hands) !== false) changed = true
+  else if (hands && weapons.setCustomHands(hands) !== false) changed = true
   if (changed) bots.resetRound() // 场上的 Bot 换新外观
 }).catch(e => console.error('[VHT] asset load failed', e))
 

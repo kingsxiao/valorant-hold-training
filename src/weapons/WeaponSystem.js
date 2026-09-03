@@ -28,7 +28,7 @@ export class WeaponSystem {
     this.primaryId = 'vandal'
     this.secondaryId = 'classic'
     this.currentId = 'vandal'
-    this.baseVmScale = 0.43 // 视角模型基础缩放（独立窄 FOV pass 下的占屏比例）
+    this.baseVmScale = 0.49 // 视角模型基础缩放（独立窄 FOV pass 下的占屏比例，2026-09-03 随取景联调）
     this.state = {}    // 每把枪独立弹匣状态
     this.lastShotAt = -10
     this.lastFireTime = -10
@@ -72,9 +72,9 @@ export class WeaponSystem {
     const holder = new THREE.Group()
     for (const vm of Object.values(this.viewmodels)) holder.add(vm)
     // 持枪取景（对齐 Valorant）：枪在右下、贴近相机、枪身内偏使枪口汇聚准星。
-    // 独立窄 FOV(55°) pass 下透视压缩小，稍拉远拉开层次；肘部/枪托出画的裁切
-    // 由该位置 + 手臂长度共同决定
-    holder.position.set(0.18, -0.14, -0.32)
+    // 独立窄 FOV(55°) pass 下透视压缩小，稍拉远拉开层次。2026-09-03 调参：
+    // 枪托尖端 NDC y≈-1.13（大部分出画只露一角）、枪口 (0.20,-0.47) 居中偏右下
+    holder.position.set(0.18, -0.2, -0.24)
     holder.scale.setScalar(this.baseVmScale)
     this.vmCamera.add(holder)
     this.vmHolder = holder

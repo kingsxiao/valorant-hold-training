@@ -3,6 +3,29 @@
    锐利切角 / 角标括号 / 红色强调 / Rajdhani 宽字距数字
    ============================================================ */
 
+/* ===== 首屏载入（程序化纹理生成期间的品牌化画面）===== */
+#splash {
+  position: fixed; inset: 0; z-index: 30;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  background:
+    repeating-linear-gradient(115deg, rgba(236, 232, 225, 0.022) 0 2px, transparent 2px 9px),
+    radial-gradient(ellipse at 50% 42%, rgba(15, 25, 35, 0.9), #0a1017 85%);
+  transition: opacity 0.35s ease;
+}
+#splash.done { opacity: 0; pointer-events: none; }
+#splash .splash-mark {
+  font-family: var(--font-num); font-size: 54px; font-weight: 700; letter-spacing: 14px; text-indent: 14px;
+  color: var(--text); text-shadow: 0 0 34px rgba(255, 70, 85, 0.35);
+}
+#splash .splash-title { font-size: 13px; letter-spacing: 6px; color: var(--accent); font-weight: 700; }
+#splash .splash-bar { width: 220px; height: 3px; background: rgba(236, 232, 225, 0.12); overflow: hidden; }
+#splash .splash-bar i {
+  display: block; height: 100%; width: 40%;
+  background: linear-gradient(90deg, transparent, var(--accent));
+  animation: splashSweep 1.1s ease-in-out infinite;
+}
+@keyframes splashSweep { 0% { transform: translateX(-110%); } 100% { transform: translateX(280%); } }
+
 :root {
   --accent: #ff4655;
   --accent-dim: rgba(255, 70, 85, 0.55);

@@ -4,15 +4,25 @@
   "version": "0.1.0",
   "type": "module",
   "description": "WebGL 第一人称架枪训练器（数值按 Valorant 公开参数调校）",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "verify": "npm run lint && npm run test && npm run build"
   },
   "dependencies": {
-    "three": "^0.171.0"
+    "three": "^0.185.1"
   },
   "devDependencies": {
-    "vite": "^6.0.0"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.1",
+    "globals": "^17.12.0",
+    "vite": "^6.4.3",
+    "vitest": "^4.1.11"
   }
 }

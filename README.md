@@ -18,9 +18,12 @@ npm install
 npm run dev      # http://127.0.0.1:5173
 npm run build    # 产物在 dist/
 npm run preview
+npm run verify   # lint + 单元测试 + 构建（CI 同款门禁）
 ```
 
-要求：桌面版 Chrome/Edge/Firefox（需要 WebGL2 + Pointer Lock）。
+要求：桌面版 Chrome/Edge/Firefox（需要 WebGL2 + Pointer Lock），Node ≥ 18。
+
+指针锁定优先请求 `unadjustedMovement`（绕过系统鼠标加速度/平滑，瞄准训练器的关键一致性），旧浏览器自动回退普通锁定。
 
 ## 操作
 
@@ -41,7 +44,9 @@ npm run preview
 **其它行为**：
 - `ESC` 暂停时使用游戏时钟——回合计时、Bot 行为与死亡复活计时全部冻结，不会因暂停丢回合时间
 - 弹匣+备弹全部打空 2.5s 后自动补满（模拟靶场随时买枪，无限时长回合不会卡死）
-- 菜单「画质」区可调：分辨率缩放（50%~200%）、阴影开关、FPS 面板显隐，设置持久化到 localStorage
+- 菜单「画质」区可调：分辨率缩放（50%~200%）、阴影开关、FPS 面板显隐，设置持久化到 localStorage（隐私模式下静默降级为仅本次会话生效）
+- 敌方枪声/脚步为 HRTF 空间音频（听者方位换算与相机矩阵严格一致，可听声辨位）
+- WebGL 上下文丢失自动暂停并提示，恢复后重建材质继续
 
 ## 训练模式
 
@@ -78,18 +83,29 @@ HUD 实时显示：击杀 / 对枪败 / 命中率 / 爆头率 / 反应时间（�
 
 ```
 src/
-  core/     Engine(渲染/固定步长循环/FPS统计) · Config(全部数值) · Input · Audio(WebAudio合成音效, HRTF听声辨位)
+  core/     Engine(渲染/双pass/固定步长循环/FPS统计/上下文恢复) · Config(全部数值) · Input(原始鼠标输入)
+            Audio(WebAudio合成音效, HRTF听声辨位) · stats(统计口径) · Rng(可复现PRNG)
   player/   Player(移动模型/碰撞/视角)
-  weapons/  WeaponSystem(射线命中/散布/后坐力/换弹/第一人称持枪模型+静态持枪手臂)
-  world/    World(AABB碰撞+射线) · MapBuilder(程序化地图, 几何合并) · FX(曳光/弹孔/枪口焰对象池)
-  entities/ Bot(命中球体/peek状态机) · BotManager(架枪对枪轮次/统计)
-  ui/       Crosshair(DOM准星) · HUD(节流更新+FPS图) · Menu(设置持久化 localStorage)
+  weapons/  WeaponSystem(状态机:开火/换弹/切枪/持枪动画) · ViewmodelFactory(程序化枪模+手臂建模)
+            HandsRig(GLB手部IK式装配) · ballistics(伤害衰减/散布, 纯函数)
+  world/    World(AABB碰撞+射线+命中球检测) · MapBuilder(程序化地图, 几何合并)
+            FX(曳光/弹孔/枪口焰对象池) · Textures(程序化PBR纹理) · ModelTexturing(GLB贴图)
+  entities/ Bot(命中球体/peek状态机/骨骼动画混合) · BotManager(架枪对枪轮次/统计)
+  ui/       Crosshair(DOM准星) · HUD(节流更新+FPS图) · Menu(设置持久化) · ResultPanel(回合结算)
+
+tests/      纯逻辑单元测试（Vitest）：碰撞/射线/弹道/伤害/散布/统计/PRNG/HRTF方位换算
 ```
+
+质量保障：
+- `npm run verify` = ESLint + Vitest（40 用例）+ 生产构建；GitHub Actions CI 对每次 push/PR 运行同款门禁
+- 纯逻辑（弹道、散布、统计、碰撞、方位换算）全部抽成无渲染依赖的函数并覆盖测试
+- 关键回归用例：HRTF 听者方位换算与 three.js 相机矩阵交叉验证（修复过一次前后颠倒）
 
 性能设计（实测 100~145 FPS @2K，dev 模式）：
 - 静态地图按材质合并，全场个位数 draw call；命中/视线为解析射线（不遍历网格）
 - 曳光/弹孔/伤害数字全对象池，主循环零内存分配（复用向量）
 - HUD 只在文本变化时写 DOM；碰撞/实体数据为扁平数组
+- 程序化纹理的 Sobel 法线转换为行索引外提的热循环实现；首屏载入页覆盖初始化期（生产构建 ~350ms 就绪）
 - 阴影默认关闭，菜单「画质」区可调分辨率缩放与阴影开关；构建时 three.js 独立成 vendor chunk（业务更新不重复下载渲染库）
 
 ## 已知边界

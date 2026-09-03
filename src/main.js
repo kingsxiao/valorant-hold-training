@@ -55,7 +55,6 @@ weapons.onShotFired = () => bots.registerShot()
 
 // 击杀反馈主链路：命中标记 / 伤害数字 / 粒子爆发 / 击杀横幅 / 击杀信息流
 // （命中/击杀音效统一在 BotManager.damage 内播放，这里不再重复触发）
-const killTimes = [] // 连杀统计：4.5s 窗口内的击杀数
 weapons.onHitBot = (bot, zone, dmg, killed, point) => {
   const head = zone === 'head'
   hud.showHitmarker(head, killed)
@@ -100,6 +99,9 @@ input.onKey = (code) => {
   if (code === 'KeyR') weapons.startReload()
 }
 
+// 连杀统计窗口（4.5s）——回合开始时清空，避免跨局串杀
+const killTimes = []
+
 // ---- 指针锁定 ⇄ 暂停 ----
 input.onLockChange = (locked) => {
   if (locked) {
@@ -116,8 +118,9 @@ menu.applyAll = () => {
   const cfg = state.cfg
   crosshair.apply(cfg.crosshair)
   audio.setVolume(cfg.volume)
-  bots.params.delayMin = cfg.delayMin
-  bots.params.delayMax = cfg.delayMax
+  // 两个滑条独立可拉交叉，交叉时按 [min,max] 归位（rand(a,b) 对 a>b 是反区间）
+  bots.params.delayMin = Math.min(cfg.delayMin, cfg.delayMax)
+  bots.params.delayMax = Math.max(cfg.delayMin, cfg.delayMax)
   bots.params.speedMult = cfg.speedMult
   bots.params.aimTimeMs = cfg.aimTimeMs
   bots.params.roundSeconds = cfg.roundSeconds
@@ -133,9 +136,10 @@ function startRound(cfg) {
   menu.applyAll()
   audio.ensure()
   audio.setVolume(cfg.volume)
+  killTimes.length = 0
 
   // 出生点：架枪位正后，面向两个缺口
-  player.respawn(0, -14, 0)
+  player.respawn(map.spawn.x, map.spawn.z, map.spawn.yaw)
   player.hp = 100
 
   weapons.primaryId = cfg.primary
@@ -149,8 +153,7 @@ function startRound(cfg) {
 
   menu.hide()
   result.hide()
-  const pl = canvas.requestPointerLock()
-  if (pl?.catch) pl.catch(() => {}) // 自动化/无手势环境下静默（正常点击不会走到这）
+  input.lock() // unadjustedMovement 原始输入优先，失败自动回退（内部静默）
   state.playing = true
 }
 
@@ -205,8 +208,18 @@ engine.renderFrame = (alpha, dtMs) => {
 
 engine.start()
 
-// 调试句柄（自动化测试 / 控制台调参用）
-window.__game = { engine, input, audio, world, map, player, weapons, bots, hud, state, CONFIG }
+// WebGL 上下文丢失/恢复：暂停并提示（Engine 内部已停/重启渲染循环）
+engine.onContextLost = () => {
+  state.playing = false
+  document.exitPointerLock?.()
+  menu.show()
+  hud.toastMsg('图形上下文已断开，恢复后请重新开始', 3000)
+}
+
+// 调试句柄（自动化测试 / 控制台调参用）—— 仅开发构建暴露
+if (import.meta.env.DEV) {
+  window.__game = { engine, input, audio, world, map, player, weapons, bots, hud, state, CONFIG }
+}
 
 // 用户/开源资产（可选）：public/models/ 下的 agent.glb、viewmodel.glb、glove.glb 与 hands.glb
 loadUserAssets().then(({ agent, agentAnimations, viewmodel, glove, hands }) => {
@@ -224,3 +237,10 @@ loadUserAssets().then(({ agent, agentAnimations, viewmodel, glove, hands }) => {
 // 首屏菜单
 hud.setAmmo(CONFIG.weapons.vandal, { mag: 25, reserve: 75 })
 menu.show()
+
+// 模块初始化完成：载入页淡出（纹理生成在此同步阶段完成，之前 splash 一直可见）
+const splash = document.getElementById('splash')
+if (splash) {
+  splash.classList.add('done')
+  setTimeout(() => splash.remove(), 400)
+}

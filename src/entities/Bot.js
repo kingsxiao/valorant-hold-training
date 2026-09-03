@@ -4,6 +4,7 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { CONFIG } from '../core/Config.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
+import { raySphere } from '../world/World.js'
 
 // 训练机器人 v5：
 //  - 分段人形：头盔+发光面罩 / 护甲(3D 弹匣袋+袋盖+腰带) / 圆柱渐变四肢 / 手套 / 走路摆腿
@@ -485,14 +486,8 @@ export class Bot {
     if (this.invulnerable) return null
     let bestT = maxT, bestZone = null
     for (const z of this.zones) {
-      const lx = this.pos.x - ox, ly = z.y - oy, lz = this.pos.z - oz
-      const tca = lx * dx + ly * dy + lz * dz
-      if (tca < 0) continue
-      const d2 = lx * lx + ly * ly + lz * lz - tca * tca
-      const r2 = z.r * z.r
-      if (d2 > r2) continue
-      const t = tca - Math.sqrt(r2 - d2)
-      if (t < bestT) { bestT = t; bestZone = z.zone }
+      const t = raySphere(ox, oy, oz, dx, dy, dz, this.pos.x, z.y, this.pos.z, z.r)
+      if (t !== null && t < bestT) { bestT = t; bestZone = z.zone }
     }
     if (!bestZone) return null
     return { t: bestT, zone: bestZone, x: ox + dx * bestT, y: oy + dy * bestT, z: oz + dz * bestT }

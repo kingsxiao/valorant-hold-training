@@ -79,6 +79,19 @@ export class Engine {
 
     this._resize()
     addEventListener('resize', () => this._resize())
+
+    // WebGL 上下文丢失（系统压力/驱动重置）：停循环防止报错刷屏；
+    // 恢复后强制全材质重编译并重启 —— 程序化纹理/几何会随首次渲染重建
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault() // 允许 restored 事件
+      this.stop()
+      this.onContextLost?.()
+    })
+    canvas.addEventListener('webglcontextrestored', () => {
+      this.scene.traverse(o => { if (o.material) o.material.needsUpdate = true })
+      this.start()
+      this.onContextRestored?.()
+    })
   }
 
   // Valorant 锁定水平 FOV 103°，垂直 FOV 随宽高比换算（保证不同窗口下视野一致）

@@ -1,8 +1,11 @@
 # 依赖与构建产物
 node_modules/
 dist/
+coverage/
 
 # 内部工具状态 / 本机文件
 .mimosa/
+.playwright-mcp/
 .DS_Store
 *.log
+*.jpeg

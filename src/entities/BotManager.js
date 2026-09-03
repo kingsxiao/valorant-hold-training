@@ -1,4 +1,3 @@
-import * as THREE from 'three'
 import { Bot } from './Bot.js'
 import { CONFIG } from '../core/Config.js'
 

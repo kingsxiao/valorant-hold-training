@@ -8,6 +8,14 @@
 //  - 爆头"叮"：不谐和钟体分音 + 金属瞬态 + 头盔"顿"感；击杀确认：分量低频 + 高频铃尾
 //  - 支持用户自有音频替换：把文件放进 public/sfx/（见该目录说明），加载后优先播放
 //    （本仓库不附带任何游戏原始音频，请仅使用你拥有合法权利的文件）
+
+// 世界水平偏移 → 听者本地坐标（WebAudio 听者默认朝 -Z、无俯仰）。
+// 玩家 yaw 遵循 three.js 约定：yaw=0 面向世界 -Z，正向 yaw 向左转。
+// 本地系 = 世界系绕 Y 旋 -yaw：前方声源 z<0、右方声源 x>0。
+export function worldToListener(dx, dz, yaw) {
+  const c = Math.cos(yaw), s = Math.sin(yaw)
+  return { x: dx * c - dz * s, z: dx * s + dz * c }
+}
 export class AudioSys {
   constructor() {
     this.ctx = null
@@ -120,15 +128,14 @@ export class AudioSys {
     if (pos && listener) {
       const dx = pos.x - listener.pos.x, dz = pos.z - listener.pos.z
       const dist = Math.hypot(dx, dz)
-      const c = Math.cos(-listener.yaw), s = Math.sin(-listener.yaw)
-      const lx = dx * c - dz * s, lz = dx * s + dz * c
+      const { x: lx, z: lz } = worldToListener(dx, dz, listener.yaw)
       const p = this.ctx.createPanner()
       p.panningModel = 'HRTF'
       p.distanceModel = 'inverse'
       p.refDistance = 4
       p.rolloffFactor = 1.1
-      if (p.positionX) { p.positionX.value = lx; p.positionY.value = 0; p.positionZ.value = -lz }
-      else p.setPosition(lx, 0, -lz)
+      if (p.positionX) { p.positionX.value = lx; p.positionY.value = 0; p.positionZ.value = lz }
+      else p.setPosition(lx, 0, lz)
       const muffle = this.ctx.createBiquadFilter()
       muffle.type = 'lowpass'
       muffle.frequency.value = Math.max(1500, 22000 * Math.exp(-dist / 24))

@@ -178,8 +178,8 @@ export class MapBuilder {
       { x: 0, z: -10, yaw: 0, gap: 0 },
     ]
 
-    // 出生点：主厅南侧，面向靶道
-    this.spawn = { x: 0, z: 3, yaw: 0 }
+    // 出生点：架枪位正后（中场掩体之间），面向两个缺口
+    this.spawn = { x: 0, z: -14, yaw: 0 }
 
     // 合并静态几何 → 每种材质 1 个 draw call
     for (const [key, arr] of Object.entries(geos)) {

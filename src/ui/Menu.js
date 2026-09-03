@@ -8,7 +8,9 @@ export function loadSettings() {
 }
 export function saveSettings(patch) {
   const s = { ...loadSettings(), ...patch }
-  localStorage.setItem(LS_KEY, JSON.stringify(s))
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(s))
+  } catch { /* 隐私模式/配额满：设置不持久化，仅本次会话生效 */ }
   return s
 }
 

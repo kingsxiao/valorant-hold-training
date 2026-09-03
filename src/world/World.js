@@ -1,5 +1,17 @@
 // 世界碰撞：AABB 集合上的胶囊移动 + 光线投射（射线检测同时用于命中判定与视线遮挡）
 // 全部为扁平数组运算，128Hz 下开销可忽略
+
+// 射线 vs 球体（命中区域判定）：返回入射 t 或 null（未命中 / 球心在射线后方）
+export function raySphere(ox, oy, oz, dx, dy, dz, cx, cy, cz, r) {
+  const lx = cx - ox, ly = cy - oy, lz = cz - oz
+  const tca = lx * dx + ly * dy + lz * dz
+  if (tca < 0) return null
+  const d2 = lx * lx + ly * ly + lz * lz - tca * tca
+  const r2 = r * r
+  if (d2 > r2) return null
+  return tca - Math.sqrt(r2 - d2)
+}
+
 export class World {
   constructor() {
     this.solids = []           // { x0,y0,z0, x1,y1,z1 }
@@ -31,19 +43,6 @@ export class World {
       }
     }
     return { hit, boundary }
-  }
-
-  // 地面检测（脚底半径范围内是否有着地处）
-  groundAt(pos, r) {
-    let best = -Infinity
-    for (let i = 0; i < this.solids.length; i++) {
-      const s = this.solids[i]
-      if (pos.x + r <= s.x0 || pos.x - r >= s.x1) continue
-      if (pos.z + r <= s.z0 || pos.z - r >= s.z1) continue
-      // 顶面在脚下（略高于脚底都算站立面）
-      if (s.y1 <= pos.y + 0.12 && s.y1 > best) best = s.y1
-    }
-    return best // 没有则 -Inf
   }
 
   // 射线 vs 所有 AABB，返回最近命中 { t, x,y,z, nx,ny,nz } 或 null

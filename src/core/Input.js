@@ -52,5 +52,23 @@ export class Input {
     this.mouse0Edge = this.mouse1Edge = false
     return d
   }
-  lock() { this.canvas.requestPointerLock() }
+
+  // 优先请求"未经系统调整"的原始鼠标输入（绕过 OS 加速度/平滑 —— 瞄准训练器的
+  // 关键一致性）。旧浏览器不支持 options / 返回 undefined / 抛 NotSupportedError
+  // 时回退普通锁定；Promise 拒绝（无手势）静默处理由调用方语义决定。
+  lock() {
+    let p
+    try {
+      p = this.canvas.requestPointerLock({ unadjustedMovement: true })
+    } catch {
+      p = this.canvas.requestPointerLock()
+    }
+    if (p?.catch) {
+      p.catch(() => {
+        // unadjustedMovement 不被支持（Firefox 等）→ 普通锁定重试
+        const retry = this.canvas.requestPointerLock()
+        retry?.catch?.(() => {}) // 仍失败（无手势）保持现状，由点击再触发
+      })
+    }
+  }
 }

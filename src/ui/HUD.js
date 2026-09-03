@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { computeStats } from '../core/stats.js'
 import { fmtMs } from './util.js'
 
 // HUD：只在文本变化时写 DOM（避免每帧重排）；FPS 曲线用小 canvas
@@ -54,18 +55,14 @@ export class HUD {
   }
 
   setStats(stats, engine) {
-    const n = stats.reactions.length
-    const avg = n ? Math.round(stats.reactions.reduce((a, b) => a + b, 0) / n) : 0
-    const best = n ? Math.min(...stats.reactions) : 0
-    const acc = stats.shots ? Math.round(stats.hits / stats.shots * 100) : 0
-    const hs = stats.hits ? Math.round(stats.headshots / stats.hits * 100) : 0
+    const c = computeStats(stats)
     const rows = [
-      ['击杀', stats.kills],
-      ['对枪败', stats.duelsLost],
-      ['命中率', acc + '%'],
-      ['爆头率', hs + '%'],
-      ['反应均值', fmtMs(avg) + 'ms'],
-      ['最快反应', fmtMs(best) + 'ms'],
+      ['击杀', c.kills],
+      ['对枪败', c.duelsLost],
+      ['命中率', c.accuracy + '%'],
+      ['爆头率', c.headshotRate + '%'],
+      ['反应均值', fmtMs(c.avgReactionMs) + 'ms'],
+      ['最快反应', fmtMs(c.bestReactionMs) + 'ms'],
     ]
     const key = JSON.stringify(rows) + '|' + engine.fps + '|' + engine.low1Pct
     if (key === this._lastStatsKey) return

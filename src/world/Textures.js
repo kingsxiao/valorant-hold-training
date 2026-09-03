@@ -58,7 +58,8 @@ function blotch(g, x, y, r, rgba0) {
   g.fillRect(x - r, y - r, r * 2, r * 2)
 }
 
-// ---- 高度图 → 法线图（Sobel）----
+// ---- 高度图 → 法线图（Sobel，行索引外提的热循环版）----
+// 数学与朴素实现完全一致（周期边界、R 通道为高度），仅去掉逐像素取模/函数调用
 export function heightToNormal(hCanvas, strength = 2) {
   const size = hCanvas.width
   const src = hCanvas.getContext('2d').getImageData(0, 0, size, size).data
@@ -66,13 +67,18 @@ export function heightToNormal(hCanvas, strength = 2) {
   const octx = out.getContext('2d')
   const img = octx.createImageData(size, size)
   const d = img.data
-  const H = (x, y) => src[(((y + size) % size) * size + ((x + size) % size)) * 4] / 255
+  const k = strength / 255 // 朴素实现中 H() 归一到 [0,1]，此处并入系数
   for (let y = 0; y < size; y++) {
+    const row = y * size
+    const rowUp = ((y - 1 + size) % size) * size
+    const rowDn = ((y + 1) % size) * size
     for (let x = 0; x < size; x++) {
-      const dx = (H(x - 1, y) - H(x + 1, y)) * strength
-      const dy = (H(x, y - 1) - H(x, y + 1)) * strength
+      const colL = (x - 1 + size) % size
+      const colR = (x + 1) % size
+      const dx = (src[(row + colL) * 4] - src[(row + colR) * 4]) * k
+      const dy = (src[(rowUp + x) * 4] - src[(rowDn + x) * 4]) * k
       const inv = 1 / Math.hypot(dx, dy, 1)
-      const i = (y * size + x) * 4
+      const i = (row + x) * 4
       d[i] = (-dx * inv * 0.5 + 0.5) * 255
       d[i + 1] = (-dy * inv * 0.5 + 0.5) * 255
       d[i + 2] = (inv * 0.5 + 0.5) * 255

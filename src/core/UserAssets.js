@@ -94,16 +94,12 @@ export async function loadUserAssets() {
     const vm = vmGltf.scene
     vm.updateMatrixWorld(true)
     // 最长水平轴对齐到 Z（枪管向），随后按包围盒尺寸归一到 0.85m
-    let box = new THREE.Box3().setFromObject(vm)
-    const size = box.getSize(new THREE.Vector3())
+    // （90° 水平旋转只交换 x/z，最大边不变 → 缩放用旋转前的 size 即可）
+    const size = new THREE.Box3().setFromObject(vm).getSize(new THREE.Vector3())
     if (size.x > size.z) vm.rotation.y = -Math.PI / 2
+    vm.scale.multiplyScalar(0.85 / Math.max(0.001, Math.max(size.x, size.y, size.z)))
     vm.updateMatrixWorld(true)
-    box = new THREE.Box3().setFromObject(vm)
-    const s = 0.85 / Math.max(0.001, Math.max(size.x, size.y, size.z))
-    vm.scale.multiplyScalar(s)
-    vm.updateMatrixWorld(true)
-    box = new THREE.Box3().setFromObject(vm)
-    const c = box.getCenter(new THREE.Vector3())
+    const c = new THREE.Box3().setFromObject(vm).getCenter(new THREE.Vector3())
     vm.position.x -= c.x
     vm.position.y -= c.y
     vm.position.z -= c.z

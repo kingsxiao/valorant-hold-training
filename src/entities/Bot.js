@@ -6,14 +6,17 @@ import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
 import { raySphere } from '../world/World.js'
 
-// 训练机器人 v5：
-//  - 分段人形：头盔+发光面罩 / 护甲(3D 弹匣袋+袋盖+腰带) / 圆柱渐变四肢 / 手套 / 走路摆腿
+// 训练机器人 v6：
+//  - 分段人形：头盔+发光面罩 / 护甲(3D 弹匣袋+袋盖+腰带) / 圆柱渐变四肢 / 手套 / VALORANT 横移步态
 //  - 全部 PBR：颜色+粗糙度+法线贴图（程序化生成，纹理单例共享，材质按 bot 克隆）
 //  - 命中区域球体（头/胸/腹/腿）与视觉对齐；移动模型与玩家一致
 //  - 命中反馈：受击泛红闪 + 踉跄后仰（爆头更强）；死亡后仰倒地 + 侧倒 + 淡出消散
 //  - 接触阴影；支持 agent.glb 骨骼模型整体替换（SkeletonUtils 克隆）：
 //    idle/walk/run 按实际移速加权混合，脚步速率与位移同步 —— 拉出/横移真在跑；
 //    单 clip 老模型（BrainStem）静止时 timeScale→0 冻结、移动时恢复
+//  - 腿部遵循无畏契约运动规则：peek 面向目标持枪侧移（strafe）、步频与位移/
+//    脚步声锁相、counter-strafe 急停即刻站定、身体向移动方向微倾
+const STEP_LEN = 1.15 // 一步的位移（m）：脚步声触发与步态相位锁相共用
 const _v = new THREE.Vector3()
 
 export class Bot {
@@ -36,6 +39,9 @@ export class Bot {
     this.visibleNow = false
     this.walkPhase = 0
     this.stepDist = 0   // 脚步声里程（与位移同步）
+    this.lean = 0       // 身体侧倾量（向移动方向倾，平滑跟踪局部横向速度）
+    this.plantT = 0     // 急停卸力下沉的剩余时间
+    this._prevSpeed = 0 // 检测"高速→近停"跨越，触发一次 plant settle
     this.flinch = 0      // 受击踉跄相位（0~1+，衰减）
     this.flinchAmp = 0   // 本次踉跄后仰幅度
     this.deathRoll = 0   // 死亡侧倒角
@@ -282,6 +288,16 @@ export class Bot {
       ? Math.min(speed / 1.9, 2.1)
       : THREE.MathUtils.clamp(speed / 1.9, 0.6, 2.1)
     if (A.run) A.run.timeScale = THREE.MathUtils.clamp(speed / 5.2, 0.9, 1.5)
+    // 脚步声步长 = 动画 cadence 换算（步/秒 → 米/步），声与腿同拍（音画锁相，
+    // 与程序化假人的 STEP_LEN 锁相同规则）；idle 不算步，walk/run 权重归一
+    let sps = 0, wSum = 0
+    for (const a of [A.walk, A.run]) {
+      if (!a) continue
+      const w = a.getEffectiveWeight()
+      sps += w * 2 * a.getEffectiveTimeScale() / a.getClip().duration
+      wSum += w
+    }
+    this._audioStepLen = wSum > 0.01 && speed > 0.3 ? speed / (sps / wSum) : STEP_LEN
   }
 
   _stepAnim(speed, dt) {
@@ -292,6 +308,65 @@ export class Bot {
     if (this._animAcc >= 1 / 60) {
       this.mixer.update(this._animAcc)
       this._animAcc = 0
+    }
+  }
+
+  // 程序化假人腿部：按无畏契约 strafe 运动规则驱动
+  //  1) 步频与位移锁相：walkPhase 由里程推进（每 STEP_LEN 米 = 一步 = π），相位无跳变；
+  //     摆动取 cos —— stepDist 越过 STEP_LEN 触发脚步声时 |cos|=1 正是落脚极值，音画同步
+  //  2) 横移步态（cross-side-step）：双腿镜像侧摆（步距开合交替）+ 双髋同向偏转
+  //     （脚尖朝行进方向）+ 步内小幅反摆；朝/背玩家移动的前后分量按局部速度方向混合
+  //  3) counter-strafe 急停：硬站定快速收步（不做长缓动漂浮）+ 一次短促下沉卸力
+  //  4) 身体向移动方向微倾（lean into strafe），急停时快速回正
+  _stepLegs(speed, dt) {
+    const legL = this.legL, legR = this.legR
+    // 局部横向速度（模型正面 -Z、右侧 +X）：面向玩家横移时该分量为主
+    const yaw = this.mesh.rotation.y
+    const lx = this.velX * Math.cos(yaw)
+
+    // 相位始终随位移推进（与 stepDist 同一积分），跨低速段也不失锁
+    this.walkPhase += speed * dt * Math.PI / STEP_LEN
+
+    if (speed > 0.3) {
+      // 摆动取 cos：脚步声触发时 stepDist 整除 STEP_LEN → walkPhase = kπ → |cos|=1
+      // 正是落脚（步距最开）的瞬间，声画严格同拍
+      const s = Math.cos(this.walkPhase)
+      const sp = Math.max(speed, 1e-4)
+      const wLat = Math.min(1, Math.abs(lx) / sp)      // 横向权重：纯侧移 = 1
+      const wFore = 1 - wLat
+      const aLat = Math.min(0.36, 0.12 + speed * 0.058)
+      const aFore = Math.min(0.62, 0.18 + speed * 0.085)
+      // 镜像侧摆：步距张开-并拢交替（s=±1 为落脚支撑，s=0 双腿交叠过中点）
+      legL.rotation.z = -s * aLat * wLat
+      legR.rotation.z = s * aLat * wLat
+      legL.rotation.x = s * aFore * wFore
+      legR.rotation.x = -s * aFore * wFore
+      // 双髋同向偏转：脚尖朝行进方向（脚位朝移动、上身持枪朝目标 = VALORANT strafe 姿态）
+      const hipYaw = -Math.sign(lx || 1) * 0.26 * wLat + s * 0.12 * wLat
+      legL.rotation.y = hipYaw
+      legR.rotation.y = hipYaw
+      // 步态起伏：落脚张开时最低（重心压上支撑步）、并腿过中点最高 —— 与脚步声同拍
+      this.mesh.position.y = (1 - Math.abs(s)) * (0.01 + speed * 0.0036)
+    } else {
+      // 急停即刻站定：快速收步 + 高度归零（counter-strafe 是硬停，不做漂浮缓动）
+      const k = 1 - Math.min(1, dt * 22)
+      legL.rotation.x *= k; legL.rotation.y *= k; legL.rotation.z *= k
+      legR.rotation.x *= k; legR.rotation.y *= k; legR.rotation.z *= k
+      this.mesh.position.y *= k
+    }
+
+    // 身体侧倾：向移动方向倾（lean into strafe）；回正比起倾更快（急停干净利落）
+    const leanTarget = THREE.MathUtils.clamp(-lx * 0.011, -0.05, 0.05)
+    const leanRate = Math.abs(leanTarget) > Math.abs(this.lean) ? 8 : 18
+    this.lean += (leanTarget - this.lean) * Math.min(1, dt * leanRate)
+    this.mesh.rotation.z = this.lean
+
+    // counter-strafe 卸力：高速 → 近停瞬间触发一次短促下沉（重心急停的重量感）
+    if (this._prevSpeed > 2.2 && speed <= 1.0) this.plantT = 0.16
+    this._prevSpeed = speed
+    if (this.plantT > 0) {
+      this.plantT = Math.max(0, this.plantT - dt)
+      this.mesh.position.y -= Math.sin(Math.PI * this.plantT / 0.16) * 0.03
     }
   }
 
@@ -317,6 +392,10 @@ export class Bot {
     this.mesh.position.copy(this.pos)
     this.walkPhase = 0
     this.stepDist = 0
+    this.lean = 0        // 复用的 Bot 归位站姿：不带旧侧倾/急停残余
+    this.plantT = 0
+    this._prevSpeed = 0
+    if (this.legL) { this.legL.rotation.set(0, 0, 0); this.legR.rotation.set(0, 0, 0) }
     this.setOpacity(1)
     this.blobMat.opacity = 1
     this.spawnGuardUntil = this.now() + CONFIG.bot.spawnGuardMs / 1000
@@ -345,16 +424,15 @@ export class Bot {
 
   moveToward(targetVelX, dt) {
     const B = CONFIG.bot
-    const target = targetVelX
-    const a = (Math.abs(target) > Math.abs(this.velX) ? B.accel : B.decel) * dt
-    if (this.velX < target) this.velX = Math.min(target, this.velX + a)
-    else this.velX = Math.max(target, this.velX - a)
+    // 指令归零/反向 = counter-strafe 急停：与玩家同规则享受反向减速倍率
+    // （55×1.6=88 m/s²，5.4→0 约 61ms，peek 急停的节奏与真人一致）
+    const counter = (targetVelX === 0 || this.velX * targetVelX < 0)
+      ? CONFIG.movement.counterStrafeMult
+      : 1
+    const a = (Math.abs(targetVelX) > Math.abs(this.velX) ? B.accel : B.decel * counter) * dt
+    if (this.velX < targetVelX) this.velX = Math.min(targetVelX, this.velX + a)
+    else this.velX = Math.max(targetVelX, this.velX - a)
     this.pos.x += this.velX * dt
-  }
-
-  // 面向：模型正面为 -Z
-  faceTowards(px, pz) {
-    this.mesh.rotation.y = Math.atan2(-(px - this.pos.x), -(pz - this.pos.z))
   }
 
   startDeath() {
@@ -411,10 +489,11 @@ export class Bot {
       if (this.hitFlash <= 0) this._restoreEmissive()
     }
 
-    // 朝向：移动时朝行进方向（与脚步方向一致），急停/静止时朝玩家；平滑转身
+    // 朝向：VALORANT peek 规则 —— 持枪面向对枪目标横移（strafe），不转身顺行进方向跑；
+    // 骨骼假人例外：GLB 只有前进向 walk/run clip，侧移时放前进 clip 会滑步穿帮 → 移动时朝行进方向
     const stopped = this.mode === 'peek' && this.peek?.stopUntil > this.now()
     let targetYaw
-    if (this.mode === 'peek' && Math.abs(this.velX) > 0.4 && !stopped) {
+    if (this.mixer && Math.abs(this.velX) > 0.4 && !stopped) {
       targetYaw = this.velX > 0 ? -Math.PI / 2 : Math.PI / 2
     } else {
       targetYaw = Math.atan2(-(p.pos.x - this.pos.x), -(p.pos.z - this.pos.z))
@@ -423,11 +502,12 @@ export class Bot {
     dy = Math.atan2(Math.sin(dy), Math.cos(dy)) // 取最短角差
     this.mesh.rotation.y += dy * Math.min(1, dt * 14)
 
-    // 移动表现：程序化假人腿部摆动；骨骼假人播放混合动画（脚步与位移同步）
+    // 移动表现：程序化假人 = VALORANT 横移步态；骨骼假人播放混合动画（脚步与位移同步）
     const speed = Math.abs(this.velX)
     // 脚步声：与位移同步的 HRTF 空间音 —— 架枪时可听声预判拉出方向与时机
+    // （GLB 假人用动画 cadence 换算的步长，程序化假人用固定 STEP_LEN —— 两者都与腿同拍）
     this.stepDist += speed * dt
-    if (this.stepDist > 1.15) {
+    if (this.stepDist > (this._audioStepLen ?? STEP_LEN)) {
       this.stepDist = 0
       this.manager?.audio?.footstep(
         { x: this.pos.x, z: this.pos.z },
@@ -436,24 +516,15 @@ export class Bot {
       )
     }
     if (this.legL && this.legR) {
-      if (speed > 0.3) {
-        this.walkPhase += dt * (4 + speed * 2.4)
-        const swing = Math.sin(this.walkPhase) * Math.min(0.62, 0.18 + speed * 0.085)
-        this.legL.rotation.x = swing
-        this.legR.rotation.x = -swing
-        this.mesh.position.y = Math.abs(Math.sin(this.walkPhase)) * 0.028
-      } else {
-        this.legL.rotation.x *= 1 - Math.min(1, dt * 10)
-        this.legR.rotation.x *= 1 - Math.min(1, dt * 10)
-        this.mesh.position.y = 0
-      }
+      this._stepLegs(speed, dt)
     } else if (this.mixer) {
       this._stepAnim(speed, dt)
     } else if (speed > 0.3) {
-      this.walkPhase += dt * (4 + speed * 2.4)
-      this.mesh.position.y = Math.abs(Math.sin(this.walkPhase)) * 0.018
+      // 无动画的自定义模型兜底：至少保留位移节奏的起伏
+      this.walkPhase += speed * dt * Math.PI / STEP_LEN
+      this.mesh.position.y = Math.abs(Math.cos(this.walkPhase)) * 0.018
     } else {
-      this.mesh.position.y *= 1 - Math.min(1, dt * 10)
+      this.mesh.position.y *= 1 - Math.min(1, dt * 22)
     }
 
     // 受击踉跄：正弦冲击曲线 → 后仰 + 微沉（不影响朝向/命中判定）

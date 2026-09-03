@@ -4,12 +4,12 @@
 
 > **关于素材的说明**：Riot 的游戏资产（模型/贴图/音效）受版权保护，本项目**不提取、不打包、不复刻**官方资源。
 >
-> **当前内置的开源模型**（`public/models/`）：
-> - `agent.glb` — ["X Bot"](https://github.com/mrdoob/three.js/tree/master/examples/models/gltf)（Mixamo，经 three.js 官方示例分发），训练靶按实际移速**加权混合 idle/walk/run 动画**，脚步频率与位移同步（加载时自动归一化到 1.8m）
+> **当前内置的开源模型**（`public/models/`，均已 gltf-transform 量化压缩，几何 -46%~-55% 且无需解码器）：
+> - `agent.glb` — ["X Bot"](https://github.com/mrdoob/three.js/tree/master/examples/models/gltf)（Mixamo，经 three.js 官方示例分发），训练靶按实际移速**加权混合 idle/walk/run 动画**，脚步频率与位移同步（加载时自动归一化到 1.8m）；备选 BrainStem 模型在仓库 `models-optional/`（不随部署分发），复制进 `public/models/` 改名即可换用
 > - `viewmodel.glb` — [AK-47 by Quaternius](https://poly.pizza/m/em1Hi9GuCv)（Poly Pizza 分发），**CC0**；仅替换步枪（Vandal/Phantom）外观，Sheriff/手枪/刀使用内置程序化模型（带枪机/套筒/转轮活动机件、解剖学分段手部与换弹弹匣动画）
-> - `hands.glb` — ["Rigged FPS Arms" by J-Toastie](https://poly.pizza/m/XdHWM8uSAO)（Poly Pizza 分发），**CC-BY 3.0**（按骨骼左右手位置自动对位到枪的握把/护木，手腕下压成持握姿势；随步枪显隐，手枪/刀用内置手臂）
+> - `glove.glb` / `hands.glb` — ["Gloved Hand"] / ["Rigged FPS Arms" by J-Toastie](https://poly.pizza/m/XdHWM8uSAO)（Poly Pizza 分发，均 **CC-BY 3.0**；五指手套双手为第一人称主路径，hands 整臂做 IK 袖臂与后备；缺失时逐级回退程序化手臂）
 >
-> **替换成你自己的资产**（本地使用你拥有合法权利的文件）：同名覆盖 `public/models/*.glb`；音效放 `public/sfx/`（文件名见目录内说明）。本项目与 Riot Games 无关。
+> **替换成你自己的资产**（本地使用你拥有合法权利的文件）：同名覆盖 `public/models/*.glb` 后跑 `npm run optimize:models` 一键压缩；音效放 `public/sfx/`（文件名见目录内说明）。本项目与 Riot Games 无关。
 
 ## 运行
 
@@ -19,11 +19,16 @@ npm run dev      # http://127.0.0.1:5173
 npm run build    # 产物在 dist/
 npm run preview
 npm run verify   # lint + 单元测试 + 构建（CI 同款门禁）
+npm run optimize:models  # 压缩 public/models/*.glb（换入自有模型后执行）
 ```
 
 要求：桌面版 Chrome/Edge/Firefox（需要 WebGL2 + Pointer Lock），Node ≥ 18。
 
 指针锁定优先请求 `unadjustedMovement`（绕过系统鼠标加速度/平滑，瞄准训练器的关键一致性），旧浏览器自动回退普通锁定。
+
+## 部署
+
+纯静态 SPA，`dist/` 可托管在任意静态服务器 / GitHub Pages / Vercel / Netlify / Cloudflare Pages / Docker。资源全部相对路径（`base: './'`），支持任意子路径部署；字体自托管，无第三方请求。全量约 3.3 MB（gzip ~1.1 MB）。缓存策略、nginx 配置样例与各平台步骤见 **[DEPLOY.md](DEPLOY.md)**。
 
 ## 操作
 
@@ -107,6 +112,7 @@ tests/      纯逻辑单元测试（Vitest）：碰撞/射线/弹道/伤害/散�
 - HUD 只在文本变化时写 DOM；碰撞/实体数据为扁平数组
 - 程序化纹理的 Sobel 法线转换为行索引外提的热循环实现；首屏载入页覆盖初始化期（生产构建 ~350ms 就绪）
 - 阴影默认关闭，菜单「画质」区可调分辨率缩放与阴影开关；构建时 three.js 独立成 vendor chunk（业务更新不重复下载渲染库）
+- 打包体积：全量 ~3.3 MB（gzip ~1.1 MB）；GLB 量化压缩（KHR_mesh_quantization，GLTFLoader 原生支持）、字体自托管（无第三方请求）、无用的备份模型不进 dist（见 `scripts/optimize-models.mjs` 与 DEPLOY.md）
 
 ## 已知边界
 

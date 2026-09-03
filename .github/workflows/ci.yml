@@ -18,3 +18,36 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run build
+      # main 分支构建产物交给部署 job；PR 上无需部署，跳过上传
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: site-dist
+          path: dist
+          retention-days: 1
+
+  deploy-pages:
+    # 仅 main 直推时发布（PR 不会触发）；verify 全绿才部署
+    if: github.event_name == 'push'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write # 写入 Pages
+      id-token: write # OIDC 令牌，部署 Pages 必需
+    concurrency:
+      group: pages
+      cancel-in-progress: true # 连续推送时只保留最新一次部署
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: site-dist
+          path: dist
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deployment
+        uses: actions/deploy-pages@v4

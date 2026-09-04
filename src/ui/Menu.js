@@ -50,6 +50,15 @@ export function saveHistory(scores) {
   try { localStorage.setItem(HIST_KEY, JSON.stringify(scores.slice(-10))) } catch { /* 同上 */ }
 }
 
+// 生涯累计击杀
+const TOTAL_KEY = 'vht-total-kills-v1'
+export function loadTotalKills() {
+  try { return JSON.parse(localStorage.getItem(TOTAL_KEY)) ?? 0 } catch { return 0 }
+}
+export function saveTotalKills(n) {
+  try { localStorage.setItem(TOTAL_KEY, JSON.stringify(n)) } catch { /* 同上 */ }
+}
+
 export class Menu {
   constructor({ overlay, onReady }) {
     this.overlay = overlay
@@ -254,7 +263,7 @@ export class Menu {
     p.querySelector('.btn-start').onclick = () => this.onReady?.({ ...this.cfg })
     // 清除全部个人纪录（最佳/最快/历史/上局）
     p.querySelector('.btn-clear-records').onclick = () => {
-      for (const k of ['vht-bests-v1', 'vht-fastest-v1', 'vht-history-v1', 'vht-last-round-v1']) {
+      for (const k of ['vht-bests-v1', 'vht-fastest-v1', 'vht-history-v1', 'vht-last-round-v1', 'vht-total-kills-v1']) {
         try { localStorage.removeItem(k) } catch { /* 忽略 */ }
       }
       this.show(this._live ?? null) // 刷新徽标
@@ -292,11 +301,17 @@ export class Menu {
     this.overlay.classList.add('visible')
     this.panel.hidden = false
     this._live = live
-    // 个人最佳徽标（有纪录才显示）
+    // 个人最佳徽标（有纪录才显示）；带生涯累计击杀
     const best = loadBests().hold ?? 0
+    const totalKills = loadTotalKills()
     const badge = this.panel.querySelector('.menu-best')
-    badge.hidden = !(best > 0)
-    if (best > 0) badge.innerHTML = `★ 个人最佳 <b>${best}</b>`
+    const hasRecord = best > 0 || totalKills > 0
+    badge.hidden = !hasRecord
+    if (hasRecord) {
+      badge.innerHTML = (best > 0 ? `★ 最佳 <b>${best}</b>` : '') +
+        (best > 0 && totalKills > 0 ? ' <span style="opacity:.4">|</span> ' : '') +
+        (totalKills > 0 ? `生涯击杀 <b>${totalKills}</b>` : '')
+    }
     // 暂停时的本局进行中战绩（ESC 呼出时有值；首屏/结算后为 null）
     const liveBox = this.panel.querySelector('.menu-live')
     if (live) {

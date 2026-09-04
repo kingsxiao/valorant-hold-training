@@ -11,7 +11,7 @@ import { WeaponSystem } from './weapons/WeaponSystem.js'
 import { BotManager, MODE_INFO } from './entities/BotManager.js'
 import { Crosshair } from './ui/Crosshair.js'
 import { HUD } from './ui/HUD.js'
-import { Menu, loadBests, saveBest, loadLastRound, saveLastRound, loadFastest, saveFastest, loadHistory, saveHistory } from './ui/Menu.js'
+import { Menu, loadBests, saveBest, loadLastRound, saveLastRound, loadFastest, saveFastest, loadHistory, saveHistory, loadTotalKills, saveTotalKills } from './ui/Menu.js'
 import { ResultPanel } from './ui/ResultPanel.js'
 import { computeStats } from './core/stats.js'
 import { loadUserAssets } from './core/UserAssets.js'
@@ -136,7 +136,8 @@ bots.onEvent = (type, data) => {
     if (newFastest) saveFastest(cStats.bestReactionMs)
     // 存本局摘要供下局"对比上局"，并把上局摘要带给结算面板
     const lastRound = { score: state.score, kills: cStats.kills, avgReactionMs: cStats.avgReactionMs, accuracy: cStats.accuracy }
-    // 近 10 局得分历史（趋势图）
+    // 生涯累计击杀 + 近 10 局得分历史（趋势图）
+    saveTotalKills(loadTotalKills() + cStats.kills)
     const history = [...loadHistory(), state.score].slice(-10)
     saveHistory(history)
     result.show({

@@ -41,6 +41,15 @@ export function saveFastest(ms) {
   try { localStorage.setItem(FAST_KEY, JSON.stringify({ ms })) } catch { /* 同上 */ }
 }
 
+// 近 10 局得分历史（结算面板趋势图用）
+const HIST_KEY = 'vht-history-v1'
+export function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HIST_KEY)) ?? [] } catch { return [] }
+}
+export function saveHistory(scores) {
+  try { localStorage.setItem(HIST_KEY, JSON.stringify(scores.slice(-10))) } catch { /* 同上 */ }
+}
+
 export class Menu {
   constructor({ overlay, onReady }) {
     this.overlay = overlay

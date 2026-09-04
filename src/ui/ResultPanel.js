@@ -27,6 +27,8 @@ export class ResultPanel {
 
       <div class="hist-wrap" hidden><canvas class="hist" width="680" height="96"></canvas><div class="hist-cap">反应时间分布（0 – 1s+，红线 = 平均）</div></div>
 
+      <div class="hist-wrap" hidden><canvas class="trend" width="680" height="70"></canvas><div class="hist-cap trend-cap"></div></div>
+
       <div class="tip-box" hidden></div>
 
       <div class="actions">
@@ -41,6 +43,9 @@ export class ResultPanel {
     this.tipBox = p.querySelector('.tip-box')
     this.histWrap = p.querySelector('.hist-wrap')
     this.hist = p.querySelector('.hist')
+    this.trendWrap = p.querySelectorAll('.hist-wrap')[1]
+    this.trend = p.querySelector('.trend')
+    this.trendCap = p.querySelector('.trend-cap')
     p.querySelector('.btn-start').onclick = () => this.onRestart?.()
     p.querySelector('.btn-ghost').onclick = () => this.onSettings?.()
   }
@@ -84,6 +89,10 @@ export class ResultPanel {
     const rs = summary.reactions ?? []
     this.histWrap.hidden = rs.length < 5
     if (rs.length >= 5) this._drawHist(rs, c.avgReactionMs)
+    // 近 10 局得分趋势（≥2 局才有趋势）
+    const hist = summary.history ?? []
+    this.trendWrap.hidden = hist.length < 2
+    if (hist.length >= 2) this._drawTrend(hist)
     // 训练建议：按短板挑一条可执行的（没有明显短板则不显示）
     const tip = coachingTip(c)
     this.tipBox.textContent = tip ?? ''
@@ -126,6 +135,27 @@ export class ResultPanel {
       g.lineTo(x, H - 20)
       g.stroke()
     }
+  }
+
+  // 近 10 局得分趋势：柱状图，最后一局（本局）高亮红色
+  _drawTrend(scores) {
+    const g = this.trend.getContext('2d')
+    const W = this.trend.width, H = this.trend.height
+    const max = Math.max(...scores, 1)
+    g.clearRect(0, 0, W, H)
+    const bw = W / scores.length
+    scores.forEach((s, i) => {
+      const h = Math.max(3, s / max * (H - 22))
+      g.fillStyle = i === scores.length - 1 ? '#ff4655' : 'rgba(236, 232, 225, 0.3)'
+      g.fillRect(i * bw + 4, H - 18 - h, bw - 8, h)
+      if (i === scores.length - 1 || s === max) {
+        g.fillStyle = i === scores.length - 1 ? '#ff4655' : 'rgba(255, 201, 77, 0.8)'
+        g.font = '600 11px Rajdhani, sans-serif'
+        g.textAlign = 'center'
+        g.fillText(s, i * bw + bw / 2, H - 22 - h)
+      }
+    })
+    this.trendCap.textContent = `近 ${scores.length} 局得分趋势（红 = 本局，金 = 峰值）`
   }
 
   hide() {

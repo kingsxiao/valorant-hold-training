@@ -4,6 +4,7 @@ dist/
 coverage/
 
 # 内部工具状态 / 本机文件
+.idea/
 .mimosa/
 .playwright-mcp/
 .DS_Store

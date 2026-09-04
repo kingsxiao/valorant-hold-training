@@ -215,6 +215,21 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 
 /* 受击红闪 */
 #hurt-vignette { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse at center, transparent 42%, rgba(200, 20, 30, 0.55) 100%); transition: opacity 0.25s; }
+/* 阵亡状态：持续深红 + 暗角 + 复活提示，直至原地复活 */
+#hurt-vignette.dead {
+  opacity: 1 !important;
+  background: radial-gradient(ellipse at center, rgba(140, 0, 10, 0.3) 25%, rgba(60, 0, 5, 0.85) 100%);
+  transition: opacity 0.35s;
+}
+#hurt-vignette.dead::after {
+  content: '阵亡 · 即将复活';
+  position: absolute; left: 50%; top: 58%;
+  transform: translateX(-50%);
+  font-size: 15px; font-weight: 700; letter-spacing: 6px; text-indent: 6px;
+  color: rgba(255, 220, 220, 0.9);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.8);
+  white-space: nowrap;
+}
 
 /* 伤害数字 */
 .dmg-num { position: absolute; left: 0; top: 0; font-family: var(--font-num); font-weight: 700; font-size: 20px; color: #fff; text-shadow: 0 1px 4px #000, 0 0 2px #000; will-change: transform, opacity; font-variant-numeric: tabular-nums; }

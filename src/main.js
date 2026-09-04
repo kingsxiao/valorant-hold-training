@@ -297,6 +297,7 @@ engine.renderFrame = (alpha, dtMs) => {
   // HUD（节流写入，避免每帧 DOM 重排）
   hud.setSpeed(player.moveSpeed)
   hud.setHP(player.hp)
+  hud.hurt.classList.toggle('dead', !player.alive) // 阵亡红屏 + 复活提示
   const remainS = bots.params.roundSeconds > 0 && bots.running && bots.roundEndAt > 0
     ? Math.max(0, bots.roundEndAt - bots.now())
     : null

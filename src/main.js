@@ -35,7 +35,7 @@ const player = new Player(world, audio)
 const bots = new BotManager({ scene: engine.scene, world, map, audio, player })
 const hud = new HUD(hudRoot)
 const crosshair = new Crosshair(hudRoot)
-const menu = new Menu({ overlay, onReady: startRound })
+const menu = new Menu({ overlay, onReady: startRound, onContinue: resumeRound })
 // 回合结算：独立面板，与设置面板互斥显示
 const result = new ResultPanel({
   overlay,
@@ -160,6 +160,13 @@ input.onKey = (code) => {
 const killTimes = []
 
 // ---- 指针锁定 ⇄ 暂停 ----
+// 暂停中恢复当前回合：不重置分数/计时/弹匣（game clock 冻结保证回合时间不流失）
+function resumeRound() {
+  menu.hide()
+  input.lock()
+  state.playing = true
+}
+
 input.onLockChange = (locked) => {
   if (locked) {
     menu.hide()

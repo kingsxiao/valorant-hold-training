@@ -60,9 +60,10 @@ export function saveTotalKills(n) {
 }
 
 export class Menu {
-  constructor({ overlay, onReady }) {
+  constructor({ overlay, onReady, onContinue }) {
     this.overlay = overlay
-    this.onReady = onReady   // (startCfg) => void
+    this.onReady = onReady     // (startCfg) => void
+    this.onContinue = onContinue // () => void 暂停中恢复当前回合（不重置）
     this.cfg = {
       primary: 'vandal',
       secondary: 'classic',
@@ -135,6 +136,7 @@ export class Menu {
       <div class="opt-grid" data-group="chOpts"></div>
 
       <div class="actions">
+        <button class="btn-continue btn-start" hidden>继续训练</button>
         <button class="btn-start">开始训练</button>
         <button class="btn-ghost btn-clear-records">清除纪录</button>
         <span class="hint" style="margin:0">点击后锁定鼠标 · ESC 暂停</span>
@@ -261,6 +263,8 @@ export class Menu {
     }
 
     p.querySelector('.btn-start').onclick = () => this.onReady?.({ ...this.cfg })
+    // 暂停中恢复当前回合（不重置分数/计时）
+    p.querySelector('.btn-continue').onclick = () => this.onContinue?.()
     // 清除全部个人纪录（最佳/最快/历史/上局）
     p.querySelector('.btn-clear-records').onclick = () => {
       for (const k of ['vht-bests-v1', 'vht-fastest-v1', 'vht-history-v1', 'vht-last-round-v1', 'vht-total-kills-v1']) {
@@ -314,6 +318,9 @@ export class Menu {
     }
     // 暂停时的本局进行中战绩（ESC 呼出时有值；首屏/结算后为 null）
     const liveBox = this.panel.querySelector('.menu-live')
+    // 有进行中的回合才显示"继续训练"（按钮置顶）
+    const contBtn = this.panel.querySelector('.btn-continue')
+    contBtn.hidden = !live
     if (live) {
       liveBox.innerHTML = `<span class="ml-title">本局进行中</span>` +
         `<b>${live.score ?? 0}</b><i>分</i>` +

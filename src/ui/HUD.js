@@ -66,6 +66,7 @@ export class HUD {
       ['爆头率', c.headshotRate + '%'],
       ['反应均值', fmtMs(c.avgReactionMs) + 'ms'],
       ['最快反应', fmtMs(c.bestReactionMs) + 'ms'],
+      ['预瞄误差', c.aimSamples ? c.aimErrorDeg + '°' : '—'],
     ]
     const key = JSON.stringify(rows) + '|' + engine.fps + '|' + engine.low1Pct
     if (key === this._lastStatsKey) return

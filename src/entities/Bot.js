@@ -510,7 +510,19 @@ export class Bot {
       this.pos.x, eyeY, this.pos.z,
       p.pos.x, p.pos.y + p.eyeHeight, p.pos.z,
     )
-    if (this.visibleNow && this.firstVisibleAt < 0) this.firstVisibleAt = this.now()
+    if (this.visibleNow && this.firstVisibleAt < 0) {
+      this.firstVisibleAt = this.now()
+      // 预瞄误差采样：Bot 露头瞬间，准星与目标胸口的角度偏差（度）。
+      // 这是架枪训练的核心指标 —— 出现后才甩过去的是反应，出现前就贴住的是预瞄。
+      const distH = Math.max(0.5, Math.hypot(p.pos.x - this.pos.x, p.pos.z - this.pos.z))
+      const yawTo = Math.atan2(-(this.pos.x - p.pos.x), -(this.pos.z - p.pos.z)) // 玩家→Bot 方向的 yaw（与视角同约定）
+      const pitchTo = Math.atan2((this.pos.y + 1.3) - (p.pos.y + p.eyeHeight), distH)
+      let dyaw = (p.yaw - yawTo) * 180 / Math.PI
+      dyaw = ((dyaw + 180) % 360 + 360) % 360 - 180 // 归一到 -180..180
+      const dpitch = (p.pitch - pitchTo) * 180 / Math.PI
+      const arr = this.manager?.stats?.aimErrors
+      if (arr && arr.length < 500) arr.push(Math.round(Math.hypot(dyaw, dpitch) * 10) / 10)
+    }
 
     // 命中闪光：恢复原始自发光（受击时被 flashHit 置红/白）
     if (this.hitFlash > 0) {

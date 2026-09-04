@@ -7,6 +7,8 @@ export function computeStats(s) {
   const n = rs.length
   const avg = n ? Math.round(rs.reduce((a, b) => a + b, 0) / n) : 0
   const best = n ? Math.min(...rs) : 0
+  const aes = s.aimErrors ?? []
+  const aimAvg = aes.length ? Math.round(aes.reduce((a, b) => a + b, 0) / aes.length * 10) / 10 : 0
   return {
     kills: s.kills ?? 0,
     duelsLost: s.duelsLost ?? 0,
@@ -17,6 +19,8 @@ export function computeStats(s) {
     avgReactionMs: avg,
     bestReactionMs: best,
     maxStreak: s.maxStreak ?? 0,
+    aimErrorDeg: aimAvg,
+    aimSamples: aes.length,
   }
 }
 
@@ -26,6 +30,8 @@ export function coachingTip(c) {
   if (c.kills + c.duelsLost === 0) return null
   if (c.duelsLost > c.kills)
     return '对枪败多于击杀 —— 把准星预先放在缺口沿的高度，Bot 出现时只需微调，不必大幅甩枪。'
+  if (c.aimSamples >= 3 && c.aimErrorDeg >= 12)
+    return `露头瞬间准星平均偏了 ${c.aimErrorDeg}°—— 预瞄点要贴在缺口沿（A 缺口看左沿、B 缺口看右沿），出现后只补最后几度。`
   if (c.avgReactionMs >= 550)
     return '平均反应偏慢 —— 别等看清楚再开枪：缺口出现动静（脚步/边缘露身）就预压准星。'
   if (c.accuracy < 30 && c.shots >= 10)

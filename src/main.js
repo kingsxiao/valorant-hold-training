@@ -13,6 +13,7 @@ import { Crosshair } from './ui/Crosshair.js'
 import { HUD } from './ui/HUD.js'
 import { Menu, loadBests, saveBest } from './ui/Menu.js'
 import { ResultPanel } from './ui/ResultPanel.js'
+import { computeStats } from './core/stats.js'
 import { loadUserAssets } from './core/UserAssets.js'
 import { Bot } from './entities/Bot.js'
 
@@ -146,7 +147,13 @@ input.onLockChange = (locked) => {
     // 暂停面板顶部带一条"本局进行中"战绩（回合已结束/未开局时无数据）
     const midRound = bots.running && bots.roundEndAt > bots.now()
     menu.show(midRound
-      ? { score: state.score, kills: bots.stats.kills, duelsLost: bots.stats.duelsLost, maxStreak: bots.stats.maxStreak }
+      ? {
+          score: state.score, kills: bots.stats.kills, duelsLost: bots.stats.duelsLost,
+          maxStreak: bots.stats.maxStreak,
+          aimError: computeStats(bots.stats).aimSamples
+            ? computeStats(bots.stats).aimErrorDeg
+            : null,
+        }
       : null)
   }
 }

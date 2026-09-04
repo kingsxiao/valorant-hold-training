@@ -251,7 +251,8 @@ export class Menu {
         `<b>${live.score ?? 0}</b><i>分</i>` +
         `<b>${live.kills ?? 0}</b><i>击杀</i>` +
         `<b>${live.duelsLost ?? 0}</b><i>对枪败</i>` +
-        (live.maxStreak > 1 ? `<b>×${live.maxStreak}</b><i>连杀</i>` : '')
+        (live.maxStreak > 1 ? `<b>×${live.maxStreak}</b><i>连杀</i>` : '') +
+        (live.aimError != null ? `<b>${live.aimError}°</b><i>预瞄误差</i>` : '')
       liveBox.hidden = false
     } else {
       liveBox.hidden = true

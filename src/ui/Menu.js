@@ -51,6 +51,7 @@ export class Menu {
       resScale: 1.0,
       autoRes: true,
       rampUp: false,
+      doubleGap: false,
       crosshair: {},
       ...loadSettings(),
     }
@@ -159,9 +160,12 @@ export class Menu {
       oBox.appendChild(b)
     }
 
-    // 训练开关（渐进难度）
+    // 训练开关（渐进难度 / 双缺口压力）
     const tBox = p.querySelector('[data-group=trainOpts]')
-    for (const [key, label] of [['rampUp', '渐进难度（击杀后 Bot 越出越快/越快横移）']]) {
+    for (const [key, label] of [
+      ['rampUp', '渐进难度（击杀后 Bot 越出越快/越快横移）'],
+      ['doubleGap', '双缺口压力（A/B 同时出人）'],
+    ]) {
       const b = document.createElement('button')
       b.className = 'opt-btn'
       b.textContent = label

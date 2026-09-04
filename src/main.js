@@ -175,6 +175,7 @@ menu.applyAll = () => {
   bots.params.aimTimeMs = cfg.aimTimeMs
   bots.params.roundSeconds = cfg.roundSeconds
   bots.params.rampUp = !!cfg.rampUp
+  bots.params.doubleGap = !!cfg.doubleGap
   engine.autoRes = cfg.autoRes !== false
   engine.setResolutionScale(cfg.resScale ?? 1)
   engine.setShadows(!!cfg.shadows)

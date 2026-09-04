@@ -18,6 +18,7 @@ export class BotManager {
       aimTimeMs: CONFIG.bot.aimTimeMs,
       roundSeconds: CONFIG.training.roundSeconds,
       rampUp: false, // 渐进难度：随击杀数缩短延迟/提升横移速度
+      doubleGap: false, // 双缺口压力：A/B 缺口独立出人
     }
     this.onEvent = null // (type, data) → HUD 提示：'lost-duel' / 'killed' / 'round-end'
     this.stats = this._freshStats()
@@ -46,7 +47,7 @@ export class BotManager {
     this.roundEndAt = this.params.roundSeconds > 0
       ? this.countdownUntil + this.params.roundSeconds
       : 0
-    this.hold = { nextAt: 0, gapIdx: 0, fromLeft: true }
+    this.hold = null // 惰性初始化：依赖 doubleGap 配置（单槽位 or A/B 双槽位）
     this.audio?.roundStart()
   }
 
@@ -95,27 +96,42 @@ export class BotManager {
   get _rampDelay() { return Math.max(0.45, Math.pow(0.93, this._rampKills)) }
   get _rampSpeed() { return Math.min(1.3, this.params.speedMult * Math.pow(1.02, this._rampKills)) }
 
-  // 架枪对枪：随机延迟 → 从缺口一侧拉出，横移穿过，概率性急停 / 露头即缩
+  // 架枪对枪调度：单缺口（随机 A/B）默认；双缺口压力模式下 A/B 各一个独立槽位，
+  // B 起始错开 1.5s——练交叉火力下的目标选择与转火
+  _initHold() {
+    if (this.params.doubleGap) {
+      return { slots: [0, 1].map(i => ({ gapIdx: i, nextAt: this.now() * 1000 + i * 1500, bot: null })) }
+    }
+    return { slots: [{ gapIdx: -1, nextAt: 0, bot: null }] } // gapIdx -1 = 每次随机缺口
+  }
+
   _stepHold(dt, ctx) {
-    const h = this.hold
-    const nowMs = this.now() * 1000
     if (this.now() < this.countdownUntil) return // 倒计时内不出人
-    if (h.nextAt === 0) {
+    const h = this.hold ??= this._initHold()
+    for (const slot of h.slots) this._stepSlot(slot, dt, ctx)
+  }
+
+  _stepSlot(slot, dt, ctx) {
+    const nowMs = this.now() * 1000
+    const activeBot = slot.bot && slot.bot.active && slot.bot.mode === 'peek' ? slot.bot : null
+
+    if (slot.nextAt === 0) { // 未排程 → 按渐进难度随机下一次出现时间
+      if (slot.gapIdx < 0) slot.gapIdx = Math.floor(Math.random() * this.map.gaps.length)
       const dMin = Math.max(250, this.params.delayMin * this._rampDelay)
       const dMax = Math.max(dMin + 100, this.params.delayMax * this._rampDelay)
-      h.nextAt = nowMs + rand(dMin, dMax)
-      h.gapIdx = Math.floor(Math.random() * this.map.gaps.length)
-      h.fromLeft = Math.random() > 0.5
+      slot.nextAt = nowMs + rand(dMin, dMax)
       return
     }
-    const activeBot = this.bots.find(b => b.active && b.mode === 'peek')
-    if (!activeBot && nowMs >= h.nextAt) {
-      const gap = this.map.gaps[h.gapIdx]
+
+    if (!activeBot && nowMs >= slot.nextAt) {
+      const gap = this.map.gaps[slot.gapIdx]
       const b = this._bot()
-      const startX = h.fromLeft ? gap.x0 - 2.2 : gap.x1 + 2.2
-      const endX = h.fromLeft ? gap.x1 + 2.2 : gap.x0 - 2.2
+      const fromLeft = Math.random() > 0.5
+      const startX = fromLeft ? gap.x0 - 2.2 : gap.x1 + 2.2
+      const endX = fromLeft ? gap.x1 + 2.2 : gap.x0 - 2.2
       b.place(startX, this.map.peekLineZ, 'peek')
       b.gapName = gap.name
+      b.slot = slot
       // 35% 概率"露头即缩"（jiggle peek）：拉出到中段后折返缩回墙后，
       // 逼玩家守住准星等第二拉，而不是追着扫
       b.peek = {
@@ -123,9 +139,12 @@ export class BotManager {
         stopAt: rand(0.3, 0.7), stopped: false, stopUntil: 0,
         retreatAt: Math.random() < 0.35 ? rand(0.45, 0.75) : 0, retreated: false,
       }
-      h.nextAt = 0
+      slot.bot = b
+      slot.nextAt = 0
       void ctx
+      return
     }
+
     if (activeBot?.peek) {
       const pk = activeBot.peek
       if (pk.stopUntil > this.now()) {
@@ -149,11 +168,8 @@ export class BotManager {
         }
         if ((pk.dir > 0 && activeBot.pos.x >= pk.endX) || (pk.dir < 0 && activeBot.pos.x <= pk.endX)) {
           activeBot.hide()
-          if (!this.bots.some(b => b.active)) {
-            const dMin = Math.max(250, this.params.delayMin * this._rampDelay)
-            const dMax = Math.max(dMin + 100, this.params.delayMax * this._rampDelay)
-            h.nextAt = this.now() * 1000 + rand(dMin, dMax)
-          }
+          slot.bot = null
+          slot.nextAt = 0 // 重新排程（渐进难度系数在排程时生效）
         }
       }
     }
@@ -203,8 +219,8 @@ export class BotManager {
     // Bot 开火视觉表现（枪口焰/曳光由 main 注入的 onBotFire 完成）→ 原地停留后缩回淡出
     this.onBotFire?.(bot)
     bot.startWon()
-    // 短暂停顿后重新开始架枪
-    this.hold.nextAt = this.now() * 1000 + 1200
+    // 该槽位短暂停顿后重新排程（双缺口模式下只停自己的槽位）
+    if (bot.slot) bot.slot.nextAt = this.now() * 1000 + 1200
   }
 
   registerShot() { this.stats.shots++ }

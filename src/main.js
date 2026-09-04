@@ -80,6 +80,7 @@ weapons.onHitBot = (bot, zone, dmg, killed, point) => {
     for (let i = killTimes.length - 2; i >= 0 && nowS - killTimes[i] <= 4.5; i--) streak++
     // 击杀确认音：爆头保持"先叮后确认"层次；连杀每级升半音（上限 +4）
     audio.kill(head ? 0.06 : 0, Math.pow(2, Math.min(streak - 1, 4) / 12))
+    crosshair.flashKill()
     hud.showKill({ streak, reaction: r, head })
     hud.addKillFeed(`BOT-${String(bot.id % 100).padStart(2, '0')}`, head, r)
     // 计分：击杀 100 + 爆头 50 + 连杀 ×25；飘字 + 结算用最长连杀

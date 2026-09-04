@@ -139,7 +139,7 @@ export class Menu {
         <button class="btn-continue btn-start" hidden>继续训练</button>
         <button class="btn-start">开始训练</button>
         <button class="btn-ghost btn-clear-records">清除纪录</button>
-        <span class="hint" style="margin:0">点击后锁定鼠标 · ESC 暂停</span>
+        <span class="hint" style="margin:0">点击后锁定鼠标 · ESC 暂停（可继续当前回合）</span>
       </div>
 
       <div class="hint">

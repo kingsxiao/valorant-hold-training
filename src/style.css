@@ -157,6 +157,8 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 
 /* 准星（DOM 绘制，锐利无开销） */
 #crosshair { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+#crosshair.kill-flash .ln { animation: killflash 0.28s ease-out; }
+@keyframes killflash { 0% { filter: brightness(3) drop-shadow(0 0 4px #fff); } 100% { filter: none; } }
 #crosshair .ln { position: absolute; background: #00ffb3; outline: 1px solid rgba(0, 0, 0, 0.85); }
 #crosshair .dot { position: absolute; border-radius: 50%; outline: 1px solid rgba(0, 0, 0, 0.85); }
 

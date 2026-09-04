@@ -77,4 +77,11 @@ export class Crosshair {
       d.style.transform = `translate(${bx + dx * px}px, ${by + dy * px}px)`
     }
   }
+
+  // 击杀瞬间准星闪白（命中确认；CSS 动画自带回落）
+  flashKill() {
+    this.el.classList.remove('kill-flash')
+    void this.el.offsetWidth
+    this.el.classList.add('kill-flash')
+  }
 }

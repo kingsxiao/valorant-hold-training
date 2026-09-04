@@ -127,6 +127,7 @@ export class Menu {
 
       <div class="actions">
         <button class="btn-start">开始训练</button>
+        <button class="btn-ghost btn-clear-records">清除纪录</button>
         <span class="hint" style="margin:0">点击后锁定鼠标 · ESC 暂停</span>
       </div>
 
@@ -251,6 +252,13 @@ export class Menu {
     }
 
     p.querySelector('.btn-start').onclick = () => this.onReady?.({ ...this.cfg })
+    // 清除全部个人纪录（最佳/最快/历史/上局）
+    p.querySelector('.btn-clear-records').onclick = () => {
+      for (const k of ['vht-bests-v1', 'vht-fastest-v1', 'vht-history-v1', 'vht-last-round-v1']) {
+        try { localStorage.removeItem(k) } catch { /* 忽略 */ }
+      }
+      this.show(this._live ?? null) // 刷新徽标
+    }
     this.syncButtons()
   }
 
@@ -283,6 +291,7 @@ export class Menu {
   show(live = null) {
     this.overlay.classList.add('visible')
     this.panel.hidden = false
+    this._live = live
     // 个人最佳徽标（有纪录才显示）
     const best = loadBests().hold ?? 0
     const badge = this.panel.querySelector('.menu-best')

@@ -11,6 +11,7 @@ const MAX_SPARKS = 400
 const MAX_PUFFS = 96
 const MAX_SHELLS = 22
 const MAX_RINGS = 6
+const MAX_HELMETS = 6
 
 // GPU 粒子材质：逐粒子 size/alpha/color 属性
 function particleMaterial(tex, blending) {
@@ -204,6 +205,18 @@ export class FX {
       this.rings.push({ mesh: s, life: 0, dur: 0.35, maxScale: 1.6 })
     }
     this.ringIdx = 0
+
+    // 头盔（爆头击杀飞出）：小半球池，带重力/落地反弹/自旋/淡出
+    const hGeo = new THREE.SphereGeometry(0.085, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2)
+    const hMat = new THREE.MeshStandardMaterial({ color: 0x3a3540, metalness: 0.55, roughness: 0.4, transparent: true })
+    this.helmets = []
+    for (let i = 0; i < MAX_HELMETS; i++) {
+      const m = new THREE.Mesh(hGeo, hMat.clone())
+      m.visible = false
+      scene.add(m)
+      this.helmets.push({ mesh: m, vel: new THREE.Vector3(), ang: new THREE.Vector3(), life: 0 })
+    }
+    this.helmetIdx = 0
   }
 
   // 每帧校准粒子尺寸（窗口/FOV 变化时调用；不调只影响点大小尺度）
@@ -353,6 +366,21 @@ export class FX {
   }
 
   // 抛壳（世界坐标抛壳口；refMatrix = 枪身世界矩阵 → 沿枪身右/上/后抛出）
+  // 爆头击杀：头盔从头部位置飞出（上抛 + 随机侧旋，落地反弹后淡出）
+  helmetPop(point) {
+    const p = point ?? { x: 0, y: 1.6, z: 0 }
+    const h = this.helmets[this.helmetIdx]
+    this.helmetIdx = (this.helmetIdx + 1) % MAX_HELMETS
+    const m = h.mesh
+    m.position.set(p.x, p.y + 0.08, p.z)
+    h.vel.set((vary() - 0.5) * 1.6, 2.6 + vary() * 1.2, (vary() - 0.5) * 1.6)
+    h.ang.set(vary() * 10 - 5, vary() * 10 - 5, vary() * 10 - 5)
+    h.life = 1.4
+    m.rotation.set(vary() * 3, vary() * 3, vary() * 3)
+    m.material.opacity = 1
+    m.visible = true
+  }
+
   shell(worldPos, refMatrix) {
     const s = this.shells[this.shellIdx]
     this.shellIdx = (this.shellIdx + 1) % MAX_SHELLS
@@ -415,6 +443,25 @@ export class FX {
       s.mesh.rotation.x += s.ang.x * dt
       s.mesh.rotation.y += s.ang.y * dt
       s.mesh.rotation.z += s.ang.z * dt
+    }
+    // 头盔物理：同抛壳的重力/反弹，外加淡出
+    for (const h of this.helmets) {
+      if (h.life <= 0) continue
+      h.life -= dt
+      if (h.life <= 0) { h.mesh.visible = false; continue }
+      h.vel.y -= 13 * dt
+      h.mesh.position.addScaledVector(h.vel, dt)
+      if (h.mesh.position.y < 0.05 && h.vel.y < 0) {
+        h.mesh.position.y = 0.05
+        h.vel.y *= -0.38
+        h.vel.x *= 0.7; h.vel.z *= 0.7
+        h.ang.multiplyScalar(0.55)
+        if (Math.abs(h.vel.y) < 0.5) h.vel.y = 0
+      }
+      h.mesh.rotation.x += h.ang.x * dt
+      h.mesh.rotation.y += h.ang.y * dt
+      h.mesh.rotation.z += h.ang.z * dt
+      if (h.life < 0.4) h.mesh.material.opacity = h.life / 0.4
     }
     // 冲击波环
     for (const r of this.rings) {

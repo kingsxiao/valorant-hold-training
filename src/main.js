@@ -64,8 +64,12 @@ weapons.onHitBot = (bot, zone, dmg, killed, point) => {
   hud.showHitmarker(head, killed)
   if (point) {
     hud.spawnDamage(point.x, point.y + 0.15, point.z, dmg, head, engine.camera, killed)
-    if (killed) fx.killBurst(point, head)
-    else fx.hitBurst(point, head)
+    if (killed) {
+      fx.killBurst(point, head)
+      if (head) fx.helmetPop(point) // 爆头击杀：头盔飞出
+    } else {
+      fx.hitBurst(point, head)
+    }
   }
   if (killed) {
     const r = bots.stats.lastReaction
@@ -321,7 +325,7 @@ engine.onContextLost = () => {
 
 // 调试句柄（自动化测试 / 控制台调参用）—— 仅开发构建暴露
 if (import.meta.env.DEV) {
-  window.__game = { engine, input, audio, world, map, player, weapons, bots, hud, menu, result, state, CONFIG }
+  window.__game = { engine, input, audio, world, map, player, weapons, bots, hud, menu, result, fx, state, CONFIG }
 }
 
 // 用户/开源资产（可选）：public/models/ 下的 agent.glb、viewmodel-vandal/phantom.glb

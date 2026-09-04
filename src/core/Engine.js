@@ -66,6 +66,12 @@ export class Engine {
     this.lastTime = 0
     this.running = false
 
+    // 自适应分辨率：autoRes 总开关 + 自动乘数（与用户手动缩放相乘）
+    this.autoRes = true
+    this.autoScale = 1
+    this.userScale = 1
+    this._resAccum = 0
+
     // FPS 统计（环形缓冲）
     this.frameTimes = new Float32Array(600)
     this.frameIdx = 0
@@ -158,6 +164,7 @@ export class Engine {
       this.lastTime = now
       if (dtMs > 250) dtMs = 250 // 切后台回来不追赶
       this._recordFrame(dtMs)
+      this._adaptiveRes(dtMs)
       this.preFrame?.(dtMs / 1000)
 
       this.accumulator += dtMs / 1000
@@ -218,7 +225,29 @@ export class Engine {
     this.scene.traverse(o => { if (o.material) o.material.needsUpdate = true })
   }
 
+  // 实际像素密度 = 手动分辨率缩放（菜单滑条）× 自适应乘数（掉帧自动降）
   setResolutionScale(s) {
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, CONFIG.graphics.maxPixelRatio) * s)
+    this.userScale = s
+    this._applyScale()
+  }
+
+  _applyScale() {
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, CONFIG.graphics.maxPixelRatio) * (this.userScale ?? 1) * (this.autoScale ?? 1))
+  }
+
+  // 自适应分辨率：帧率持续偏低时按 10% 步长降低渲染分辨率（最低 60%），
+  // 帧率恢复后缓慢回升 —— 低配机器上保住手感优先；autoRes=false 时不动
+  _adaptiveRes(dtMs) {
+    if (!this.autoRes) { this._resAccum = 0; if (this.autoScale !== 1) { this.autoScale = 1; this._applyScale() } return }
+    this._resAccum = (this._resAccum ?? 0) + dtMs
+    if (this._resAccum < 800) return
+    this._resAccum = 0
+    if (this.fps > 0 && this.fps < 48 && this.autoScale > 0.6) {
+      this.autoScale = Math.max(0.6, Math.round((this.autoScale - 0.1) * 100) / 100)
+      this._applyScale()
+    } else if (this.fps >= 58 && this.autoScale < 1) {
+      this.autoScale = Math.min(1, Math.round((this.autoScale + 0.05) * 100) / 100)
+      this._applyScale()
+    }
   }
 }

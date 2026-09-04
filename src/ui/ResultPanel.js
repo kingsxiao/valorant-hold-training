@@ -41,7 +41,13 @@ export class ResultPanel {
   show(summary) {
     const cell = (num, lbl) => `<div class="sum-cell"><div class="num">${num}</div><div class="lbl">${lbl}</div></div>`
     const c = computeStats(summary)
+    // 得分（击杀 100 + 爆头 50 + 连杀 ×25）与个人最佳 —— 破纪录绿色高亮
+    const scoreRow = summary.score != null
+      ? cell(`<span class="${summary.newBest ? 'new-best' : ''}">${summary.score}</span>`, summary.newBest ? '新纪录！' : '本局得分') +
+        cell(summary.best ?? 0, '个人最佳')
+      : ''
     this.grid.innerHTML =
+      scoreRow +
       cell(c.kills, '击杀') +
       cell(c.duelsLost, '对枪败') +
       cell(c.accuracy + '%', '命中率') +

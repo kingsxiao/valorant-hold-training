@@ -38,7 +38,11 @@ export class BotManager {
     this.bots.length = 0
     this.stats = this._freshStats()
     this.running = true
-    this.roundEndAt = this.params.roundSeconds > 0 ? this.now() + this.params.roundSeconds : 0
+    this.countdownUntil = this.now() + 3 // 开局 3s 倒计时：Bot 等 GO 再出，玩家可热身瞄点
+    // 回合计时从 GO 之后才开始（倒计时是准备时间）
+    this.roundEndAt = this.params.roundSeconds > 0
+      ? this.countdownUntil + this.params.roundSeconds
+      : 0
     this.hold = { nextAt: 0, gapIdx: 0, fromLeft: true }
     this.audio?.roundStart()
   }
@@ -67,6 +71,7 @@ export class BotManager {
     const ctx = { player: this.player, alpha, drive: null }
     this._stepHold(dt, ctx)
 
+    // 脚步声由 Bot.step 内置（与步频同步的空间音），这里不再重复触发
     for (const b of this.bots) {
       if (b.active || b.mode === 'dying') b.step(dt, ctx)
     }
@@ -81,10 +86,11 @@ export class BotManager {
     }
   }
 
-  // 架枪对枪：随机延迟 → 从缺口一侧拉出，横移穿过，概率性急停
+  // 架枪对枪：随机延迟 → 从缺口一侧拉出，横移穿过，概率性急停 / 露头即缩
   _stepHold(dt, ctx) {
     const h = this.hold
     const nowMs = this.now() * 1000
+    if (this.now() < this.countdownUntil) return // 倒计时内不出人
     if (h.nextAt === 0) {
       h.nextAt = nowMs + rand(this.params.delayMin, this.params.delayMax)
       h.gapIdx = Math.floor(Math.random() * this.map.gaps.length)
@@ -99,7 +105,13 @@ export class BotManager {
       const endX = h.fromLeft ? gap.x1 + 2.2 : gap.x0 - 2.2
       b.place(startX, this.map.peekLineZ, 'peek')
       b.gapName = gap.name
-      b.peek = { startX, endX, dir: Math.sign(endX - startX), stopAt: rand(0.3, 0.7), stopped: false, stopUntil: 0 }
+      // 35% 概率"露头即缩"（jiggle peek）：拉出到中段后折返缩回墙后，
+      // 逼玩家守住准星等第二拉，而不是追着扫
+      b.peek = {
+        startX, endX, dir: Math.sign(endX - startX),
+        stopAt: rand(0.3, 0.7), stopped: false, stopUntil: 0,
+        retreatAt: Math.random() < 0.35 ? rand(0.45, 0.75) : 0, retreated: false,
+      }
       h.nextAt = 0
       void ctx
     }
@@ -109,11 +121,20 @@ export class BotManager {
         activeBot.moveToward(0, dt) // 急停（counter-strafe）
       } else {
         activeBot.moveToward(pk.dir * CONFIG.bot.moveSpeed * this.params.speedMult, dt)
-        // 经过急停点且未停过 → 概率急停一瞬
-        const prog = Math.abs(activeBot.pos.x - pk.startX) / Math.abs(pk.endX - pk.startX)
-        if (!pk.stopped && prog > pk.stopAt && Math.random() < CONFIG.training.peekStopChance) {
-          pk.stopped = true
-          pk.stopUntil = this.now() + rand(0.15, 0.35)
+        const span = Math.abs(pk.endX - pk.startX)
+        if (span > 0.01) {
+          // 经过急停点且未停过 → 概率急停一瞬
+          const prog = Math.abs(activeBot.pos.x - pk.startX) / span
+          if (!pk.stopped && prog > pk.stopAt && Math.random() < CONFIG.training.peekStopChance) {
+            pk.stopped = true
+            pk.stopUntil = this.now() + rand(0.15, 0.35)
+          }
+          // 到达缩回点 → 折返（缩回后终点=起点，走到底即 hide）
+          if (pk.retreatAt && !pk.retreated && prog >= pk.retreatAt) {
+            pk.retreated = true
+            pk.endX = pk.startX
+            pk.dir = -pk.dir
+          }
         }
         if ((pk.dir > 0 && activeBot.pos.x >= pk.endX) || (pk.dir < 0 && activeBot.pos.x <= pk.endX)) {
           activeBot.hide()
@@ -148,9 +169,9 @@ export class BotManager {
     if (bot.hp <= 0) {
       this.stats.kills++
       bot.startDeath()
-      // 击杀确认：爆头击杀先"叮"再确认音（与游戏一致，爆头永远叮）；击杀音略延后让开层次
-      if (zone === 'head') { this.audio.hitMark(true); this.audio.kill(0.06) }
-      else this.audio.kill()
+      // 爆头击杀先"叮"（与游戏一致，爆头永远叮）；击杀确认音由 main 播放
+      // （那里才知道连杀数 → 按连杀升调，层次不变）
+      if (zone === 'head') this.audio.hitMark(true)
       this.onEvent?.('killed', { bot, zone })
       return true
     }
@@ -164,7 +185,9 @@ export class BotManager {
     this.audio.shot('rifle', { x: bot.pos.x, y: 1.3, z: bot.pos.z }, { pos: this.player.pos, yaw: this.player.yaw })
     this.player.onShot(100) // 致死伤害，内部已播放 hurt + death 音效
     this.onEvent?.('lost-duel', { bot })
-    bot.startDeath()
+    // Bot 开火视觉表现（枪口焰/曳光由 main 注入的 onBotFire 完成）→ 原地停留后缩回淡出
+    this.onBotFire?.(bot)
+    bot.startWon()
     // 短暂停顿后重新开始架枪
     this.hold.nextAt = this.now() * 1000 + 1200
   }

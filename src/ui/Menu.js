@@ -2,6 +2,7 @@ import { CONFIG } from '../core/Config.js'
 
 // 设置 / 暂停面板（DOM），设置持久化 localStorage；回合结算在 ResultPanel
 const LS_KEY = 'vht-settings-v1'
+const BEST_KEY = 'vht-bests-v1'
 
 export function loadSettings() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) ?? {} } catch { return {} }
@@ -12,6 +13,14 @@ export function saveSettings(patch) {
     localStorage.setItem(LS_KEY, JSON.stringify(s))
   } catch { /* 隐私模式/配额满：设置不持久化，仅本次会话生效 */ }
   return s
+}
+// 个人最佳成绩（按模式持久化，破纪录才有训练意义）
+export function loadBests() {
+  try { return JSON.parse(localStorage.getItem(BEST_KEY)) ?? {} } catch { return {} }
+}
+export function saveBest(mode, score) {
+  const b = loadBests(); b[mode] = score
+  try { localStorage.setItem(BEST_KEY, JSON.stringify(b)) } catch { /* 同上：仅本次会话生效 */ }
 }
 
 export class Menu {
@@ -31,6 +40,7 @@ export class Menu {
       showFps: true,
       shadows: CONFIG.graphics.shadows,
       resScale: 1.0,
+      autoRes: true,
       crosshair: {},
       ...loadSettings(),
     }
@@ -92,7 +102,9 @@ export class Menu {
         <span class="kbd">Ctrl/C</span> 蹲 · <span class="kbd">Space</span> 跳 ·
         <span class="kbd">1</span> 主武器 · <span class="kbd">2</span> 副武器 · <span class="kbd">3</span> 刀（6.75m/s）·
         <span class="kbd">左键</span> 开火（弹药无限）· <span class="kbd">右键</span> Classic 三连发<br/>
-        架枪对枪：目标从巷道缺口随机拉出，若在"反杀时间"内未击杀则判负 —— 比的就是你先开枪的能力。
+        开局 3 秒倒计时热身，GO 后才开始计时 · 准星随移动/开火实时扩张，收束时才是出手时机 ·
+        Bot 横移带脚步声，听声辨位先于目视 · 部分 Bot"露头即缩"，守住准星等第二拉 ·
+        架枪对枪：在"反杀时间"内未击杀则判负；击杀得分冲击个人最佳 ★
       </div>
     `
     this.overlay.appendChild(p)
@@ -124,7 +136,7 @@ export class Menu {
       cBox.appendChild(b)
     }
     const oBox = p.querySelector('[data-group=chOpts]')
-    for (const [key, label] of [['dot', '中心点'], ['tShape', 'T 形（去上线）'], ['outline', '描边']]) {
+    for (const [key, label] of [['dot', '中心点'], ['tShape', 'T 形（去上线）'], ['outline', '描边'], ['error', '动态误差（移动/开火扩张）']]) {
       const b = document.createElement('button')
       b.className = 'opt-btn'
       b.textContent = label
@@ -133,9 +145,9 @@ export class Menu {
       oBox.appendChild(b)
     }
 
-    // 画质开关（阴影 / FPS 显示）
+    // 画质开关（自适应分辨率 / 阴影 / FPS 显示）
     const gBox = p.querySelector('[data-group=gfxOpts]')
-    for (const [key, label] of [['shadows', '阴影'], ['showFps', 'FPS 面板']]) {
+    for (const [key, label] of [['autoRes', '自适应分辨率（掉帧自动降）'], ['shadows', '阴影'], ['showFps', 'FPS 面板']]) {
       const b = document.createElement('button')
       b.className = 'opt-btn'
       b.textContent = label

@@ -10,16 +10,18 @@ export class HUD {
     this.ammo = el(`<div id="hud-ammo" class="hud-block"><div class="wname">VANDAL</div><span class="mag">25</span> <span class="reserve">/ 75</span></div>`)
     this.mode = el(`<div id="hud-mode" class="hud-block"><div class="mode-title">架枪对枪</div><div class="mode-sub">60.0s</div></div>`)
     this.stats = el(`<div id="hud-stats" class="hud-block"></div>`)
+    this.score = el(`<div id="hud-score" class="hud-block"><span class="lbl">SCORE</span><b class="num">0</b><span class="best">BEST 0</span></div>`)
     this.hp = el(`<div id="hud-hp" class="hud-block"><span>100</span><div class="bar"><i></i></div></div>`)
     this.speed = el(`<div id="hud-speed">0.0 m/s</div>`)
     this.center = el(`<div id="hud-center"></div>`)
     this.toast = el(`<div id="hud-toast"></div>`)
     this.fpsBox = el(`<div id="hud-fps" class="hud-block"><span>-- fps</span><canvas width="150" height="36"></canvas></div>`)
     this.hurt = el(`<div id="hurt-vignette"></div>`)
+    this.dmgDir = el(`<div id="dmg-dir"><div class="arc"></div></div>`)
     this.hitmarker = el(`<div id="hitmarker"><div class="hm" style="transform:translate(6px,6px) rotate(45deg)"></div><div class="hm" style="transform:translate(-14px,6px) rotate(-45deg)"></div><div class="hm" style="transform:translate(6px,-7px) rotate(-45deg)"></div><div class="hm" style="transform:translate(-14px,-7px) rotate(45deg)"></div></div>`)
     this.killfeed = el(`<div id="killfeed"></div>`)
     this.killBanner = el(`<div id="kill-banner"></div>`)
-    for (const e of [this.ammo, this.mode, this.stats, this.hp, this.speed, this.center, this.toast, this.fpsBox, this.hurt, this.hitmarker, this.killfeed, this.killBanner]) root.appendChild(e)
+    for (const e of [this.ammo, this.mode, this.stats, this.score, this.hp, this.speed, this.center, this.toast, this.fpsBox, this.hurt, this.dmgDir, this.hitmarker, this.killfeed, this.killBanner]) root.appendChild(e)
 
     this.fpsCanvas = this.fpsBox.querySelector('canvas')
     this.fpsCtx = this.fpsCanvas.getContext('2d')
@@ -78,6 +80,28 @@ export class HUD {
   }
 
   setSpeed(v) { this.setText(this.speed, 'speed', v.toFixed(1) + ' m/s') }
+
+  // 实时分数 + 个人最佳（破纪录时高亮）
+  setScore(score, best, record = false) {
+    this.setText(this.score.querySelector('.num'), 'score', String(score))
+    this.setText(this.score.querySelector('.best'), 'best', (record ? '★ NEW BEST ' : 'BEST ') + best)
+    this.score.classList.toggle('record', record)
+  }
+
+  // 分数跳动反馈（得分瞬间）
+  popScore() {
+    this.score.classList.remove('pop')
+    void this.score.offsetWidth
+    this.score.classList.add('pop')
+  }
+
+  // 受击方向指示：弧形红圈指向伤害来源（angleRad 为相对玩家视角的世界方位角）
+  showDamageDir(angleRad) {
+    this.dmgDir.style.transform = `rotate(${angleRad * 180 / Math.PI}deg)`
+    this.dmgDir.classList.remove('show')
+    void this.dmgDir.offsetWidth
+    this.dmgDir.classList.add('show')
+  }
 
   setCenter(html) {
     if (this._cache.center !== html) { this._cache.center = html; this.center.innerHTML = html }

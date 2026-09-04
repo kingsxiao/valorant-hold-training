@@ -248,6 +248,7 @@ export class WeaponSystem {
     this.equipUntil = this.now + CONFIG.weapons[id].equipTime * (instant ? 0 : 1)
     this.sprayIndex = 0
     this.weaponMeshFor(id)
+    if (!instant && this.audio?.ctx) this.audio.equip() // 切枪机械声（开局静默，避免未解锁的 AudioContext）
     this.onAmmoChange?.(this)
   }
 

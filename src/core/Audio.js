@@ -281,16 +281,17 @@ export class AudioSys {
     }
   }
 
-  kill(delay = 0) {
+  kill(delay = 0, pitch = 1) {
     this.ensure()
     if (!this.ctx) return
-    if (this.user.kill) { this._playBuffer(this.user.kill, this.master, { delay }); return }
+    if (this.user.kill) { this._playBuffer(this.user.kill, this.master, { delay, rate: pitch }); return }
     // 击杀确认：低频"分量"落点 + 撕裂脆层 + 上行铃尾（确认感）+ 高频光泽
-    this._thump(this.master, { freq: 170, freqEnd: 44, dur: 0.13, gain: 0.55, delay })
-    this._noiseBurst(this.master, { dur: 0.09, freq: 700, freqEnd: 170, q: 0.9, gain: 0.4, delay })
+    // pitch：连杀每级升半音（上限 +4），听觉反馈连杀节奏
+    this._thump(this.master, { freq: 170 * pitch, freqEnd: 44, dur: 0.13, gain: 0.55, delay })
+    this._noiseBurst(this.master, { dur: 0.09, freq: 700 * pitch, freqEnd: 170, q: 0.9, gain: 0.4, delay })
     this._noiseBurst(this.master, { dur: 0.05, freq: 6500, q: 0.8, gain: 0.16, type: 'highpass', delay })
-    this._osc(this.master, { type: 'triangle', freq: 1568, dur: 0.07, gain: 0.2, delay: delay + 0.045 })
-    this._metal(this.master, 2093, 0.24, 0.18, delay + 0.055)
+    this._osc(this.master, { type: 'triangle', freq: 1568 * pitch, dur: 0.07, gain: 0.2, delay: delay + 0.045 })
+    this._metal(this.master, 2093 * pitch, 0.24, 0.18, delay + 0.055)
   }
 
   death() { // 你被击杀
@@ -328,5 +329,26 @@ export class AudioSys {
     if (this.user.round_start) { this._playBuffer(this.user.round_start, this.master); return }
     this._osc(this.master, { type: 'sine', freq: 880, dur: 0.1, gain: 0.35 })
     this._osc(this.master, { type: 'sine', freq: 1174, dur: 0.16, gain: 0.38, delay: 0.13 })
+  }
+
+  // 倒计时：前 3 秒低音 tick，最后一声高音"开始"提示
+  countTick(final = false) {
+    this.ensure()
+    if (!this.ctx) return
+    if (final) {
+      this._osc(this.master, { type: 'square', freq: 880, dur: 0.12, gain: 0.3 })
+      this._osc(this.master, { type: 'square', freq: 1760, dur: 0.2, gain: 0.22, delay: 0.02 })
+    } else {
+      this._osc(this.master, { type: 'square', freq: 660, dur: 0.07, gain: 0.22 })
+    }
+  }
+
+  // 切枪：短促机械"咔啦"声（抽枪 + 上膛提示）
+  equip() {
+    this.ensure()
+    if (!this.ctx) return
+    this._noiseBurst(this.master, { dur: 0.035, freq: 2400, q: 1.8, gain: 0.32 })
+    this._noiseBurst(this.master, { dur: 0.025, freq: 3600, q: 2.2, gain: 0.28, delay: 0.09 })
+    this._osc(this.master, { type: 'square', freq: 480, dur: 0.02, gain: 0.1, delay: 0.1 })
   }
 }

@@ -419,7 +419,7 @@ export class Bot {
     }
   }
 
-  get invulnerable() { return this.now() < (this.spawnGuardUntil ?? 0) || !this.active || this.mode === 'dying' }
+  get invulnerable() { return this.now() < (this.spawnGuardUntil ?? 0) || !this.active || this.mode === 'dying' || this.mode === 'won' }
   now() { return this.manager ? this.manager.now() : performance.now() / 1000 } // 跟随游戏时钟（暂停时冻结）
 
   moveToward(targetVelX, dt) {
@@ -447,6 +447,17 @@ export class Bot {
     this._restoreEmissive()
   }
 
+  // 对枪获胜（击中玩家）：原地停留（枪口焰/曳光由 manager.onBotFire 表现）后缩回淡出
+  // —— 不再"赢了却播放死亡动画"的怪象
+  startWon() {
+    this.mode = 'won'
+    this.wonT = 0
+    this.velX = 0
+    this.flinch = 0
+    this.hitFlash = 0
+    this._restoreEmissive()
+  }
+
   // 还原各材质的原始自发光（受击闪红后的恢复路径统一走这里）
   _restoreEmissive() {
     for (const m of Object.values(this.mats)) {
@@ -459,6 +470,24 @@ export class Bot {
   step(dt, ctx) {
     this.prevPos.copy(this.pos)
     if (!this.active && this.mode !== 'dying') return
+
+    if (this.mode === 'won') {
+      // 获胜停留：转向玩家（复用 step 的平滑转向），短暂停留后淡出缩回
+      this.wonT += dt
+      const p = ctx.player
+      const targetYaw = Math.atan2(-(p.pos.x - this.pos.x), -(p.pos.z - this.pos.z))
+      let dy = targetYaw - this.mesh.rotation.y
+      dy = Math.atan2(Math.sin(dy), Math.cos(dy))
+      this.mesh.rotation.y += dy * Math.min(1, dt * 14)
+      this.mesh.rotation.x = Math.sin(Math.min(1, this.wonT * 6) * Math.PI) * 0.06 // 开火后坐轻晃
+      if (this.wonT > 0.55) {
+        const o = Math.max(0, 1 - (this.wonT - 0.55) / 0.4)
+        this.setOpacity(o)
+        this.blobMat.opacity = o
+      }
+      if (this.wonT > 0.95) this.hide()
+      return
+    }
 
     if (this.mode === 'dying') {
       this.deathT += dt

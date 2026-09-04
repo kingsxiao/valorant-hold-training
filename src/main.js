@@ -1,3 +1,4 @@
+import * as THREE from 'three'
 import { CONFIG } from './core/Config.js'
 import { Engine } from './core/Engine.js'
 import { Input } from './core/Input.js'
@@ -10,7 +11,7 @@ import { WeaponSystem } from './weapons/WeaponSystem.js'
 import { BotManager, MODE_INFO } from './entities/BotManager.js'
 import { Crosshair } from './ui/Crosshair.js'
 import { HUD } from './ui/HUD.js'
-import { Menu } from './ui/Menu.js'
+import { Menu, loadBests, saveBest } from './ui/Menu.js'
 import { ResultPanel } from './ui/ResultPanel.js'
 import { loadUserAssets } from './core/UserAssets.js'
 import { Bot } from './entities/Bot.js'
@@ -45,6 +46,8 @@ const result = new ResultPanel({
 const state = {
   playing: false,
   cfg: menu.cfg, // 共享配置对象（菜单实时改）
+  score: 0,      // 本局得分：击杀 100 + 爆头 50 + 连杀 ×25
+  bestAtStart: 0 // 本局开始时的个人最佳（用于破纪录判断）
 }
 
 // ---- 武器系统 ----
@@ -53,8 +56,8 @@ const weapons = new WeaponSystem({
 })
 weapons.onShotFired = () => bots.registerShot()
 
-// 击杀反馈主链路：命中标记 / 伤害数字 / 粒子爆发 / 击杀横幅 / 击杀信息流
-// （命中/击杀音效统一在 BotManager.damage 内播放，这里不再重复触发）
+// 击杀反馈主链路：命中标记 / 伤害数字 / 粒子爆发 / 击杀横幅 / 击杀信息流 / 得分
+// （命中"叮"声在 BotManager.damage 内；击杀确认音在这里播 —— 只有这里知道连杀数）
 weapons.onHitBot = (bot, zone, dmg, killed, point) => {
   const head = zone === 'head'
   hud.showHitmarker(head, killed)
@@ -65,27 +68,55 @@ weapons.onHitBot = (bot, zone, dmg, killed, point) => {
   }
   if (killed) {
     const r = bots.stats.lastReaction
-    const nowS = performance.now() / 1000
+    const nowS = bots.now() // 游戏时钟：连杀窗口不受暂停影响
     killTimes.push(nowS)
     if (killTimes.length > 32) killTimes.shift()
     let streak = 1
     for (let i = killTimes.length - 2; i >= 0 && nowS - killTimes[i] <= 4.5; i--) streak++
+    // 击杀确认音：爆头保持"先叮后确认"层次；连杀每级升半音（上限 +4）
+    audio.kill(head ? 0.06 : 0, Math.pow(2, Math.min(streak - 1, 4) / 12))
     hud.showKill({ streak, reaction: r, head })
     hud.addKillFeed(`BOT-${String(bot.id % 100).padStart(2, '0')}`, head, r)
+    state.score += 100 + (head ? 50 : 0) + (streak - 1) * 25
+    hud.setScore(state.score, state.bestAtStart, state.score > state.bestAtStart)
+    hud.popScore()
   }
 }
 weapons.onAmmoChange = () => hud.setAmmo(weapons.weapon)
 // 枪口焰精灵/点光由 FX.muzzle 按 viewmodel 实测枪口世界坐标点亮（不再挂相机固定偏移）
 
+// 对枪失败时 Bot 的开火视觉表现：枪口焰 + 曳光射向玩家 + 轻微视角冲击
+// （敌方枪声在 BotManager._loseDuel 内从 Bot 位置空间化播放）
+bots.onBotFire = (bot) => {
+  const dx = player.pos.x - bot.pos.x, dz = player.pos.z - bot.pos.z
+  const d = Math.max(0.001, Math.hypot(dx, dz))
+  const from = { x: bot.pos.x + dx / d * 0.55, y: 1.31, z: bot.pos.z + dz / d * 0.55 }
+  fx.muzzle(from)
+  fx.tracer(new THREE.Vector3(from.x, from.y, from.z), engine.camera.position)
+  player.addPunch(0.02, (Math.random() - 0.5) * 0.01)
+}
+
 bots.onEvent = (type, data) => {
   if (type === 'lost-duel') {
     hud.hurtFlash()
     hud.toastMsg(`对枪失败 —— 慢了（${data.bot.gapName ?? '?'} 缺口）`, 1400)
+    // 受击方向指示：弧形红圈指向来源 Bot
+    const b = data.bot
+    if (b) {
+      const dx = b.pos.x - player.pos.x, dz = b.pos.z - player.pos.z
+      const fx_ = -Math.sin(player.yaw), fz_ = -Math.cos(player.yaw) // 玩家前向
+      const rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw)    // 玩家右向
+      hud.showDamageDir(Math.atan2(dx * rx + dz * rz, dx * fx_ + dz * fz_))
+    }
   } else if (type === 'round-end') {
     state.playing = false
     document.exitPointerLock?.()
     menu.hide()
-    result.show(data)
+    // 个人最佳落盘：破纪录时结算面板绿色高亮
+    const prev = loadBests().hold ?? 0
+    const newBest = state.score > prev && state.score > 0
+    if (newBest) saveBest('hold', state.score)
+    result.show({ ...data, score: state.score, best: Math.max(prev, state.score), newBest })
   }
 }
 
@@ -122,6 +153,7 @@ menu.applyAll = () => {
   bots.params.speedMult = cfg.speedMult
   bots.params.aimTimeMs = cfg.aimTimeMs
   bots.params.roundSeconds = cfg.roundSeconds
+  engine.autoRes = cfg.autoRes !== false
   engine.setResolutionScale(cfg.resScale ?? 1)
   engine.setShadows(!!cfg.shadows)
   hud.fpsBox.style.display = cfg.showFps === false ? 'none' : ''
@@ -143,6 +175,13 @@ function startRound(cfg) {
   weapons.primaryId = cfg.primary
   weapons.secondaryId = cfg.secondary
   weapons.switchTo(cfg.primary, true)
+
+  // 计分：清零并载入个人最佳（倒计时期间 HUD 即显示）
+  state.score = 0
+  state.bestAtStart = loadBests().hold ?? 0
+  hud.setScore(0, state.bestAtStart, false)
+  countLast = null
+  goShowUntil = 0
 
   bots.resetRound()
   hud.setAmmo(weapons.weapon)
@@ -178,6 +217,10 @@ engine.simStep = (dt) => {
 }
 
 const _hudAccum = { stats: 0, fpsText: 0 }
+// 倒计时显示状态（渲染帧维护；tick 音在秒变化沿触发）
+let countLast = null
+let goShowUntil = 0
+
 engine.renderFrame = (alpha, dtMs) => {
   const dt = dtMs / 1000
   player.updateCamera(engine.camera, alpha)
@@ -185,6 +228,30 @@ engine.renderFrame = (alpha, dtMs) => {
   fx.calibrate(innerWidth, innerHeight, engine.camera.fov) // 粒子点大小随窗口/FOV 校准
   fx.update(dt)
   hud.updateDamage(dt)
+
+  // 动态准星：当前散布（度）→ 屏幕像素，实时可视化误差
+  crosshair.setSpread(
+    state.playing && weapons.weapon.slot !== 'melee' ? weapons.currentSpread() : 0,
+    engine.camera.fov, innerHeight,
+  )
+
+  // 开局倒计时：3 · 2 · 1 · GO（Bot 在 GO 前不出人，回合计时从 GO 起算）
+  if (state.playing && bots.running) {
+    const nowS = bots.now()
+    const remain = bots.countdownUntil - nowS
+    if (remain > 0) {
+      const n = Math.ceil(remain)
+      if (n !== countLast) { countLast = n; audio.countTick(false) }
+      hud.setCenter(`<div class="big">${n}</div><div style="opacity:.55;font-size:12px;letter-spacing:4px;margin-top:4px">GET READY</div>`)
+    } else if (countLast !== null || goShowUntil > nowS) {
+      if (countLast !== null) { audio.countTick(true); goShowUntil = nowS + 0.55 }
+      countLast = null
+      hud.setCenter(`<div class="big" style="color:#7dff9a;text-shadow:0 2px 18px rgba(125,255,154,.4),0 2px 10px rgba(0,0,0,.7)">GO!</div>`)
+      if (nowS > goShowUntil) hud.setCenter('')
+    }
+  } else if (!state.playing) {
+    hud.setCenter('')
+  }
 
   // HUD（节流写入，避免每帧 DOM 重排）
   hud.setSpeed(player.moveSpeed)
@@ -199,7 +266,7 @@ engine.renderFrame = (alpha, dtMs) => {
   _hudAccum.fpsText += dtMs
   if (_hudAccum.fpsText > 500) {
     _hudAccum.fpsText = 0
-    hud.setFpsText(`${engine.fps} fps`)
+    hud.setFpsText(`${engine.fps} fps` + (engine.autoScale < 1 ? ` · ${Math.round(engine.autoScale * 100)}%` : ''))
   }
 }
 
@@ -215,7 +282,7 @@ engine.onContextLost = () => {
 
 // 调试句柄（自动化测试 / 控制台调参用）—— 仅开发构建暴露
 if (import.meta.env.DEV) {
-  window.__game = { engine, input, audio, world, map, player, weapons, bots, hud, state, CONFIG }
+  window.__game = { engine, input, audio, world, map, player, weapons, bots, hud, menu, result, state, CONFIG }
 }
 
 // 用户/开源资产（可选）：public/models/ 下的 agent.glb、viewmodel-vandal/phantom.glb

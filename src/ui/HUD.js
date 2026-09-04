@@ -11,6 +11,7 @@ export class HUD {
     this.mode = el(`<div id="hud-mode" class="hud-block"><div class="mode-title">架枪对枪</div><div class="mode-sub">60.0s</div></div>`)
     this.stats = el(`<div id="hud-stats" class="hud-block"></div>`)
     this.score = el(`<div id="hud-score" class="hud-block"><span class="lbl">SCORE</span><b class="num">0</b><span class="best">BEST 0</span></div>`)
+    this.scoreFloat = el(`<div id="hud-score-float"></div>`)
     this.hp = el(`<div id="hud-hp" class="hud-block"><span>100</span><div class="bar"><i></i></div></div>`)
     this.speed = el(`<div id="hud-speed">0.0 m/s</div>`)
     this.center = el(`<div id="hud-center"></div>`)
@@ -21,7 +22,7 @@ export class HUD {
     this.hitmarker = el(`<div id="hitmarker"><div class="hm" style="transform:translate(6px,6px) rotate(45deg)"></div><div class="hm" style="transform:translate(-14px,6px) rotate(-45deg)"></div><div class="hm" style="transform:translate(6px,-7px) rotate(-45deg)"></div><div class="hm" style="transform:translate(-14px,-7px) rotate(45deg)"></div></div>`)
     this.killfeed = el(`<div id="killfeed"></div>`)
     this.killBanner = el(`<div id="kill-banner"></div>`)
-    for (const e of [this.ammo, this.mode, this.stats, this.score, this.hp, this.speed, this.center, this.toast, this.fpsBox, this.hurt, this.dmgDir, this.hitmarker, this.killfeed, this.killBanner]) root.appendChild(e)
+    for (const e of [this.ammo, this.mode, this.stats, this.score, this.scoreFloat, this.hp, this.speed, this.center, this.toast, this.fpsBox, this.hurt, this.dmgDir, this.hitmarker, this.killfeed, this.killBanner]) root.appendChild(e)
 
     this.fpsCanvas = this.fpsBox.querySelector('canvas')
     this.fpsCtx = this.fpsCanvas.getContext('2d')
@@ -93,6 +94,22 @@ export class HUD {
     this.score.classList.remove('pop')
     void this.score.offsetWidth
     this.score.classList.add('pop')
+  }
+
+  // 得分飘字：+N 从分数板下方升起消散
+  floatScore(delta) {
+    const e = this.scoreFloat
+    e.textContent = '+' + delta
+    e.classList.remove('go')
+    void e.offsetWidth
+    e.classList.add('go')
+  }
+
+  // 回合计时告急（≤10s）：变红强调
+  setTimerUrgent(on) {
+    if (this._cache.timerUrgent === on) return
+    this._cache.timerUrgent = on
+    this.mode.querySelector('.mode-sub').classList.toggle('urgent', on)
   }
 
   // 受击方向指示：弧形红圈指向伤害来源（angleRad 为相对玩家视角的世界方位角）

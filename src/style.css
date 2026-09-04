@@ -107,6 +107,19 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 #hud-score.pop .num { animation: scorepop 0.3s ease-out; }
 @keyframes scorepop { 0% { transform: scale(1.3); color: #ffc94d; } 100% { transform: scale(1); } }
 
+/* 得分飘字：+N 升起消散 */
+#hud-score-float { position: absolute; left: 50%; top: 108px; transform: translateX(-50%); font-family: var(--font-num); font-size: 22px; font-weight: 700; color: #ffc94d; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7); opacity: 0; pointer-events: none; }
+#hud-score-float.go { animation: scorefloat 0.9s ease-out forwards; }
+@keyframes scorefloat {
+  0% { opacity: 0; transform: translateX(-50%) translateY(10px) scale(0.8); }
+  15% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1.1); }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-34px) scale(1); }
+}
+
+/* 回合计时告急 */
+#hud-mode .mode-sub.urgent { color: var(--accent); opacity: 1; font-weight: 700; animation: urgentblink 1s steps(2, jump-none) infinite; }
+@keyframes urgentblink { 0% { opacity: 1; } 50% { opacity: 0.45; } }
+
 /* 受击方向指示：以屏幕中心为圆心的红弧指向伤害来源 */
 #dmg-dir { position: absolute; left: 50%; top: 50%; width: 230px; height: 230px; margin: -115px 0 0 -115px; opacity: 0; pointer-events: none; }
 #dmg-dir .arc { position: absolute; inset: 0; border-radius: 50%; border: 4px solid transparent; border-top-color: rgba(255, 70, 85, 0.95); filter: drop-shadow(0 0 8px rgba(255, 70, 85, 0.8)); }
@@ -250,6 +263,28 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 }
 .head-badge small { display: block; font-size: 10px; font-weight: 600; letter-spacing: 4px; color: rgba(236, 232, 225, 0.55); }
 
+/* 个人最佳徽标（菜单头部，有纪录才显示） */
+.menu-best {
+  flex: none; align-self: center;
+  font-size: 12.5px; letter-spacing: 2px; color: #ffc94d;
+  border: 1px solid rgba(255, 201, 77, 0.45); background: rgba(255, 201, 77, 0.08);
+  padding: 5px 12px;
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+}
+.menu-best b { font-family: var(--font-num); font-size: 16px; margin-left: 2px; }
+
+/* 暂停时的本局进行中战绩条 */
+.menu-live {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-top: 14px; padding: 9px 16px;
+  background: rgba(255, 70, 85, 0.07); border-left: 3px solid var(--accent);
+  font-family: var(--font-num); font-size: 13px; letter-spacing: 1px;
+}
+.menu-live[hidden] { display: none; }
+.menu-live .ml-title { font-size: 11px; font-weight: 700; letter-spacing: 4px; color: var(--accent); margin-right: 8px; }
+.menu-live b { font-size: 19px; font-weight: 700; }
+.menu-live i { font-style: normal; opacity: 0.5; margin-right: 10px; font-family: var(--font-body); }
+
 /* 分节标题：红色小方块 + 延伸细线 */
 .panel h2 {
   display: flex; align-items: center; gap: 10px;
@@ -332,6 +367,9 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
   padding: 18px 10px 15px;
 }
 .result-panel .sum-cell .num { font-size: 38px; }
+/* 训练建议（按短板规则生成，无短板则隐藏） */
+.tip-box { margin-top: 18px; padding: 11px 16px; background: rgba(255, 201, 77, 0.07); border-left: 3px solid #ffc94d; font-size: 13.5px; line-height: 1.65; color: rgba(236, 232, 225, 0.92); }
+.tip-box::before { content: '训练建议'; display: block; font-size: 10px; font-weight: 700; letter-spacing: 4px; color: #ffc94d; margin-bottom: 3px; }
 .summary-grid { display: grid; gap: 10px; margin-top: 8px; }
 .sum-cell {
   position: relative;

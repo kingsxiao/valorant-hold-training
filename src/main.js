@@ -77,9 +77,13 @@ weapons.onHitBot = (bot, zone, dmg, killed, point) => {
     audio.kill(head ? 0.06 : 0, Math.pow(2, Math.min(streak - 1, 4) / 12))
     hud.showKill({ streak, reaction: r, head })
     hud.addKillFeed(`BOT-${String(bot.id % 100).padStart(2, '0')}`, head, r)
-    state.score += 100 + (head ? 50 : 0) + (streak - 1) * 25
+    // 计分：击杀 100 + 爆头 50 + 连杀 ×25；飘字 + 结算用最长连杀
+    const gain = 100 + (head ? 50 : 0) + (streak - 1) * 25
+    state.score += gain
+    bots.stats.maxStreak = Math.max(bots.stats.maxStreak, streak)
     hud.setScore(state.score, state.bestAtStart, state.score > state.bestAtStart)
     hud.popScore()
+    hud.floatScore(gain)
   }
 }
 weapons.onAmmoChange = () => hud.setAmmo(weapons.weapon)
@@ -111,6 +115,7 @@ bots.onEvent = (type, data) => {
   } else if (type === 'round-end') {
     state.playing = false
     document.exitPointerLock?.()
+    audio.roundEnd() // 结束音与开局音呼应
     menu.hide()
     // 个人最佳落盘：破纪录时结算面板绿色高亮
     const prev = loadBests().hold ?? 0
@@ -138,7 +143,11 @@ input.onLockChange = (locked) => {
     state.playing = true
   } else if (state.playing) {
     state.playing = false
-    menu.show()
+    // 暂停面板顶部带一条"本局进行中"战绩（回合已结束/未开局时无数据）
+    const midRound = bots.running && bots.roundEndAt > bots.now()
+    menu.show(midRound
+      ? { score: state.score, kills: bots.stats.kills, duelsLost: bots.stats.duelsLost, maxStreak: bots.stats.maxStreak }
+      : null)
   }
 }
 
@@ -256,10 +265,12 @@ engine.renderFrame = (alpha, dtMs) => {
   // HUD（节流写入，避免每帧 DOM 重排）
   hud.setSpeed(player.moveSpeed)
   hud.setHP(player.hp)
+  const remainS = bots.params.roundSeconds > 0 && bots.running && bots.roundEndAt > 0
+    ? Math.max(0, bots.roundEndAt - bots.now())
+    : null
   hud.setMode(MODE_INFO.label,
-    bots.params.roundSeconds > 0 && bots.running && bots.roundEndAt > 0
-      ? `${Math.max(0, bots.roundEndAt - bots.now()).toFixed(1)}s` // 游戏时钟：暂停时倒计时冻结
-      : MODE_INFO.desc)
+    remainS != null ? `${remainS.toFixed(1)}s` : MODE_INFO.desc) // 游戏时钟：暂停时倒计时冻结
+  hud.setTimerUrgent(remainS != null && remainS <= 10 && state.playing) // 最后 10s 红色告急
   _hudAccum.stats += dtMs
   if (_hudAccum.stats > 200) { _hudAccum.stats = 0; hud.setStats(bots.stats, engine) }
   hud.pushFps(dtMs)

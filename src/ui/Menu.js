@@ -57,8 +57,11 @@ export class Menu {
           <h1>架枪训练 <em>HOLD ANGLE TRAINER</em></h1>
           <div class="tagline">WebGL 第一人称训练器 · 移速/射速/后坐力按 Valorant 公开参数调校 · 原创程序化建模</div>
         </div>
+        <div class="menu-best" hidden></div>
         <div class="head-badge">VHT // 01<small>AIM · HOLD · WIN</small></div>
       </header>
+
+      <div class="menu-live" hidden></div>
 
       <h2>武器</h2>
       <div class="opt-grid" data-group="primary"></div>
@@ -233,9 +236,26 @@ export class Menu {
     }
   }
 
-  show() {
+  show(live = null) {
     this.overlay.classList.add('visible')
     this.panel.hidden = false
+    // 个人最佳徽标（有纪录才显示）
+    const best = loadBests().hold ?? 0
+    const badge = this.panel.querySelector('.menu-best')
+    badge.hidden = !(best > 0)
+    if (best > 0) badge.innerHTML = `★ 个人最佳 <b>${best}</b>`
+    // 暂停时的本局进行中战绩（ESC 呼出时有值；首屏/结算后为 null）
+    const liveBox = this.panel.querySelector('.menu-live')
+    if (live) {
+      liveBox.innerHTML = `<span class="ml-title">本局进行中</span>` +
+        `<b>${live.score ?? 0}</b><i>分</i>` +
+        `<b>${live.kills ?? 0}</b><i>击杀</i>` +
+        `<b>${live.duelsLost ?? 0}</b><i>对枪败</i>` +
+        (live.maxStreak > 1 ? `<b>×${live.maxStreak}</b><i>连杀</i>` : '')
+      liveBox.hidden = false
+    } else {
+      liveBox.hidden = true
+    }
     this.refreshSliders()
     this.syncButtons()
   }

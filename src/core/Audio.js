@@ -331,6 +331,14 @@ export class AudioSys {
     this._osc(this.master, { type: 'sine', freq: 1174, dur: 0.16, gain: 0.38, delay: 0.13 })
   }
 
+  roundEnd() { // 回合结束：下行双音与开局音呼应，落点收尾
+    this.ensure()
+    if (!this.ctx) return
+    this._osc(this.master, { type: 'sine', freq: 1174, dur: 0.12, gain: 0.3 })
+    this._osc(this.master, { type: 'sine', freq: 880, dur: 0.22, gain: 0.32, delay: 0.14 })
+    this._osc(this.master, { type: 'sine', freq: 440, dur: 0.3, gain: 0.16, delay: 0.3 })
+  }
+
   // 倒计时：前 3 秒低音 tick，最后一声高音"开始"提示
   countTick(final = false) {
     this.ensure()

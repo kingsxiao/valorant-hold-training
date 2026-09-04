@@ -1,6 +1,6 @@
 // 回合结算面板：与设置面板（Menu）分离的独立结算界面
 // 回合结束 → show(stats)；「再来一局」重开 / 「调整设置」回到 Menu
-import { computeStats } from '../core/stats.js'
+import { computeStats, coachingTip } from '../core/stats.js'
 
 export class ResultPanel {
   constructor({ overlay, onRestart, onSettings }) {
@@ -25,6 +25,8 @@ export class ResultPanel {
 
       <div class="summary-grid"></div>
 
+      <div class="tip-box" hidden></div>
+
       <div class="actions">
         <button class="btn-start">再来一局</button>
         <button class="btn-ghost">调整设置</button>
@@ -34,6 +36,7 @@ export class ResultPanel {
     this.overlay.appendChild(p)
     this.panel = p
     this.grid = p.querySelector('.summary-grid')
+    this.tipBox = p.querySelector('.tip-box')
     p.querySelector('.btn-start').onclick = () => this.onRestart?.()
     p.querySelector('.btn-ghost').onclick = () => this.onSettings?.()
   }
@@ -52,8 +55,13 @@ export class ResultPanel {
       cell(c.duelsLost, '对枪败') +
       cell(c.accuracy + '%', '命中率') +
       cell(c.headshotRate + '%', '爆头率') +
+      cell(c.maxStreak > 1 ? '×' + c.maxStreak : '—', '最长连杀') +
       cell(c.avgReactionMs ? c.avgReactionMs + 'ms' : '—', '平均反应') +
       cell(c.bestReactionMs ? c.bestReactionMs + 'ms' : '—', '最快反应')
+    // 训练建议：按短板挑一条可执行的（没有明显短板则不显示）
+    const tip = coachingTip(c)
+    this.tipBox.textContent = tip ?? ''
+    this.tipBox.hidden = !tip
     this.panel.hidden = false
     this.overlay.classList.add('visible')
   }

@@ -10,10 +10,9 @@ describe('武器数值表完整性（CONFIG.weapons）', () => {
       const w = CONFIG.weapons[id]
       expect(w.name, id).toBeTruthy()
       expect(w.fireRate, id).toBeGreaterThan(0)
-      expect(w.magSize, id).toBeGreaterThan(0)
+      expect(w.magSize, id).toBeGreaterThan(0) // 弹药无限 = Infinity
       expect(w.slot, id).toBeTruthy()
       if (w.slot !== 'melee') {
-        expect(w.reloadTime, id).toBeGreaterThan(0)
         expect(w.equipTime, id).toBeGreaterThan(0)
         expect(w.spread.stand, id).toBeLessThan(w.spread.run)
         expect(w.recoil.recoverTime, id).toBeGreaterThan(0)

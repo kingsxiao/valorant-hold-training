@@ -107,7 +107,7 @@ export class AudioSys {
     if (this._loadStarted) return
     this._loadStarted = true
     const names = ['shot_rifle', 'shot_phantom', 'shot_pistol', 'shot_ghost', 'shot_handcannon', 'shot_knife',
-      'headshot', 'kill', 'death', 'hurt', 'footstep', 'reload', 'empty', 'round_start']
+      'headshot', 'kill', 'death', 'hurt', 'footstep', 'round_start']
     await Promise.all(names.map(async (name) => {
       for (const ext of ['mp3', 'wav', 'ogg']) {
         try {
@@ -308,25 +308,6 @@ export class AudioSys {
     if (this.user.hurt) { this._playBuffer(this.user.hurt, this.master); return }
     this._osc(this.master, { type: 'triangle', freq: 210, freqEnd: 80, dur: 0.12, gain: 0.6 })
     this._noiseBurst(this.master, { dur: 0.05, freq: 2500, q: 0.7, gain: 0.25 })
-  }
-
-  reload() {
-    this.ensure()
-    if (!this.ctx) return
-    if (this.user.reload) { this._playBuffer(this.user.reload, this.master); return }
-    this._noiseBurst(this.master, { dur: 0.035, freq: 2600, q: 2, gain: 0.5 })                 // 卸弹匣
-    this._noiseBurst(this.master, { dur: 0.05, freq: 1500, q: 1.5, gain: 0.6, delay: 0.35 })   // 取新弹匣
-    this._osc(this.master, { type: 'square', freq: 480, dur: 0.03, gain: 0.18, delay: 0.62 })  // 插入咔哒
-    this._noiseBurst(this.master, { dur: 0.06, freq: 3200, q: 1.8, gain: 0.6, delay: 1.15 })   // 拉栓
-    this._osc(this.master, { type: 'square', freq: 720, dur: 0.025, gain: 0.16, delay: 1.22 })
-  }
-
-  empty() {
-    this.ensure()
-    if (!this.ctx) return
-    if (this.user.empty) { this._playBuffer(this.user.empty, this.master); return }
-    this._noiseBurst(this.master, { dur: 0.02, freq: 3800, q: 2.5, gain: 0.4 })
-    this._osc(this.master, { type: 'square', freq: 900, dur: 0.02, gain: 0.12, delay: 0.045 })
   }
 
   footstep(pos, listener, running) {

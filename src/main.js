@@ -74,8 +74,7 @@ weapons.onHitBot = (bot, zone, dmg, killed, point) => {
     hud.addKillFeed(`BOT-${String(bot.id % 100).padStart(2, '0')}`, head, r)
   }
 }
-weapons.onAmmoChange = () => hud.setAmmo(weapons.weapon, weapons._st(weapons.currentId))
-weapons.onDryRefill = () => hud.toastMsg('弹药已补给', 1000)
+weapons.onAmmoChange = () => hud.setAmmo(weapons.weapon)
 // 枪口焰精灵/点光由 FX.muzzle 按 viewmodel 实测枪口世界坐标点亮（不再挂相机固定偏移）
 
 bots.onEvent = (type, data) => {
@@ -96,7 +95,6 @@ input.onKey = (code) => {
   if (code === 'Digit1') weapons.switchTo(state.cfg.primary)
   if (code === 'Digit2') weapons.switchTo(state.cfg.secondary)
   if (code === 'Digit3') weapons.switchTo('knife')
-  if (code === 'KeyR') weapons.startReload()
 }
 
 // 连杀统计窗口（4.5s）——回合开始时清空，避免跨局串杀
@@ -144,11 +142,10 @@ function startRound(cfg) {
 
   weapons.primaryId = cfg.primary
   weapons.secondaryId = cfg.secondary
-  weapons.state = {} // 重置弹匣
   weapons.switchTo(cfg.primary, true)
 
   bots.resetRound()
-  hud.setAmmo(weapons.weapon, weapons._st(weapons.currentId))
+  hud.setAmmo(weapons.weapon)
   hud.setMode(MODE_INFO.label, MODE_INFO.desc)
 
   menu.hide()
@@ -235,8 +232,8 @@ loadUserAssets().then(({ agent, agentAnimations, viewmodel, glove, hands }) => {
   if (changed) bots.resetRound() // 场上的 Bot 换新外观
 }).catch(e => console.error('[VHT] asset load failed', e))
 
-// 首屏菜单
-hud.setAmmo(CONFIG.weapons.vandal, { mag: 25, reserve: 75 })
+// 首屏菜单（弹药无限：HUD 显示 ∞）
+hud.setAmmo(CONFIG.weapons.vandal)
 menu.show()
 
 // 模块初始化完成：载入页淡出（纹理生成在此同步阶段完成，之前 splash 一直可见）

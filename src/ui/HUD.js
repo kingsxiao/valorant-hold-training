@@ -43,10 +43,10 @@ export class HUD {
     if (this._cache[key] !== text) { this._cache[key] = text; node.textContent = text }
   }
 
-  setAmmo(w, st) {
+  setAmmo(w) {
     this.setText(this.ammo.querySelector('.wname'), 'wname', w.name.toUpperCase())
-    this.setText(this.ammo.querySelector('.mag'), 'mag', w.magSize === Infinity ? '∞' : String(st.mag))
-    this.setText(this.ammo.querySelector('.reserve'), 'reserve', w.reserve === undefined ? '' : '/ ' + (st.reserve === Infinity ? '∞' : st.reserve))
+    this.setText(this.ammo.querySelector('.mag'), 'mag', '∞') // 弹药无限（架枪训练不中断节奏）
+    this.setText(this.ammo.querySelector('.reserve'), 'reserve', '')
   }
 
   setMode(label, sub) {

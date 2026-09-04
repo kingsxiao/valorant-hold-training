@@ -89,9 +89,9 @@ export class Menu {
 
       <div class="hint">
         操作：<span class="kbd">W A S D</span> 移动（全速 5.4m/s）· <span class="kbd">Shift</span> 静步（50%，无声）·
-        <span class="kbd">Ctrl/C</span> 蹲 · <span class="kbd">Space</span> 跳 · <span class="kbd">R</span> 换弹 ·
+        <span class="kbd">Ctrl/C</span> 蹲 · <span class="kbd">Space</span> 跳 ·
         <span class="kbd">1</span> 主武器 · <span class="kbd">2</span> 副武器 · <span class="kbd">3</span> 刀（6.75m/s）·
-        <span class="kbd">左键</span> 开火 · <span class="kbd">右键</span> Classic 三连发<br/>
+        <span class="kbd">左键</span> 开火（弹药无限）· <span class="kbd">右键</span> Classic 三连发<br/>
         架枪对枪：目标从巷道缺口随机拉出，若在"反杀时间"内未击杀则判负 —— 比的就是你先开枪的能力。
       </div>
     `

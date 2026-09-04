@@ -38,10 +38,11 @@ export const CONFIG = {
   },
 
   // ---- 武器（射速/伤害为公开资料值；散布与后坐力为调校近似）----
+  // 弹药无限（架枪训练不中断节奏；弹道表 30 发后钳在末段，长时间连喷不影响判定）
   weapons: {
     vandal: {
       name: 'Vandal', slot: 'primary', auto: true,
-      fireRate: 9.75, magSize: 25, reserve: 75, reloadTime: 2.5, equipTime: 0.75,
+      fireRate: 9.75, magSize: Infinity, equipTime: 0.75,
       damage: { head: 160, body: 40, leg: 34 }, falloff: null,   // Vandal 全距离不变
       spread: { stand: 0.2, run: 4.5, walk: 1.1, crouchMult: 0.85, jump: 7 },
       recoil: { recoverTime: 0.4, viewPunch: 0.34 },             // 弹道后坐恢复
@@ -51,7 +52,7 @@ export const CONFIG = {
     },
     phantom: {
       name: 'Phantom', slot: 'primary', auto: true,
-      fireRate: 11, magSize: 30, reserve: 90, reloadTime: 2.5, equipTime: 0.75,
+      fireRate: 11, magSize: Infinity, equipTime: 0.75,
       damage: { head: 156, body: 39, leg: 33 },
       falloff: [                                                 // 距离衰减（Phantom 特性）
         { maxDist: 15, damage: { head: 156, body: 39, leg: 33 } },
@@ -66,7 +67,7 @@ export const CONFIG = {
     },
     sheriff: {
       name: 'Sheriff', slot: 'primary', auto: false,
-      fireRate: 4, magSize: 6, reserve: 24, reloadTime: 2.25, equipTime: 0.75,
+      fireRate: 4, magSize: Infinity, equipTime: 0.75,
       damage: { head: 159, body: 55, leg: 46 }, falloff: null,
       spread: { stand: 0.25, run: 5.5, walk: 1.6, crouchMult: 0.85, jump: 8 },
       recoil: { recoverTime: 0.6, viewPunch: 0.9 },
@@ -77,7 +78,7 @@ export const CONFIG = {
     classic: {
       name: 'Classic', slot: 'secondary', auto: false,
       burst: true,                                               // 右键三连发
-      fireRate: 6.75, magSize: 12, reserve: 36, reloadTime: 1.75, equipTime: 0.75,
+      fireRate: 6.75, magSize: Infinity, equipTime: 0.75,
       damage: { head: 78, body: 26, leg: 22 }, falloff: null,
       spread: { stand: 0.4, run: 4.0, walk: 1.4, crouchMult: 0.85, jump: 6 },
       recoil: { recoverTime: 0.35, viewPunch: 0.45 },
@@ -87,7 +88,7 @@ export const CONFIG = {
     },
     ghost: {
       name: 'Ghost', slot: 'secondary', auto: false,
-      fireRate: 6.75, magSize: 15, reserve: 45, reloadTime: 1.5, equipTime: 0.75,
+      fireRate: 6.75, magSize: Infinity, equipTime: 0.75,
       damage: { head: 105, body: 30, leg: 26 }, falloff: null,
       spread: { stand: 0.12, run: 3.5, walk: 1.0, crouchMult: 0.85, jump: 5 },
       recoil: { recoverTime: 0.3, viewPunch: 0.35 },

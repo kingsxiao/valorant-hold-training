@@ -5,12 +5,13 @@ import { buildWeaponModels, buildCustomArms } from './ViewmodelFactory.js'
 import { poseGloveHands, poseCustomHands } from './HandsRig.js'
 
 // ============================================================================
-// 武器系统：命中判定（射线）+ 散布 + 后坐力弹道 + 换弹/切枪 + 第一人称持枪动画。
+// 武器系统：命中判定（射线）+ 散布 + 后坐力弹道 + 切枪 + 第一人称持枪动画。
 // 程序化枪模/手臂建模在 ViewmodelFactory；GLB 手部姿态装配在 HandsRig。
 // 手感要点（对齐游戏机制）：
 //  - 射线从眼睛出发；子弹偏移 = 后坐力弹道表（累计值）+ 随机散布锥
 //  - 静止首发精度高；移动/跳跃散布剧增；蹲下小幅加成
 //  - 停火 recoverTime 后弹道立即重置（鼓励点射/急停）
+//  - 弹药无限（架枪训练不中断节奏；原换弹状态机已删）
 // ============================================================================
 const _dir = new THREE.Vector3()
 const _right = new THREE.Vector3()
@@ -49,22 +50,18 @@ export class WeaponSystem {
     this.secondaryId = 'classic'
     this.currentId = 'vandal'
     this.baseVmScale = 0.49 // 视角模型基础缩放（独立窄 FOV pass 下的占屏比例，2026-09-03 随取景联调）
-    this.state = {}    // 每把枪独立弹匣状态
     this.lastShotAt = -10
     this.lastFireTime = -10
     this.sprayIndex = 0
     this.nextShotAt = 0
     this.burstLeft = 0 // Classic 右键三连发
     this.equipUntil = 0
-    this.reloadEnd = 0
     this.now = 0
 
     // 事件回调（main 注入）
     this.onHitBot = null    // (bot, zone, dmg, killed)
     this.onShotFired = null // () → 统计
-    this.onAmmoChange = null
-    this.onDryRefill = null // 备弹耗尽自动补给时通知（HUD 提示）
-    this.drySince = 0       // 当前武器彻底打空的时刻（自动补给倒计时）
+    this.onAmmoChange = null // () → 切枪后 HUD 刷新武器名
 
     this._buildViewmodel()
     this.switchTo(this.currentId, true)
@@ -102,7 +99,6 @@ export class WeaponSystem {
     this.airK = 0       // 空中姿态因子（平滑 0..1）
     this.trig = 0       // 扳机指扣合度 0..1（_animateHands 用）
     this.grip = 0       // 开火握持收紧脉冲（衰减）
-    this.reloadK = 0    // 换弹松握因子 0..1（左手微展）
     this.heat = 0       // 持续射击的枪口热度 0..1（枪口烟浓度）
     this._trigHeld = false
     this.vmBolt = 0   // 机件后坐相位 0..1（枪机/套筒，击发置 1 快速回位）
@@ -180,31 +176,15 @@ export class WeaponSystem {
     this.weaponMeshFor(this.currentVmId)
   }
 
-  // ---- 弹匣/切枪/换弹 ----
-  _st(id) {
-    const w = CONFIG.weapons[id]
-    if (!this.state[id]) this.state[id] = { mag: w.magSize, reserve: w.reserve ?? Infinity }
-    return this.state[id]
-  }
-
+  // ---- 切枪 ----
   switchTo(id, instant = false) {
     if (id === this.currentId && !instant) return
     this.currentId = id
-    this.reloadEnd = 0
     this.burstLeft = 0
     this.equipUntil = this.now + CONFIG.weapons[id].equipTime * (instant ? 0 : 1)
     this.sprayIndex = 0
-    this.drySince = 0
     this.weaponMeshFor(id)
     this.onAmmoChange?.(this)
-  }
-
-  startReload() {
-    const w = this.weapon, st = this._st(this.currentId)
-    if (w.slot === 'melee' || st.mag >= w.magSize || st.reserve <= 0) return
-    if (this.reloadEnd > this.now) return
-    this.reloadEnd = this.now + w.reloadTime
-    this.audio.reload()
   }
 
   // ---- 散布（度）----
@@ -217,10 +197,10 @@ export class WeaponSystem {
     })
   }
 
-  // ---- 开火 ----
+  // ---- 开火（弹药无限：无弹匣/换弹分支）----
   tryFire(triggerEdge, triggerHeld, altEdge) {
     const w = this.weapon
-    if (this.now < this.equipUntil || this.reloadEnd > this.now) return
+    if (this.now < this.equipUntil) return
 
     if (w.slot === 'melee') {
       if (triggerEdge && this.now >= this.nextShotAt) {
@@ -230,21 +210,16 @@ export class WeaponSystem {
       return
     }
 
-    // Classic 右键三连发
+    // Classic 右键三连发：直接排队 3 发
     if (w.burst && altEdge && this.now >= this.nextShotAt) {
-      const st = this._st(this.currentId)
-      if (st.mag > 0) { this.burstLeft = Math.min(3, st.mag); this.nextShotAt = this.now }
+      this.burstLeft = 3
+      this.nextShotAt = this.now
     }
 
     const wantFire = w.auto ? triggerHeld : triggerEdge || this.burstLeft > 0
     if (!wantFire) return
     if (this.now < this.nextShotAt) return
 
-    const st = this._st(this.currentId)
-    if (st.mag <= 0) {
-      if (triggerEdge) { this.audio.empty(); this.startReload() }
-      return
-    }
     if (this.burstLeft > 0) this.burstLeft--
 
     this._fireOne()
@@ -252,13 +227,10 @@ export class WeaponSystem {
     // 若写成 max(上一次限定 + 间隔, 当前时刻)，停火后再次开火的首发会把下一发
     // 放到"现在"，第二个逻辑帧立刻击发 → 前两发仅隔 1 tick（射速超标）
     this.nextShotAt = Math.max(this.nextShotAt, this.now) + 1 / w.fireRate
-    if (st.mag === 0 && !w.auto) this.startReload()
   }
 
   _fireOne() {
     const w = this.weapon
-    const st = this._st(this.currentId)
-    st.mag--
     this.onShotFired?.()
 
     // 弹道表（累计偏移）+ 散布锥
@@ -340,7 +312,6 @@ export class WeaponSystem {
     this.vmBolt = 1
     if (this.currentId === 'sheriff') this._indexCylinder()
     this.lastFireTime = this.now
-    this.onAmmoChange?.(this)
   }
 
   // 转轮击发后分度 60°（下一发弹巢对准枪管）
@@ -365,45 +336,15 @@ export class WeaponSystem {
   // ---- 固定步长更新 ----
   step(dt, input) {
     this.now += dt
-    // 手部动画用的扳机状态（渲染帧 _animateHands 消费；换弹中强制松开 → 手指离开扳机）
+    // 手部动画用的扳机状态（渲染帧 _animateHands 消费）
     this._trigHeld = !!input.mouse0
     // 鼠标边沿由渲染帧 queueEdges 喂入，这里消费
     const edges = this.pendingEdges ?? (this.pendingEdges = { fireEdge: false, altEdge: false })
     this.tryFire(edges.fireEdge, input.mouse0, edges.altEdge)
     edges.fireEdge = edges.altEdge = false
 
-    const w = this.weapon
-    const st = this._st(this.currentId)
-
-    // 换弹完成
-    if (this.reloadEnd > 0 && this.now >= this.reloadEnd) {
-      const need = w.magSize - st.mag
-      const take = Math.min(need, st.reserve)
-      st.mag += take
-      if (st.reserve !== Infinity) st.reserve -= take
-      this.reloadEnd = 0
-      this.sprayIndex = 0
-      this.onAmmoChange?.(this)
-    }
-
-    // 弹药耗尽自动补给（无限时长回合不会卡死：打空 2.5s 后补满，模拟靶场随时买枪）
-    if (w.slot !== 'melee' && st.mag <= 0 && st.reserve <= 0) {
-      if (this.drySince === 0) this.drySince = this.now
-      else if (this.now - this.drySince >= 2.5) {
-        st.mag = w.magSize
-        st.reserve = w.reserve ?? Infinity
-        this.drySince = 0
-        this.sprayIndex = 0
-        this.audio.reload()
-        this.onDryRefill?.()
-        this.onAmmoChange?.(this)
-      }
-    } else {
-      this.drySince = 0
-    }
-
     // 停火重置弹道（刀无后坐力参数）
-    const rec = w.recoil
+    const rec = this.weapon.recoil
     if (!rec || this.now - this.lastFireTime > rec.recoverTime) this.sprayIndex = 0
   }
 
@@ -442,12 +383,11 @@ export class WeaponSystem {
     const idleK = 1 - speedRatio
     const breatheY = Math.sin(this.idleT * 1.7) * 0.0022 * idleK
     const breatheX = Math.cos(this.idleT * 0.9) * 0.0016 * idleK
-    // 换弹下沉 / 起枪缓动（从下方托起，ease-out + 出枪弧线：低位时枪口上抬侧倾）
-    const reloading = this.reloadEnd > this.now
+    // 换枪缓动（从下方托起，ease-out + 出枪弧线：低位时枪口上抬侧倾）
     const equipT = Math.max(0.01, this.weapon.equipTime)
     const ep = this.now < this.equipUntil ? 1 - (this.equipUntil - this.now) / equipT : 1
     const raise = (1 - Math.pow(THREE.MathUtils.clamp(ep, 0, 1), 3)) * 0.17
-    const lower = reloading ? 0.1 : raise
+    const lower = raise
     const crouchDrop = p.crouchAmt * 0.02
     // 挥刀弧线（sin 包络：抬起 → 劈下 → 回位）
     let swPitch = 0, swYaw = 0, swFwd = 0
@@ -471,10 +411,10 @@ export class WeaponSystem {
     this.vmHolder.rotation.set(
       this.sKick.x * 2.2 - this.sDip.x * 2.0 + this.airK * 0.045 + raise * 1.2 + this.swayY * 2 - swPitch,
       WeaponSystem.vmBaseYaw + this.sYaw.x + this.swayX * 2 + swYaw,
-      WeaponSystem.vmBaseRoll + this.strafeRoll + this.sRoll.x + this.airK * 0.03 + raise * 0.5 + (reloading ? 0.3 : 0),
+      WeaponSystem.vmBaseRoll + this.strafeRoll + this.sRoll.x + this.airK * 0.03 + raise * 0.5,
     )
-    this._animateHands(dt, reloading)
-    this._updateVmParts(dt, reloading)
+    this._animateHands(dt)
+    this._updateVmParts(dt)
   }
 
   // ---- 手部动画（glove 五指路径）：扳机指扣动 + 握持收紧 + 手部滞后回弹 ----
@@ -485,16 +425,14 @@ export class WeaponSystem {
   // 待机肌腱微动：五指不同相位慢频 ±0.4° 漂移 —— 长时间架枪时手不僵死
   // （架枪训练器的核心场景是持枪等待，静帧死手最出戏）
   static FINGER_TWITCH = { thumb: 0, index: 1.3, middle: 2.1, ring: 3.4, pinky: 4.2 }
-  _animateHands(dt, reloading) {
+  _animateHands(dt) {
     const ha = this.handsAnim
     if (!ha) return
-    // 扳机扣合度：快扣慢松（扣 40ms 级，松 ~100ms）；换弹中强制松开（枪械安全习惯）
-    const trigTarget = this._trigHeld && !reloading && this.player.alive ? 1 : 0
+    // 扳机扣合度：快扣慢松（扣 40ms 级，松 ~100ms）
+    const trigTarget = this._trigHeld && this.player.alive ? 1 : 0
     const trigRate = trigTarget > this.trig ? 26 : 10
     this.trig += (trigTarget - this.trig) * Math.min(1, dt * trigRate)
     this.grip = Math.max(0, this.grip - dt * 7)
-    // 换弹时托握手松开（左手离开护木去换弹匣的预备动作，手指微展）
-    this.reloadK += ((reloading ? 1 : 0) - this.reloadK) * Math.min(1, dt * 8)
     // 待机微动强度：静止满幅、移动收敛（与呼吸摆动同一因子逻辑）
     const idleFactor = 1 - Math.min(1, this.player.moveSpeed / CONFIG.movement.runSpeed)
     for (const side of ['right', 'left']) {
@@ -525,17 +463,8 @@ export class WeaponSystem {
           ch[3].rotateX(_deg(1.8) * g)
         }
       }
-      // 换弹松握（仅左手）：四指微展脱离护木
-      if (side === 'left' && this.reloadK > 0.001) {
-        for (const k of ['pinky', 'ring', 'middle', 'index']) {
-          const ch = h.fingers[k]
-          ch[1].rotateX(-_deg(5) * this.reloadK)
-          ch[2].rotateX(-_deg(7) * this.reloadK)
-          ch[3].rotateX(-_deg(5) * this.reloadK)
-        }
-      }
-      // 待机肌腱微动：中节 ±0.5° 慢漂移（~5.7s 周期），开火/换弹时收敛归零
-      const twitchK = (1 - this.grip) * (1 - this.reloadK) * idleFactor
+      // 待机肌腱微动：中节 ±0.5° 慢漂移（~5.7s 周期），开火时收敛归零
+      const twitchK = (1 - this.grip) * idleFactor
       if (twitchK > 0.01) {
         for (const k in h.fingers) {
           const ch = h.fingers[k]
@@ -551,8 +480,8 @@ export class WeaponSystem {
     }
   }
 
-  // ---- 机件/弹匣动画：枪机后坐回位、左轮击锤、换弹弹匣下落回插 + 上膛抽动 ----
-  _updateVmParts(dt, reloading) {
+  // ---- 机件动画：枪机后坐回位、左轮击锤 ----
+  _updateVmParts(dt) {
     // 回位速率随射速自适应：步枪 ~11-13/s（循环略短于射击间隔）、
     // Sheriff(4/s) 慢到 ~4.6/s 出戏剧性击锤回待击
     const boltRate = THREE.MathUtils.clamp((this.weapon.fireRate ?? 10) * 1.15, 4.5, 14)
@@ -570,23 +499,6 @@ export class WeaponSystem {
     }
     const hammer = vm.userData.hammer
     if (hammer) hammer.rotation.x = 0.12 + (1 - this.vmBolt) * 0.62 // 击发瞬间前倒，随后回待击
-    const mag = vm.userData.mag
-    if (!mag) return
-    const mats = vm.userData.magMats
-    if (reloading) {
-      const pr = THREE.MathUtils.clamp(1 - (this.reloadEnd - this.now) / this.weapon.reloadTime, 0, 1)
-      // 弹匣：0~14% 抽出下坠 → 中段离手（淡出）→ 62~84% 回插 → 90% 上膛抽动
-      const drop = pr < 0.14 ? pr / 0.14 : pr < 0.62 ? 1 : pr < 0.84 ? 1 - (pr - 0.62) / 0.22 : 0
-      mag.userData.y0 ??= mag.position.y
-      mag.position.y = mag.userData.y0 - drop * 0.14
-      const vis = pr < 0.10 ? 1 - pr / 0.10 : pr < 0.64 ? 0 : Math.min(1, (pr - 0.64) / 0.12)
-      for (const m of mats) m.opacity = vis
-      if (pr > 0.9) { if (!mag.userData.racked) this.vmBolt = 1; mag.userData.racked = true }
-      if (pr < 0.5) mag.userData.racked = false
-    } else {
-      mag.position.y = mag.userData.y0 ?? 0
-      for (const m of mats) m.opacity = 1
-    }
   }
 }
 

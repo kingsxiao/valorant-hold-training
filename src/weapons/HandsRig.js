@@ -4,8 +4,8 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js'
 
 // ============================================================================
 // GLB 手部装配（IK 式姿态拟合）：把用户/内置的 hands.glb / glove.glb 装到枪上。
-// 与 WeaponSystem 的接口：读 sys.vmScene / vmHolder / customVm / armMats，
-// 写 sys.customHands / sys.customArms（显隐），结束时调 sys.weaponMeshFor()。
+// 与 WeaponSystem 的接口：读 sys.vmScene / vmHolder / activeCustomVm() / armMats，
+// 写 sys.customHands / sys.customArms（显隐）/_handsPoseFor，结束时调 sys.weaponMeshFor()。
 // sys = WeaponSystem 实例（字段定义与调用时序见各函数注释）。
 // ============================================================================
 
@@ -115,8 +115,65 @@ function placeArmsIK(sys, group, arms, tR, tL) {
 //  3) 骨骼沿本地 +Y 延伸（Blender 导出），rotateX(+) 即向掌心卷曲（实测验证）。
 //  4) 模型本体是左手（掌心朝上绑定）：右手实例 scale.x 取负镜像出右手
 //     （three.js 按矩阵行列式自动翻绕序，蒙皮渲染无瑕疵，实测验证）。
-export function poseGloveHands(sys, scene, arms) {
-  if (!sys.customVm) return false
+// 各枪握姿参数（作者系坐标：x=枪管轴 -X 枪口、y 垂直、z 横向 +Z=射手左侧）。
+// 双枪 GLB（vandal/phantom）几何不同 → 各自收敛一套；default 为旧单模型
+// （Quaternius AK，作者系全长 ~1.46）2026-09-04 逐指优化值，留作回退基准。
+// 新枪参数由页面内射线实测握点 + 坐标下降优化得出（方法见会话记忆）。
+export const GLOVE_POSES = {
+  default: {
+    handR: {
+      mirror: true,
+      wrist: [0.043, 0.053, 0.034],
+      fDes: [-0.52, -0.332, -1.005],
+      sDes: [-0.058, 0.46, -0.579],
+      curls: { pinky: [27, 88, 61, 20], ring: [24, 92, 70, 22], middle: [45, 82, 88, 24], index: [-11.6, 52, 54.6, 14], thumb: [-3.2, 15, 2, 5] },
+    },
+    handL: {
+      wrist: [-0.51, -0.211, 0.218],
+      fDes: [1.194, 0.656, -0.36],
+      sDes: [0.214, 0.728, 0.45],
+      curls: { pinky: [-15, -15, -11, 12], ring: [-15, -15, -15, 13], middle: [-15, -15, -15, 14], index: [-15, -15, -15, 12], thumb: [-25, -22, 0, 0] },
+    },
+  },
+  // 以下为双枪 GLB 实测推导值（2026-09-04，居中作者系；数据见会话记录：
+  // vandal 12.1u/m、phantom 3.04u/m；fDes/sDes 为相机系掌向、跨枪可沿用，
+  // 腕锚/curls 按各枪握把/护木/扳机实测位置推导，特写评审后微调）
+  // vandal（2026-09-04 页面内坐标下降收敛：R 食指 1mm/中指 3mm，L 食指 0/余 1.2cm）
+  vandal: {
+    handR: {
+      mirror: true,
+      wrist: [2.496, -0.167, 0.349],
+      fDes: [-0.32, 0.012, -1.366],
+      sDes: [-0.33, 0.512, -0.181],
+      curls: { pinky: [28.3, 119.3, 92.3, 20], ring: [27.5, 120, 99.1, 22], middle: [55.3, 113.3, 114.9, 24], index: [-9, 72.6, 75.2, 14], thumb: [22.1, 38.1, 16.9, 5] },
+    },
+    handL: {
+      wrist: [-1.409, -0.575, 0.911],
+      fDes: [0.674, 1.104, -0.6],
+      sDes: [0.066, 0.943, 0.178],
+      curls: { pinky: [9.6, 11.9, 15.9, 12], ring: [3.4, -1.9, -13.7, 13], middle: [-6.1, -22.3, -40, 14], index: [-14.8, -40, -36.5, 12], thumb: [-23.7, -20.7, 1.3, 0] },
+    },
+  },
+  phantom: {
+    handR: {
+      mirror: true,
+      wrist: [0.83, -0.01, 0.06], // 机匣尾直握（该枪无垂坠握把，掌托机匣尾右下）
+      fDes: [-0.42, 0.012, -1.205],
+      sDes: [-0.158, 0.633, -0.46],
+      curls: { pinky: [53.9, 120, 80, 20], ring: [10.9, 120, 68.1, 22], middle: [19, 95.2, 111.8, 24], index: [-17.6, 69.2, 72.6, 14], thumb: [36.1, 10.6, 8, 5] },
+    },
+    handL: {
+      wrist: [-0.39, -0.23, 0.39], // 护木前段（消音器后）下侧托握
+      fDes: [1.141, 0.656, -0.46],
+      sDes: [0.414, 0.628, 0.493],
+      curls: { pinky: [9.9, 8.8, 12.8, 12], ring: [19.4, -16.2, -19.8, 13], middle: [16.2, -40, -40, 14], index: [-9, -13.3, -21.2, 12], thumb: [15.8, 10.5, 16.8, 0] },
+    },
+  },
+}
+
+export function poseGloveHands(sys, scene, arms, weaponId = sys.currentVmId) {
+  const vm = sys.activeCustomVm(weaponId)
+  if (!vm) return false
   // 绑定几何测量（原始场景孤立态：根单位变换）——先于任何挂载/缩放
   scene.quaternion.identity()
   scene.position.set(0, 0, 0)
@@ -156,7 +213,7 @@ export function poseGloveHands(sys, scene, arms) {
   sys.vmHolder.add(group)
   if (sys.customArms) sys.customArms.visible = false
   sys.vmScene.updateMatrixWorld(true)
-  const vmP = (x, y, z) => sys.customVm.localToWorld(new THREE.Vector3(x, y, z))
+  const vmP = (x, y, z) => vm.localToWorld(new THREE.Vector3(x, y, z))
   const wp = (o) => { sys.vmScene.updateMatrixWorld(true); return o.getWorldPosition(new THREE.Vector3()) }
   const holderScale = sys.vmHolder.scale.x
   // 腕→中指尖 8.2cm（相机系）：枪模 0.85m × holder 0.43 ≈ 37cm，真手 19cm × 同比例 ≈ 8cm
@@ -219,40 +276,25 @@ export function poseGloveHands(sys, scene, arms) {
     }
   }
 
-  // ---- 右手（镜像）：握把。掌压握把右面，四指阶梯卷曲绕握把前缘（中指→小指
-  // 递增卷曲）、食指弯入扳机护圈扣扳机、拇指高位前伸贴机匣左侧（high-thumb）。
-  // 腕锚为枪模本地系；fDes/sDes/curls 为 2026-09-04 页面内坐标下降收敛值
-  // ——目标点按枪模射线实测表面设定（食指扣扳机面 (−0.20,−0.02)、三指沿
-  // 握把前缘 x≈−0.05 阶梯、拇指贴机匣左面 (−0.21,0.11)，目标内推 1cm
-  // 补偿指尖估算过冲 → mesh 实贴表面）。十指总误差 17cm、食指 0.2cm ----
+  // ---- 按武器取握姿参数（作者系数组 → Vector3；腕锚经 vmP 进相机系）----
+  // poseHand：右手（镜像）握把/掌压右面/四指阶梯卷曲、食指扣扳机、拇指 high-thumb；
+  // 左手（原生）护木/掌从左下兜底/四指绕前缘、拇指沿左侧对握。目标点按各枪
+  // 射线实测表面内推 1cm 设定（指尖骨+节段延伸比 mesh 指尖长 ~1cm → 误差≈0 实贴）
+  const pose = GLOVE_POSES[weaponId] ?? GLOVE_POSES.default
+  const toV3 = (a) => new THREE.Vector3(a[0], a[1], a[2])
   const handR = poseHand({
-    mirror: true,
-    wrist: vmP(0.043, 0.053, 0.034),
-    fDes: new THREE.Vector3(-0.52, -0.332, -1.005),
-    sDes: new THREE.Vector3(-0.058, 0.46, -0.579),
-    curls: {
-      pinky: [27, 88, 61, 20],
-      ring: [24, 92, 70, 22],
-      middle: [45, 82, 88, 24],
-      index: [-11.6, 52, 54.6, 14],
-      thumb: [-3.2, 15, 2, 5],
-    },
+    mirror: pose.handR.mirror,
+    wrist: vmP(...pose.handR.wrist),
+    fDes: toV3(pose.handR.fDes),
+    sDes: toV3(pose.handR.sDes),
+    curls: pose.handR.curls,
   })
-  // ---- 左手（原生左手）：护木。掌从左下兜住护木底面，四指绕前右侧贴护木
-  // （指尖沿护木右面 x −0.43..−0.50 对角排布）、拇指沿左侧前伸对握。
-  // 同 09-04 优化收敛值：负卷曲=相对绑定态伸展（该手套绑定指天然半卷，
-  // 配合掌向后上方的托握方向即得包握）----
   const handL = poseHand({
-    wrist: vmP(-0.51, -0.211, 0.218),
-    fDes: new THREE.Vector3(1.194, 0.656, -0.36),
-    sDes: new THREE.Vector3(0.214, 0.728, 0.45),
-    curls: {
-      pinky: [-15, -15, -11, 12],
-      ring: [-15, -15, -15, 13],
-      middle: [-15, -15, -15, 14],
-      index: [-15, -15, -15, 12],
-      thumb: [-25, -22, 0, 0],
-    },
+    mirror: pose.handL.mirror,
+    wrist: vmP(...pose.handL.wrist),
+    fDes: toV3(pose.handL.fDes),
+    sDes: toV3(pose.handL.sDes),
+    curls: pose.handL.curls,
   })
 
   // ---- 真人手臂（hands.glb 建模袖臂：Shirt 袖 + Skin 皮肤小臂；Glove 手网格
@@ -263,6 +305,7 @@ export function poseGloveHands(sys, scene, arms) {
   // 手部动画基准注入（_animateHands：扳机指/握持收紧/滞后回弹）。
   // group 级回弹会带动袖臂+腕带整体 → 手与袖口不会脱节
   sys.handsAnim = { right: handR, left: handL, group }
+  sys._handsPoseFor = weaponId
   sys.weaponMeshFor(sys.currentVmId)
   return true
 }
@@ -278,7 +321,8 @@ export function poseGloveHands(sys, scene, arms) {
 //   aimFinger 指链先瞄特征点再逐节向掌心卷曲。
 // 注意：hands 需为未经本方法处理过的新实例（loadUserAssets 每次返回新场景）。
 export function poseCustomHands(sys, hands) {
-  if (!sys.customVm) return false // 无自有枪模时握点无法推导，直接回退内置手臂
+  const vm = sys.activeCustomVm()
+  if (!vm) return false // 无自有枪模时握点无法推导，直接回退内置手臂
   sys.handsAnim = null // 本路径无逐指动画基准（四指合并骨架），禁用 _animateHands
   hands.updateMatrixWorld(true)
   const byName = {}
@@ -345,7 +389,7 @@ export function poseCustomHands(sys, hands) {
   // 本枪模（Quaternius AK47，归一化前）实测几何轮廓（2026-09-03 顶点切片复测，X=枪管轴）：
   //   枪管 -1.05..-0.7（轴心 y≈0.25）/ 护木 -0.6..-0.45（底面 y≈-0.24）/ 弹匣 -0.45..-0.3
   //   （下探 y=-0.32）/ 机匣 -0.3..-0.1（底面 y≈0）/ 握把 -0.1..0.1（下探 y=-0.1）/ 枪托 0.1..0.41
-  // vmP 坐标系 = 枪模本地系：(x=枪管轴向, y=垂直, z=横向)。customVm 自带 -90°Y 旋转，
+  // vmP 坐标系 = 枪模本地系：(x=枪管轴向, y=垂直, z=横向)。自有枪模自带 -90°Y 旋转，
   // 本地 -X（枪口方向）映到相机 -Z、本地 -Z 映到相机 +X（右侧）——横向偏移取负即在相机右侧。
   // 挂载前先量绑定几何（挂载后距离读数会被 holder 缩放污染）：
   // u/f = 上臂/小臂绑定长度，handLen = 腕→食指尖（解剖学定尺用）
@@ -365,7 +409,7 @@ export function poseCustomHands(sys, hands) {
   if (sys.customArms) sys.customArms.visible = false
   sys.vmScene.updateMatrixWorld(true)
   // 握点/指尖瞄准点全部用"枪模模型系"坐标经 vmP() 精确换算（含缩放/旋转/平移）。
-  const vmP = (x, y, z) => sys.customVm.localToWorld(new THREE.Vector3(x, y, z))
+  const vmP = (x, y, z) => vm.localToWorld(new THREE.Vector3(x, y, z))
   // 腕锚点（枪模本地系）：右手在握把右后下方（掌压握把右面）、左手在弹匣交界
   // 后下方（掌托护木底、指朝前上绕护木前缘 → C 型托握）；横向 z 取负 = 相机右侧
   const wristR = vmP(-0.02, -0.055, -0.045)

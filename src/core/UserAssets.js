@@ -29,16 +29,23 @@ function smoothSkinGeometry(root) {
 }
 
 // 用户/开源模型加载：
-//   public/models/agent.glb      → 训练机器人外观（当前内置：Mixamo "X Bot"，CC-BY，
-//                                  含骨骼走路动画；自动缩放到总高 1.8m、脚底对地、面向 -Z）
-//   public/models/viewmodel.glb  → 第一人称枪模（当前内置：Quaternius AK47，CC0；最长轴对齐 -Z 枪管向）
-//   public/models/glove.glb      → 第一人称高精度手套（当前内置：J-Toastie "Gloved Hand"，CC-BY 3.0，
-//                                  五指独立三关节骨骼；WeaponSystem 双实例化 + 五指 IK 持枪）
-//   public/models/hands.glb      → 第一人称手臂备选（当前内置：J-Toastie "Rigged FPS Arms"，CC-BY 3.0；
-//                                  glove.glb 缺失时回退使用）
+//   public/models/agent.glb              → 训练机器人外观（当前内置：Mixamo "X Bot"，CC-BY，
+//                                          含骨骼走路动画；自动缩放到总高 1.8m、脚底对地、面向 -Z）
+//   public/models/viewmodel-vandal.glb   → Vandal 第一人称枪模（"AK-47 Kalashnikov" by
+//                                          Mateusz Woliński, Sketchfab, CC-BY 4.0；真实 PBR 贴图，
+//                                          原生材质直接保留；作者系枪管沿 -X，与管线约定一致）
+//   public/models/viewmodel-phantom.glb  → Phantom 第一人称枪模（"AK 47 Tactical Upgrade" by
+//                                          Mateusz Woliński, Sketchfab, CC-BY 4.0；带消音器/导轨，
+//                                          含 bolt carrier / magazine / suppressor 独立网格）
+//   public/models/viewmodel.glb          → 旧版单枪模回退（Quaternius AK47，CC0 白模，
+//                                          无贴图 → 程序化盒式投影 UV + 材质）
+//   public/models/glove.glb              → 第一人称高精度手套（当前内置：J-Toastie "Gloved Hand"，CC-BY 3.0，
+//                                          五指独立三关节骨骼；WeaponSystem 双实例化 + 五指 IK 持枪）
+//   public/models/hands.glb              → 第一人称手臂备选（当前内置：J-Toastie "Rigged FPS Arms"，CC-BY 3.0；
+//                                          glove.glb 缺失时回退使用）
 // 文件缺失时静默跳过，回退到内置程序化模型。
 export async function loadUserAssets() {
-  const out = { agent: null, agentAnimations: null, viewmodel: null, hands: null, glove: null }
+  const out = { agent: null, agentAnimations: null, viewmodel: null, viewmodels: {}, hands: null, glove: null }
   const loader = new GLTFLoader()
   const tryLoad = (file) => new Promise((res) => {
     loader.load(
@@ -48,8 +55,9 @@ export async function loadUserAssets() {
       () => res(null),
     )
   })
-  const [agentGltf, vmGltf, handsGltf, gloveGltf] = await Promise.all([
-    tryLoad('agent.glb'), tryLoad('viewmodel.glb'), tryLoad('hands.glb'), tryLoad('glove.glb'),
+  const [agentGltf, vandalGltf, phantomGltf, legacyVmGltf, handsGltf, gloveGltf] = await Promise.all([
+    tryLoad('agent.glb'), tryLoad('viewmodel-vandal.glb'), tryLoad('viewmodel-phantom.glb'),
+    tryLoad('viewmodel.glb'), tryLoad('hands.glb'), tryLoad('glove.glb'),
   ])
 
   if (agentGltf?.scene) {
@@ -90,11 +98,11 @@ export async function loadUserAssets() {
     out.agentAnimations = animations
   }
 
-  if (vmGltf?.scene) {
-    const vm = vmGltf.scene
+  // 枪模归一化：最长水平轴对齐到 Z（枪管向），随后按包围盒尺寸归一到 0.85m
+  // （90° 水平旋转只交换 x/z，最大边不变 → 缩放用旋转前的 size 即可）。
+  // 自带贴图的模型（Objaverse 系 AK）原生 PBR 材质直接保留；白模才走程序化贴图
+  const normalizeViewmodel = (vm) => {
     vm.updateMatrixWorld(true)
-    // 最长水平轴对齐到 Z（枪管向），随后按包围盒尺寸归一到 0.85m
-    // （90° 水平旋转只交换 x/z，最大边不变 → 缩放用旋转前的 size 即可）
     const size = new THREE.Box3().setFromObject(vm).getSize(new THREE.Vector3())
     if (size.x > size.z) vm.rotation.y = -Math.PI / 2
     vm.scale.multiplyScalar(0.85 / Math.max(0.001, Math.max(size.x, size.y, size.z)))
@@ -103,6 +111,24 @@ export async function loadUserAssets() {
     vm.position.x -= c.x
     vm.position.y -= c.y
     vm.position.z -= c.z
+    return vm
+  }
+  const hasRealTextures = (vm) => {
+    let any = false
+    vm.traverse(o => {
+      const ms = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])
+      if (ms.some(m => m.map)) any = true
+    })
+    return any
+  }
+  for (const [key, gltf] of [['vandal', vandalGltf], ['phantom', phantomGltf]]) {
+    if (!gltf?.scene) continue
+    const vm = normalizeViewmodel(gltf.scene)
+    if (!hasRealTextures(vm)) applyViewmodelTextures(vm) // 白模才盒式投影 + 程序化材质
+    out.viewmodels[key] = vm
+  }
+  if (legacyVmGltf?.scene) {
+    const vm = normalizeViewmodel(legacyVmGltf.scene)
     applyViewmodelTextures(vm) // 无 UV 白模 → 盒式投影 UV + 金属/木纹贴图
     out.viewmodel = vm
   }

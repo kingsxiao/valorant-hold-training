@@ -218,11 +218,15 @@ if (import.meta.env.DEV) {
   window.__game = { engine, input, audio, world, map, player, weapons, bots, hud, state, CONFIG }
 }
 
-// 用户/开源资产（可选）：public/models/ 下的 agent.glb、viewmodel.glb、glove.glb 与 hands.glb
-loadUserAssets().then(({ agent, agentAnimations, viewmodel, glove, hands }) => {
+// 用户/开源资产（可选）：public/models/ 下的 agent.glb、viewmodel-vandal/phantom.glb
+// （双枪各有高模；旧 viewmodel.glb 单模型作回退）、glove.glb 与 hands.glb
+loadUserAssets().then(({ agent, agentAnimations, viewmodel, viewmodels, glove, hands }) => {
   let changed = false
   if (agent) { Bot.customTemplate = agent; Bot.customAnimations = agentAnimations; changed = true }
-  if (viewmodel) { weapons.setCustomViewmodel(viewmodel); changed = true }
+  const vmMap = {}
+  for (const id of ['vandal', 'phantom']) if (viewmodels?.[id]) vmMap[id] = viewmodels[id]
+  if (!Object.keys(vmMap).length && viewmodel) vmMap.vandal = vmMap.phantom = viewmodel // 旧单模型
+  if (Object.keys(vmMap).length) { weapons.setCustomViewmodel(vmMap); changed = true }
   // 手部方案（2026-09-03 定稿）：glove.glb 五指手套双手实例为主路径——五指独立
   // 骨骼可逐指贴合真实握枪姿势（合并指的 hands.glb 做不到逐指）；建模袖臂仍取
   // hands.glb（placeArmsIK 两骨 IK + 解剖学定尺精确衔接手套腕口）。

@@ -4,10 +4,12 @@
 
 > **关于素材的说明**：Riot 的游戏资产（模型/贴图/音效）受版权保护，本项目**不提取、不打包、不复刻**官方资源。
 >
-> **当前内置的开源模型**（`public/models/`，均已 gltf-transform 量化压缩，几何 -46%~-55% 且无需解码器）：
+> **当前内置的开源模型**（`public/models/`，均已 gltf-transform 量化压缩 + 贴图 JPEG 重编码，且无需解码器）：
 > - `agent.glb` — ["X Bot"](https://github.com/mrdoob/three.js/tree/master/examples/models/gltf)（Mixamo，经 three.js 官方示例分发），训练靶按实际移速**加权混合 idle/walk/run 动画**，脚步频率与位移同步（加载时自动归一化到 1.8m）；备选 BrainStem 模型在仓库 `models-optional/`（不随部署分发），复制进 `public/models/` 改名即可换用
-> - `viewmodel.glb` — [AK-47 by Quaternius](https://poly.pizza/m/em1Hi9GuCv)（Poly Pizza 分发），**CC0**；仅替换步枪（Vandal/Phantom）外观，Sheriff/手枪/刀使用内置程序化模型（带枪机/套筒/转轮活动机件、解剖学分段手部与换弹弹匣动画）
+> - `viewmodel-vandal.glb` — ["AK-47 Kalashnikov" by Mateusz Woliński](https://sketchfab.com/3d-models/ak-47-kalashnikov-2da6b0332a5c4870a854ebea34eddfc3)（**CC-BY 4.0**，经 Objaverse 分发）：真实 PBR 木纹/金属贴图的经典 AKM，作 Vandal 第一人称枪模
+> - `viewmodel-phantom.glb` — ["AK 47 Tactical Upgrade" by Mateusz Woliński](https://sketchfab.com/3d-models/ak-47-tactical-upgrade-b15d69e8a5a948819c8c388f97930b9c)（**CC-BY 4.0**，经 Objaverse 分发）：战术导轨 + 消音器造型（自带 bolt carrier / magazine 独立网格，枪机后坐用原生机件），作 Phantom 第一人称枪模。双枪各有按枪面射线实测收敛的逐指握姿，切枪自动重摆
 > - `glove.glb` / `hands.glb` — ["Gloved Hand"] / ["Rigged FPS Arms" by J-Toastie](https://poly.pizza/m/XdHWM8uSAO)（Poly Pizza 分发，均 **CC-BY 3.0**；五指手套双手为第一人称主路径，hands 整臂做 IK 袖臂与后备；缺失时逐级回退程序化手臂）
+> - 旧版单枪模 `viewmodel.glb`（Quaternius AK47，CC0）备份在 `models-optional/`，改名放回即回退；Sheriff/手枪/刀使用内置程序化模型（带枪机/套筒/转轮活动机件、解剖学分段手部动画）
 >
 > **替换成你自己的资产**（本地使用你拥有合法权利的文件）：同名覆盖 `public/models/*.glb` 后跑 `npm run optimize:models` 一键压缩；音效放 `public/sfx/`（文件名见目录内说明）。本项目与 Riot Games 无关。
 

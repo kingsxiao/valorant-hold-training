@@ -105,31 +105,55 @@ export class WeaponSystem {
     this.vmSwing = 0  // 挥刀相位 0..1（sin 包络弧线）
     this.idleT = 0    // 呼吸微摆计时
     this.muzzleOffset = new THREE.Vector3()
-    this.customVm = null
+    this.customVms = {} // per-weapon 自有枪模（vandal/phantom → GLB 场景）
     this.customHands = null
     this.handsAnim = null // glove 路径的手部动画基准（HandsRig.poseGloveHands 注入）
+    this._gloveAssets = null // {scene, arms}：切枪重摆（双枪各自握姿）用
+    this._handsPoseFor = null // 当前已摆姿态对应的武器 id
+  }
+
+  // 当前武器的自有枪模（无则 null）。双枪（vandal/phantom）各有 GLB；
+  // 旧单模型路径把同一场景挂在两把步枪名下，取值逻辑一致
+  activeCustomVm(id = this.currentVmId) {
+    return (id === 'vandal' || id === 'phantom') ? (this.customVms[id] ?? null) : null
   }
 
   weaponMeshFor(id) {
     this.currentVmId = id
     // 自有 GLB 枪模只接管步枪（AK 造型配 Vandal/Phantom 定位）；
     // Sheriff/Classic/Ghost/Knife 用内置模型 —— 刀得像刀，左轮得像左轮
-    const useCustom = !!this.customVm && (id === 'vandal' || id === 'phantom')
-    for (const [vid, vm] of Object.entries(this.viewmodels)) vm.visible = !useCustom && vid === id
-    if (this.customVm) this.customVm.visible = useCustom
-    this.muzzleOffset.copy((useCustom ? this.customVm : this.viewmodels[id]).userData.muzzle)
+    const vm = this.activeCustomVm(id)
+    const useCustom = !!vm
+    for (const [vid, v] of Object.entries(this.viewmodels)) v.visible = !useCustom && vid === id
+    for (const v of Object.values(this.customVms)) v.visible = v === vm
+    this.muzzleOffset.copy((vm ?? this.viewmodels[id]).userData.muzzle)
     if (this.customArms) this.customArms.visible = useCustom && !this.customHands // 自有枪模手臂随其显隐
     if (this.customHands) this.customHands.visible = useCustom // GLB 手臂随步枪显隐
+    // 双枪各自握姿：切枪且手部资产在位时重摆（cloneSkinned×2 + IK，毫秒级，
+    // 被切枪动画遮住无感知）
+    if (useCustom && this._gloveAssets && this._handsPoseFor !== id) {
+      poseGloveHands(this, this._gloveAssets.scene, this._gloveAssets.arms, id)
+    }
   }
 
   // ---- GLB 手部装配委托（姿态数学见 HandsRig.js）----
-  setGloveHands(scene, arms) { return poseGloveHands(this, scene, arms) }
+  setGloveHands(scene, arms) {
+    this._gloveAssets = { scene, arms }
+    return poseGloveHands(this, scene, arms, this.currentVmId)
+  }
   setCustomHands(hands) { return poseCustomHands(this, hands) }
 
-  // 用户自有 GLB 枪模（public/models/viewmodel.glb）：加载成功后替换所有武器外观。
-  // userData.muzzle/eject 为枪组本地系点位（x=枪管轴、-X=枪口、-Z=射手右侧），
-  // 未提供时按几何包围盒推导 —— _fireOne 经枪自身世界矩阵精确变换到场景
-  setCustomViewmodel(scene) {
+  // 用户自有 GLB 枪模（public/models/viewmodel-*.glb）。userData.muzzle/eject 为
+  // 作者系点位（x=枪管轴、-X=枪口、-Z=射手右侧；模型烘焙时已统一到该约定），
+  // 未提供时按几何包围盒推导 —— _fireOne 经枪自身世界矩阵精确变换到场景。
+  // 入参支持 {vandal: scene, phantom: scene} 映射或单场景（两把步枪共用）
+  setCustomViewmodel(input) {
+    const map = input?.isObject3D ? { vandal: input, phantom: input } : input
+    for (const [id, scene] of Object.entries(map)) this._attachCustomVm(id, scene)
+    this.weaponMeshFor(this.currentVmId)
+  }
+
+  _attachCustomVm(id, scene) {
     // 按包围盒推导默认枪口/抛壳口。点位必须定义在枪本体（children）系 ——
     // _fireOne 经 vm.matrixWorld（T·R·S）变换，若直接用 setFromObject 量的
     // R·S 后世界系包围盒会二次旋转/缩放。先清平移、再把顶点剥回本体系测量
@@ -137,33 +161,74 @@ export class WeaponSystem {
     scene.updateMatrixWorld(true)
     const rs = scene.matrixWorld.clone() // 纯 R·S
     const inv = rs.clone().invert()
-    const bb = new THREE.Box3()
-    const v = new THREE.Vector3()
-    scene.traverse(o => {
-      if (!o.isMesh) return
-      const pos = o.geometry.attributes.position
-      for (let i = 0; i < pos.count; i++) {
-        v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld).applyMatrix4(inv)
-        bb.expandByPoint(v)
-      }
-    })
+    // 作者系（剥 T·R·S 后的原始建模坐标）逐顶点包围盒。原始模型常带横向/纵向
+    // 大偏移（如 phantom 整枪在 z≈-1.1），先测原始 bb、再用内嵌 pivot 把枪体
+    // 居中 —— 之后所有 z=0 / bb.min.x 的推导假设对任意模型成立，手部参数也
+    // 落在干净的居中作者系
+    const bbRaw = new THREE.Box3()
+    const boxInSceneFrame = (root, target) => {
+      const v = new THREE.Vector3()
+      root.traverse(o => {
+        if (!o.isMesh) return
+        const pos = o.geometry.attributes.position
+        for (let i = 0; i < pos.count; i++) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld).applyMatrix4(inv)
+          target.expandByPoint(v)
+        }
+      })
+      return target
+    }
+    boxInSceneFrame(scene, bbRaw)
+    const rawCenter = bbRaw.getCenter(new THREE.Vector3())
+    const pivot = new THREE.Group()
+    for (const kid of [...scene.children]) pivot.add(kid)
+    pivot.position.copy(rawCenter).negate()
+    scene.add(pivot)
+    scene.updateMatrixWorld(true)
+    const bb = bbRaw.clone().translate(rawCenter.clone().negate()) // 居中后作者系 bb
     const size = bb.getSize(new THREE.Vector3())
-    scene.userData.muzzle ??= new THREE.Vector3(bb.min.x - 0.02, bb.min.y + size.y * 0.78, 0)
+    // 消音器等独立枪口部件：枪口点取其前端而不是全枪 min.x（Phantom 消音器细长、
+    // 中心高度也不同于枪管），高 0.55 处贴合消音管轴线
+    let muzzleMesh = null
+    scene.traverse(o => { if (o.isMesh && /suppressor|silencer/i.test(o.name)) muzzleMesh = o })
+    if (muzzleMesh) {
+      const mb = boxInSceneFrame(muzzleMesh, new THREE.Box3()).translate(rawCenter.clone().negate())
+      scene.userData.muzzle ??= new THREE.Vector3(mb.min.x - 0.015, mb.min.y + mb.getSize(new THREE.Vector3()).y * 0.55, 0)
+    } else {
+      scene.userData.muzzle ??= new THREE.Vector3(bb.min.x - 0.02, bb.min.y + size.y * 0.78, 0)
+    }
     scene.userData.eject ??= new THREE.Vector3(bb.min.x + size.x * 0.56, bb.min.y + size.y * 0.62, bb.min.z)
-    scene.userData.pos ??= new THREE.Vector3(0.15, -0.13, -0.5) // 整枪前移：枪托不怼到相机
-    scene.userData.scale ??= 1
-    // 程序化拉机柄：自有枪模没有活动机件，补一个可见的击发后坐循环
-    // （children 系：机匣右后上方，+X 为后坐方向）
-    const bolt = new THREE.Mesh(
-      new THREE.BoxGeometry(size.x * 0.055, size.y * 0.028, size.z * 0.16),
-      this.vmMats.dark,
-    )
-    bolt.position.set(bb.min.x + size.x * 0.62, bb.min.y + size.y * 0.72, bb.min.z)
-    bolt.userData.travel = size.x * 0.035
-    bolt.userData.dir = new THREE.Vector3(1, 0, 0)
-    scene.add(bolt)
-    scene.userData.bolt = bolt
+    // 各枪取景（2026-09-04 双枪联调）：vandal 枪口 NDC (0.26,-0.52)、phantom 消音器
+    // 更长取景压低 —— 默认值沿旧单模型；逐枪 pos/scale 在此覆盖
+    const FRAMING = {
+      vandal: { pos: new THREE.Vector3(0.10, 0, -0.40), scale: 0.94 },
+      phantom: { pos: new THREE.Vector3(0.10, -0.02, -0.42), scale: 0.88 },
+    }
+    scene.userData.pos = FRAMING[id]?.pos ?? new THREE.Vector3(0.15, -0.13, -0.5)
+    scene.userData.scale = FRAMING[id]?.scale ?? 1
+    // 活动机件：优先绑模型自带枪机框（Phantom 的 bolt carrier —— 网格节点名可直配）。
+    // attach 挂到枪组根（作者系）后其 position 轴向即作者系，可沿 +X 后坐；
+    // 无命名机件时退回程序化拉机柄（白模/命名不明的模型仍要有机件动画）
+    let boltNode = null
+    scene.traverse(o => { if (!boltNode && o.name && /bolt[\s_]*carrier/i.test(o.name)) boltNode = o })
+    if (boltNode) {
+      scene.attach(boltNode)
+      boltNode.userData.travel = size.x * 0.03
+      boltNode.userData.dir = new THREE.Vector3(1, 0, 0)
+      scene.userData.bolt = boltNode
+    } else {
+      const bolt = new THREE.Mesh(
+        new THREE.BoxGeometry(size.x * 0.055, size.y * 0.028, size.z * 0.16),
+        this.vmMats.dark,
+      )
+      bolt.position.set(bb.min.x + size.x * 0.62, bb.min.y + size.y * 0.72, bb.min.z)
+      bolt.userData.travel = size.x * 0.035
+      bolt.userData.dir = new THREE.Vector3(1, 0, 0)
+      scene.add(bolt)
+      scene.userData.bolt = bolt
+    }
     scene.position.copy(scene.userData.pos) // 应用持枪位置（内部模型已归一化居中）
+    scene.scale.multiplyScalar(scene.userData.scale) // 逐枪取景缩放（0.85m 归一化之上的微调）
     // 自有枪模手臂：挂 holder（保证 -Z 朝枪口的坐标系），按模型包围盒中心对齐持握姿势
     if (!this.customArms) {
       this.customArms = buildCustomArms(this.armMats)
@@ -171,9 +236,8 @@ export class WeaponSystem {
     }
     const center = new THREE.Box3().setFromObject(scene).getCenter(new THREE.Vector3())
     this.customArms.position.copy(center)
-    this.customVm = scene
+    this.customVms[id] = scene
     this.vmHolder.add(scene)
-    this.weaponMeshFor(this.currentVmId)
   }
 
   // ---- 切枪 ----
@@ -268,7 +332,7 @@ export class WeaponSystem {
     // 枪口焰（含动态点光）+ 枪口烟（连射越久越浓）+ 抛壳 + 曳光。
     // userData 点位是枪组本地系 → 经枪自身世界矩阵变换（含持枪偏移/缩放/内偏旋转）；
     // vmScene 世界系 == 相机本地系，再过主相机矩阵落进世界（FX 都在世界场景）
-    const vm = this.customVm ?? this.viewmodels[this.currentId]
+    const vm = this.activeCustomVm() ?? this.viewmodels[this.currentId]
     this.camera.updateMatrixWorld()
     _muzzle.copy(this.muzzleOffset)
     _muzzle.applyMatrix4(vm.matrixWorld).applyMatrix4(this.camera.matrixWorld)
@@ -486,9 +550,7 @@ export class WeaponSystem {
     // Sheriff(4/s) 慢到 ~4.6/s 出戏剧性击锤回待击
     const boltRate = THREE.MathUtils.clamp((this.weapon.fireRate ?? 10) * 1.15, 4.5, 14)
     this.vmBolt = Math.max(0, this.vmBolt - dt * boltRate)
-    const vm = this.customVm && (this.currentVmId === 'vandal' || this.currentVmId === 'phantom')
-      ? this.customVm
-      : this.viewmodels[this.currentVmId]
+    const vm = this.activeCustomVm() ?? this.viewmodels[this.currentVmId]
     if (!vm) return
     const bolt = vm.userData.bolt
     if (bolt) {

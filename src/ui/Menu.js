@@ -41,6 +41,7 @@ export class Menu {
       shadows: CONFIG.graphics.shadows,
       resScale: 1.0,
       autoRes: true,
+      rampUp: false,
       crosshair: {},
       ...loadSettings(),
     }
@@ -78,6 +79,7 @@ export class Menu {
         <div class="slider-row"><label>Bot 反杀时间</label><input type="range" data-key="aimTimeMs" min="250" max="1200" step="50"><span class="val"></span></div>
         <div class="slider-row"><label>音量</label><input type="range" data-key="volume" min="0" max="1" step="0.05"><span class="val"></span></div>
       </div>
+      <div class="opt-grid" data-group="trainOpts"></div>
 
       <h2>画质</h2>
       <div class="slider-grid">
@@ -146,6 +148,17 @@ export class Menu {
       b.dataset.value = key
       b.onclick = () => { this.cfg.crosshair[key] = !this.cfg.crosshair[key]; this.syncButtons(); saveSettings({ crosshair: this.cfg.crosshair }); this.applyAll?.() }
       oBox.appendChild(b)
+    }
+
+    // 训练开关（渐进难度）
+    const tBox = p.querySelector('[data-group=trainOpts]')
+    for (const [key, label] of [['rampUp', '渐进难度（击杀后 Bot 越出越快/越快横移）']]) {
+      const b = document.createElement('button')
+      b.className = 'opt-btn'
+      b.textContent = label
+      b.dataset.value = key
+      b.onclick = () => { this.cfg[key] = !this.cfg[key]; this.syncButtons(); saveSettings({ [key]: this.cfg[key] }); this.applyAll?.() }
+      tBox.appendChild(b)
     }
 
     // 画质开关（自适应分辨率 / 阴影 / FPS 显示）
@@ -224,7 +237,7 @@ export class Menu {
     for (const b of this.panel.querySelectorAll('[data-group=chOpts] .opt-btn')) {
       b.classList.toggle('active', !!this.cfg.crosshair[b.dataset.value])
     }
-    for (const b of this.panel.querySelectorAll('[data-group=gfxOpts] .opt-btn')) {
+    for (const b of this.panel.querySelectorAll('[data-group=gfxOpts] .opt-btn, [data-group=trainOpts] .opt-btn')) {
       b.classList.toggle('active', !!this.cfg[b.dataset.value])
     }
   }

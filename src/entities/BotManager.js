@@ -17,6 +17,7 @@ export class BotManager {
       speedMult: 1.0,
       aimTimeMs: CONFIG.bot.aimTimeMs,
       roundSeconds: CONFIG.training.roundSeconds,
+      rampUp: false, // 渐进难度：随击杀数缩短延迟/提升横移速度
     }
     this.onEvent = null // (type, data) → HUD 提示：'lost-duel' / 'killed' / 'round-end'
     this.stats = this._freshStats()
@@ -88,13 +89,21 @@ export class BotManager {
     }
   }
 
+  // 渐进难度系数：每击杀延迟 ×0.93（下探到保底）、速度 ×1.02（封顶 1.3 倍）。
+  // 越打越快逼出真实上限，也把"热身期"和"极限期"自然分开。
+  get _rampKills() { return this.params.rampUp ? Math.min(this.stats.kills, 12) : 0 }
+  get _rampDelay() { return Math.max(0.45, Math.pow(0.93, this._rampKills)) }
+  get _rampSpeed() { return Math.min(1.3, this.params.speedMult * Math.pow(1.02, this._rampKills)) }
+
   // 架枪对枪：随机延迟 → 从缺口一侧拉出，横移穿过，概率性急停 / 露头即缩
   _stepHold(dt, ctx) {
     const h = this.hold
     const nowMs = this.now() * 1000
     if (this.now() < this.countdownUntil) return // 倒计时内不出人
     if (h.nextAt === 0) {
-      h.nextAt = nowMs + rand(this.params.delayMin, this.params.delayMax)
+      const dMin = Math.max(250, this.params.delayMin * this._rampDelay)
+      const dMax = Math.max(dMin + 100, this.params.delayMax * this._rampDelay)
+      h.nextAt = nowMs + rand(dMin, dMax)
       h.gapIdx = Math.floor(Math.random() * this.map.gaps.length)
       h.fromLeft = Math.random() > 0.5
       return
@@ -122,7 +131,7 @@ export class BotManager {
       if (pk.stopUntil > this.now()) {
         activeBot.moveToward(0, dt) // 急停（counter-strafe）
       } else {
-        activeBot.moveToward(pk.dir * CONFIG.bot.moveSpeed * this.params.speedMult, dt)
+        activeBot.moveToward(pk.dir * CONFIG.bot.moveSpeed * this._rampSpeed, dt)
         const span = Math.abs(pk.endX - pk.startX)
         if (span > 0.01) {
           // 经过急停点且未停过 → 概率急停一瞬
@@ -140,7 +149,11 @@ export class BotManager {
         }
         if ((pk.dir > 0 && activeBot.pos.x >= pk.endX) || (pk.dir < 0 && activeBot.pos.x <= pk.endX)) {
           activeBot.hide()
-          if (!this.bots.some(b => b.active)) h.nextAt = this.now() * 1000 + rand(this.params.delayMin, this.params.delayMax)
+          if (!this.bots.some(b => b.active)) {
+            const dMin = Math.max(250, this.params.delayMin * this._rampDelay)
+            const dMax = Math.max(dMin + 100, this.params.delayMax * this._rampDelay)
+            h.nextAt = this.now() * 1000 + rand(dMin, dMax)
+          }
         }
       }
     }

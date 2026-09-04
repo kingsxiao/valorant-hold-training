@@ -24,6 +24,18 @@ export function computeStats(s) {
   }
 }
 
+// 评级：按"得分/分钟"分档（击杀 100+爆头 50+连杀加成的口径下，
+// 350/min ≈ 每 17s 一个身体击杀的及格线，1000/min ≈ 稳定爆头连杀的高手线）
+export function gradeFor(score, minutes) {
+  if (!score || !(minutes > 0)) return '—'
+  const perMin = score / minutes
+  if (perMin >= 1000) return 'S'
+  if (perMin >= 750) return 'A'
+  if (perMin >= 550) return 'B'
+  if (perMin >= 350) return 'C'
+  return 'D'
+}
+
 // 规则化训练建议：按本局数据挑最突出的一块短板给一条可执行建议。
 // 只挑"最该练的"（优先级从高到低），没有足够数据或没有明显短板则不给。
 export function coachingTip(c) {

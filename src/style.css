@@ -382,4 +382,16 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 .sum-cell .num { font-family: var(--font-num); font-size: 30px; font-weight: 700; letter-spacing: 1px; line-height: 1.1; }
 .sum-cell .lbl { font-size: 11px; opacity: 0.55; margin-top: 3px; letter-spacing: 3px; }
 .sum-cell .num .new-best { color: #7dff9a; text-shadow: 0 0 14px rgba(125, 255, 154, 0.5); }
+
+/* 评级（S 金 / A 绿 / B 蓝 / C·D 素） */
+.grade { display: inline-block; line-height: 1; }
+.grade-S { color: #ffc94d; text-shadow: 0 0 18px rgba(255, 201, 77, 0.6); }
+.grade-A { color: #7dff9a; text-shadow: 0 0 14px rgba(125, 255, 154, 0.45); }
+.grade-B { color: #58c1ff; text-shadow: 0 0 12px rgba(88, 193, 255, 0.4); }
+
+/* 反应时间直方图 */
+.hist-wrap { margin-top: 18px; padding: 12px 14px 8px; background: rgba(236, 232, 225, 0.04); border: 1px solid var(--line); }
+.hist-wrap[hidden] { display: none; }
+.hist { display: block; width: 100%; height: auto; }
+.hist-cap { margin-top: 6px; font-size: 10px; letter-spacing: 3px; opacity: 0.45; }
 #overlay a { color: var(--accent); }

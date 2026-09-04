@@ -118,11 +118,12 @@ bots.onEvent = (type, data) => {
     document.exitPointerLock?.()
     audio.roundEnd() // 结束音与开局音呼应
     menu.hide()
-    // 个人最佳落盘：破纪录时结算面板绿色高亮
+    // 个人最佳落盘：破纪录时结算面板绿色高亮；分钟数供评级（得分/分钟）
+    const minutes = bots.params.roundSeconds > 0 ? bots.params.roundSeconds / 60 : bots.now() / 60
     const prev = loadBests().hold ?? 0
     const newBest = state.score > prev && state.score > 0
     if (newBest) saveBest('hold', state.score)
-    result.show({ ...data, score: state.score, best: Math.max(prev, state.score), newBest })
+    result.show({ ...data, score: state.score, best: Math.max(prev, state.score), newBest, minutes })
   }
 }
 
@@ -169,6 +170,7 @@ menu.applyAll = () => {
   bots.params.speedMult = cfg.speedMult
   bots.params.aimTimeMs = cfg.aimTimeMs
   bots.params.roundSeconds = cfg.roundSeconds
+  bots.params.rampUp = !!cfg.rampUp
   engine.autoRes = cfg.autoRes !== false
   engine.setResolutionScale(cfg.resScale ?? 1)
   engine.setShadows(!!cfg.shadows)

@@ -46,11 +46,20 @@ export class ResultPanel {
   }
 
   show(summary) {
-    const cell = (num, lbl) => `<div class="sum-cell"><div class="num">${num}</div><div class="lbl">${lbl}</div></div>`
+    const cell = (num, lbl, suffix = '') => `<div class="sum-cell"><div class="num">${num}${suffix}</div><div class="lbl">${lbl}</div></div>`
+    // 对比上局的增减角标：invert=true 表示越小越好（如平均反应）
+    const p = summary.prevRound
+    const delta = (now, before, invert = false) => {
+      if (before == null || now == null || p == null) return ''
+      const d = now - before
+      if (d === 0) return '<span class="delta zero">–</span>'
+      const good = invert ? d < 0 : d > 0
+      return `<span class="delta ${good ? 'good' : 'bad'}">${d > 0 ? '▲' : '▼'}${Math.abs(d)}</span>`
+    }
     const c = computeStats(summary)
     // 得分（击杀 100 + 爆头 50 + 连杀 ×25）与个人最佳 —— 破纪录绿色高亮
     const scoreRow = summary.score != null
-      ? cell(`<span class="${summary.newBest ? 'new-best' : ''}">${summary.score}</span>`, summary.newBest ? '新纪录！' : '本局得分') +
+      ? cell(`<span class="${summary.newBest ? 'new-best' : ''}">${summary.score}</span>`, summary.newBest ? '新纪录！' : '本局得分', delta(summary.score, p?.score)) +
         cell(summary.best ?? 0, '个人最佳')
       : ''
     // 评级：按得分/分钟分档（S 金 / A 绿 / B 蓝）
@@ -61,12 +70,12 @@ export class ResultPanel {
     this.grid.innerHTML =
       gradeCell +
       scoreRow +
-      cell(c.kills, '击杀') +
+      cell(c.kills, '击杀', delta(c.kills, p?.kills)) +
       cell(c.duelsLost, '对枪败') +
-      cell(c.accuracy + '%', '命中率') +
+      cell(c.accuracy + '%', '命中率', delta(c.accuracy, p?.accuracy)) +
       cell(c.headshotRate + '%', '爆头率') +
       cell(c.maxStreak > 1 ? '×' + c.maxStreak : '—', '最长连杀') +
-      cell(c.avgReactionMs ? c.avgReactionMs + 'ms' : '—', '平均反应') +
+      cell(c.avgReactionMs ? c.avgReactionMs + 'ms' : '—', '平均反应', delta(c.avgReactionMs || null, p?.avgReactionMs || null, true)) +
       cell(c.bestReactionMs ? c.bestReactionMs + 'ms' : '—', '最快反应')
     // 反应时间直方图（样本足够才有分布意义）
     const rs = summary.reactions ?? []

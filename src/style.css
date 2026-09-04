@@ -383,6 +383,12 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 .sum-cell .lbl { font-size: 11px; opacity: 0.55; margin-top: 3px; letter-spacing: 3px; }
 .sum-cell .num .new-best { color: #7dff9a; text-shadow: 0 0 14px rgba(125, 255, 154, 0.5); }
 
+/* 对比上局的增减角标 */
+.delta { font-family: var(--font-num); font-size: 12px; font-weight: 600; margin-left: 5px; vertical-align: 3px; letter-spacing: 0; }
+.delta.good { color: #7dff9a; }
+.delta.bad { color: var(--accent); }
+.delta.zero { color: rgba(236, 232, 225, 0.35); }
+
 /* 评级（S 金 / A 绿 / B 蓝 / C·D 素） */
 .grade { display: inline-block; line-height: 1; }
 .grade-S { color: #ffc94d; text-shadow: 0 0 18px rgba(255, 201, 77, 0.6); }

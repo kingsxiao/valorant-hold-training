@@ -11,7 +11,7 @@ import { WeaponSystem } from './weapons/WeaponSystem.js'
 import { BotManager, MODE_INFO } from './entities/BotManager.js'
 import { Crosshair } from './ui/Crosshair.js'
 import { HUD } from './ui/HUD.js'
-import { Menu, loadBests, saveBest } from './ui/Menu.js'
+import { Menu, loadBests, saveBest, loadLastRound, saveLastRound } from './ui/Menu.js'
 import { ResultPanel } from './ui/ResultPanel.js'
 import { computeStats } from './core/stats.js'
 import { loadUserAssets } from './core/UserAssets.js'
@@ -123,7 +123,11 @@ bots.onEvent = (type, data) => {
     const prev = loadBests().hold ?? 0
     const newBest = state.score > prev && state.score > 0
     if (newBest) saveBest('hold', state.score)
-    result.show({ ...data, score: state.score, best: Math.max(prev, state.score), newBest, minutes })
+    // 存本局摘要供下局"对比上局"，并把上局摘要带给结算面板
+    const c = computeStats(data)
+    const lastRound = { score: state.score, kills: c.kills, avgReactionMs: c.avgReactionMs, accuracy: c.accuracy }
+    result.show({ ...data, score: state.score, best: Math.max(prev, state.score), newBest, minutes, prevRound: loadLastRound() })
+    saveLastRound(lastRound)
   }
 }
 

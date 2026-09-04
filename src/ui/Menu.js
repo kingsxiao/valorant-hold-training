@@ -23,6 +23,15 @@ export function saveBest(mode, score) {
   try { localStorage.setItem(BEST_KEY, JSON.stringify(b)) } catch { /* 同上：仅本次会话生效 */ }
 }
 
+// 上一局摘要（结算面板"对比上局"用）
+const LAST_KEY = 'vht-last-round-v1'
+export function loadLastRound() {
+  try { return JSON.parse(localStorage.getItem(LAST_KEY)) ?? null } catch { return null }
+}
+export function saveLastRound(s) {
+  try { localStorage.setItem(LAST_KEY, JSON.stringify(s)) } catch { /* 同上 */ }
+}
+
 export class Menu {
   constructor({ overlay, onReady }) {
     this.overlay = overlay

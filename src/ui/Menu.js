@@ -32,6 +32,15 @@ export function saveLastRound(s) {
   try { localStorage.setItem(LAST_KEY, JSON.stringify(s)) } catch { /* 同上 */ }
 }
 
+// 个人最快单次反应（跨回合持久化；样本 ≥5 才认，避免运气值）
+const FAST_KEY = 'vht-fastest-v1'
+export function loadFastest() {
+  try { return JSON.parse(localStorage.getItem(FAST_KEY)) ?? null } catch { return null }
+}
+export function saveFastest(ms) {
+  try { localStorage.setItem(FAST_KEY, JSON.stringify({ ms })) } catch { /* 同上 */ }
+}
+
 export class Menu {
   constructor({ overlay, onReady }) {
     this.overlay = overlay

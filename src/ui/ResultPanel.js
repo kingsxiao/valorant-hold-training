@@ -76,7 +76,10 @@ export class ResultPanel {
       cell(c.headshotRate + '%', '爆头率') +
       cell(c.maxStreak > 1 ? '×' + c.maxStreak : '—', '最长连杀') +
       cell(c.avgReactionMs ? c.avgReactionMs + 'ms' : '—', '平均反应', delta(c.avgReactionMs || null, p?.avgReactionMs || null, true)) +
-      cell(c.bestReactionMs ? c.bestReactionMs + 'ms' : '—', '最快反应')
+      cell(
+        (c.bestReactionMs ? c.bestReactionMs + 'ms' : '—') +
+        (summary.newFastest ? ' <span class="new-best">★</span>' : summary.fastest != null ? `<span class="delta zero">/ ${summary.fastest}</span>` : ''),
+        '最快反应')
     // 反应时间直方图（样本足够才有分布意义）
     const rs = summary.reactions ?? []
     this.histWrap.hidden = rs.length < 5

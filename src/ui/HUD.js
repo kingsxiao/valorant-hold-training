@@ -175,6 +175,11 @@ export class HUD {
     this._hurtTimer = setTimeout(() => { this.hurt.style.opacity = '0' }, 220)
   }
 
+  // 清空击杀信息流（新回合开始时）
+  clearKillfeed() {
+    this.killfeed.innerHTML = ''
+  }
+
   // 伤害数字（世界坐标 → 屏幕投影，每帧更新存活的几个；击杀最后一段放大变红）
   spawnDamage(x, y, z, amount, head, camera, killed = false) {
     const d = this.dmgPool.reduce((a, b) => a.life < b.life ? a : b)

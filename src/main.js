@@ -11,7 +11,7 @@ import { WeaponSystem } from './weapons/WeaponSystem.js'
 import { BotManager, MODE_INFO } from './entities/BotManager.js'
 import { Crosshair } from './ui/Crosshair.js'
 import { HUD } from './ui/HUD.js'
-import { Menu, loadBests, saveBest, loadLastRound, saveLastRound } from './ui/Menu.js'
+import { Menu, loadBests, saveBest, loadLastRound, saveLastRound, loadFastest, saveFastest } from './ui/Menu.js'
 import { ResultPanel } from './ui/ResultPanel.js'
 import { computeStats } from './core/stats.js'
 import { loadUserAssets } from './core/UserAssets.js'
@@ -123,10 +123,18 @@ bots.onEvent = (type, data) => {
     const prev = loadBests().hold ?? 0
     const newBest = state.score > prev && state.score > 0
     if (newBest) saveBest('hold', state.score)
+    // 个人最快反应（单次，样本 ≥5 才认）：破纪录在结算面板"最快反应"标 ★
+    const cStats = computeStats(data)
+    const prevFast = loadFastest()?.ms ?? null
+    const newFastest = cStats.bestReactionMs > 0 && cStats.reactions?.length >= 5
+      && (prevFast == null || cStats.bestReactionMs < prevFast)
+    if (newFastest) saveFastest(cStats.bestReactionMs)
     // 存本局摘要供下局"对比上局"，并把上局摘要带给结算面板
-    const c = computeStats(data)
-    const lastRound = { score: state.score, kills: c.kills, avgReactionMs: c.avgReactionMs, accuracy: c.accuracy }
-    result.show({ ...data, score: state.score, best: Math.max(prev, state.score), newBest, minutes, prevRound: loadLastRound() })
+    const lastRound = { score: state.score, kills: cStats.kills, avgReactionMs: cStats.avgReactionMs, accuracy: cStats.accuracy }
+    result.show({
+      ...data, score: state.score, best: Math.max(prev, state.score), newBest, minutes,
+      prevRound: loadLastRound(), fastest: prevFast, newFastest,
+    })
     saveLastRound(lastRound)
   }
 }
@@ -208,6 +216,7 @@ function startRound(cfg) {
 
   bots.resetRound()
   hud.setAmmo(weapons.weapon)
+  hud.clearKillfeed() // 新回合干净的信息流
   hud.setMode(MODE_INFO.label, MODE_INFO.desc)
 
   menu.hide()
@@ -282,8 +291,9 @@ engine.renderFrame = (alpha, dtMs) => {
   const remainS = bots.params.roundSeconds > 0 && bots.running && bots.roundEndAt > 0
     ? Math.max(0, bots.roundEndAt - bots.now())
     : null
+  const dualTag = bots.params.doubleGap ? ' · 双缺口压力' : ''
   hud.setMode(MODE_INFO.label,
-    remainS != null ? `${remainS.toFixed(1)}s` : MODE_INFO.desc) // 游戏时钟：暂停时倒计时冻结
+    remainS != null ? `${remainS.toFixed(1)}s${dualTag}` : MODE_INFO.desc + dualTag) // 游戏时钟：暂停时倒计时冻结
   hud.setTimerUrgent(remainS != null && remainS <= 10 && state.playing) // 最后 10s 红色告急
   _hudAccum.stats += dtMs
   if (_hudAccum.stats > 200) { _hudAccum.stats = 0; hud.setStats(bots.stats, engine) }

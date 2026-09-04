@@ -206,7 +206,17 @@ export function poseGloveHands(sys, scene, arms) {
       degs.forEach((deg, i) => { if (deg) ch[i].rotateX(THREE.MathUtils.degToRad(deg)) })
     }
     sys.vmScene.updateMatrixWorld(true)
-    return { root, wristBone: wristLocal }
+    // 动画基准存档：指骨本地四元数 + 根变换。WeaponSystem._animateHands 每帧
+    // 先重置回这些基准再叠加（扳机扣动/握持收紧），动画与静态握姿解耦不漂移
+    const fingers = {}, bases = {}
+    for (const [k, chain] of Object.entries(F)) {
+      fingers[k] = chain.map(b => bones[b.name])
+      bases[k] = fingers[k].map(b => b.quaternion.clone())
+    }
+    return {
+      root, wristBone: wristLocal, fingers, bases,
+      basePos: root.position.clone(), baseQuat: root.quaternion.clone(),
+    }
   }
 
   // ---- 右手（镜像）：握把。掌压握把右面，四指阶梯卷曲绕握把前缘（中指→小指
@@ -246,6 +256,9 @@ export function poseGloveHands(sys, scene, arms) {
   // 肩位自由放置 + 两骨 IK 精确够到双腕（手套腕骨），弯向同 2026-09-03 方案 ----
   if (arms) placeArmsIK(sys, group, arms, wp(handR.wristBone), wp(handL.wristBone))
 
+  // 手部动画基准注入（_animateHands：扳机指/握持收紧/滞后回弹）。
+  // group 级回弹会带动袖臂+腕带整体 → 手与袖口不会脱节
+  sys.handsAnim = { right: handR, left: handL, group }
   sys.weaponMeshFor(sys.currentVmId)
   return true
 }
@@ -262,6 +275,7 @@ export function poseGloveHands(sys, scene, arms) {
 // 注意：hands 需为未经本方法处理过的新实例（loadUserAssets 每次返回新场景）。
 export function poseCustomHands(sys, hands) {
   if (!sys.customVm) return false // 无自有枪模时握点无法推导，直接回退内置手臂
+  sys.handsAnim = null // 本路径无逐指动画基准（四指合并骨架），禁用 _animateHands
   hands.updateMatrixWorld(true)
   const byName = {}
   hands.traverse(o => { if (o.name) byName[o.name] = o })

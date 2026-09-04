@@ -335,18 +335,35 @@ export class FX {
     this.lightLife = this.lightDur
   }
 
-  // 抛壳（世界坐标抛壳口）
-  shell(worldPos) {
+  // 枪口烟（持续射击更浓）：顺着弹道方向的淡烟丝，heat 0..1 控制密度与尺寸
+  muzzleSmoke(worldPos, dir, heat = 0) {
+    const n = 2 + Math.round(heat * 3)
+    for (let i = 0; i < n; i++) {
+      this.puffs.emit(
+        worldPos.x + (vary() - 0.5) * 0.02, worldPos.y + (vary() - 0.5) * 0.02, worldPos.z + (vary() - 0.5) * 0.02,
+        dir.x * (0.5 + vary() * 0.8) + (vary() - 0.5) * 0.3,
+        dir.y * (0.5 + vary() * 0.8) + 0.25 + vary() * 0.25,
+        dir.z * (0.5 + vary() * 0.8) + (vary() - 0.5) * 0.3,
+        {
+          life: 0.4 + vary() * 0.4 + heat * 0.3, size: 0.05,
+          sizeEnd: 0.18 + heat * 0.14, r: 0.78, g: 0.77, b: 0.75,
+          alpha: 0.15 + heat * 0.17, drag: 2.2,
+        })
+    }
+  }
+
+  // 抛壳（世界坐标抛壳口；refMatrix = 枪身世界矩阵 → 沿枪身右/上/后抛出）
+  shell(worldPos, refMatrix) {
     const s = this.shells[this.shellIdx]
     this.shellIdx = (this.shellIdx + 1) % MAX_SHELLS
     const m = s.mesh
     m.position.copy(worldPos)
-    // 相机右上后方抛出
-    _v.setFromMatrixColumn(this.camera.matrixWorld, 0) // right
+    const ref = refMatrix ?? this.camera.matrixWorld
+    _v.setFromMatrixColumn(ref, 0) // right
     s.vel.copy(_v).multiplyScalar(1.4 + vary() * 0.8)
-    _v.setFromMatrixColumn(this.camera.matrixWorld, 1) // up
+    _v.setFromMatrixColumn(ref, 1) // up
     s.vel.addScaledVector(_v, 1.7 + vary() * 0.8)
-    _v.setFromMatrixColumn(this.camera.matrixWorld, 2) // back(+Z)
+    _v.setFromMatrixColumn(ref, 2) // back
     s.vel.addScaledVector(_v, 0.4 + vary() * 0.4)
     s.ang.set(vary() * 14 - 7, vary() * 14 - 7, vary() * 14 - 7)
     s.life = 1.5

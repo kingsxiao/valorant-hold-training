@@ -36,6 +36,7 @@ export class Player {
     this.moveSpeed = 0                          // 当前水平速度（HUD 显示用）
     this.running = false                        // 是否发出脚步声（全速跑）
     this.stepDist = 0
+    this.landKick = 0                           // 落地冲击速度（viewmodel 颠簸用）
   }
 
   get eyeHeight() {
@@ -47,7 +48,9 @@ export class Player {
     this.vel.set(0, 0, 0)
     this.yaw = yaw; this.pitch = 0; this.punchPitch = this.punchYaw = 0
     this.crouching = false; this.crouchAmt = 0
-    this.grounded = true; this.tagger = 0
+    this.grounded = true
+    this.tagger = 0
+    this.landKick = 0 // 最近一次落地的冲击速度（m/s，WeaponSystem 消费）
     this.hp = 100; this.alive = true
   }
 
@@ -139,9 +142,13 @@ export class Player {
     this.crouchAmt += Math.sign(crouchTarget - this.crouchAmt) * Math.min(cl, Math.abs(crouchTarget - this.crouchAmt))
 
     // 分轴移动 + 碰撞（分轴推进天然形成沿墙滑动）
+    const wasGrounded = this.grounded
     this._moveAxis('x', this.vel.x * dt)
     this._moveAxis('z', this.vel.z * dt)
+    const vyBefore = this.vel.y
     this._moveAxis('y', this.vel.y * dt)
+    // 落地冲击（viewmodel 颠簸弹簧消费一次后清零；站立支撑不触发）
+    if (!wasGrounded && this.grounded) this.landKick = Math.max(0, -vyBefore)
 
     // 脚步声
     const hSpeed = Math.hypot(this.vel.x, this.vel.z)

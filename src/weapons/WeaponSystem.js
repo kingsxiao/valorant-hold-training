@@ -482,6 +482,9 @@ export class WeaponSystem {
   // 动画与静态握姿解耦，不会随帧累积漂移。食指独立扣扳机（按住扳机时扣、
   // 停火/换弹松开），三指在开火瞬间收紧（后坐"顶手"的握持反应），双手整体
   // 随 sFlinch 弹簧滞后于枪身 → 开火重量感。
+  // 待机肌腱微动：五指不同相位慢频 ±0.4° 漂移 —— 长时间架枪时手不僵死
+  // （架枪训练器的核心场景是持枪等待，静帧死手最出戏）
+  static FINGER_TWITCH = { thumb: 0, index: 1.3, middle: 2.1, ring: 3.4, pinky: 4.2 }
   _animateHands(dt, reloading) {
     const ha = this.handsAnim
     if (!ha) return
@@ -492,6 +495,8 @@ export class WeaponSystem {
     this.grip = Math.max(0, this.grip - dt * 7)
     // 换弹时托握手松开（左手离开护木去换弹匣的预备动作，手指微展）
     this.reloadK += ((reloading ? 1 : 0) - this.reloadK) * Math.min(1, dt * 8)
+    // 待机微动强度：静止满幅、移动收敛（与呼吸摆动同一因子逻辑）
+    const idleFactor = 1 - Math.min(1, this.player.moveSpeed / CONFIG.movement.runSpeed)
     for (const side of ['right', 'left']) {
       const h = ha[side]
       if (!h) continue
@@ -527,6 +532,15 @@ export class WeaponSystem {
           ch[1].rotateX(-_deg(5) * this.reloadK)
           ch[2].rotateX(-_deg(7) * this.reloadK)
           ch[3].rotateX(-_deg(5) * this.reloadK)
+        }
+      }
+      // 待机肌腱微动：中节 ±0.5° 慢漂移（~5.7s 周期），开火/换弹时收敛归零
+      const twitchK = (1 - this.grip) * (1 - this.reloadK) * idleFactor
+      if (twitchK > 0.01) {
+        for (const k in h.fingers) {
+          const ch = h.fingers[k]
+          const ph = WeaponSystem.FINGER_TWITCH[k] ?? 0
+          ch[2].rotateX(_deg(0.5) * twitchK * Math.sin(this.idleT * 1.1 + ph))
         }
       }
     }

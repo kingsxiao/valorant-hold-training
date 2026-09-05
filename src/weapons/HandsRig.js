@@ -15,6 +15,62 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js'
 // 与 poseCustomHands 同一套数学：解剖学定尺（腕→食指尖恒 8.2cm，与手套同标定，
 // 保证袖口与手套腕口粗细衔接）+ 肩位自由放置（肘方向 × 0.86 全链长，留弯曲量）
 // + 两骨 IK（极向量约束肘部下弯出画）+ 战术腕带盖衔接缝。返回挂载的根节点。
+
+// 该模型的 Skin 材质网格除小臂外还含整只皮肤手与五指（权重绑到 Hand/指骨）。
+// 本路径的手由高细节手套提供，皮肤手若保留会以绑定伸直姿态从手套指尖戳出，
+// 视觉上呈"漂浮的断指"——按支配骨骼剥掉 Hand/指骨区顶点，只留袖/小臂段。
+// 注意 cloneSkinned 与源场景共享 geometry，必须克隆后再过滤。
+function stripHandVertices(armsRoot) {
+  const keep = new Set(['UpperArmR001', 'UpperArmL', 'LowerArmR001', 'LowerArmL'])
+  armsRoot.traverse(o => {
+    if (!o.isSkinnedMesh || !o.geometry?.attributes?.skinIndex) return
+    const src = o.geometry
+    const si = src.attributes.skinIndex, sw = src.attributes.skinWeight
+    const bones = o.skeleton?.bones
+    if (!bones) return
+    const keepV = new Uint8Array(si.count)
+    let kept = 0
+    for (let i = 0; i < si.count; i++) {
+      let best = -1, bestW = 0
+      for (let k = 0; k < 4; k++) {
+        const w = sw.getComponent(i, k)
+        if (w > bestW) { bestW = w; best = si.getComponent(i, k) }
+      }
+      if (best >= 0 && keep.has(bones[best]?.name)) { keepV[i] = 1; kept++ }
+    }
+    if (kept === si.count || kept === 0) return
+    // 输出非索引几何：只保留被保留顶点涉及的三角形（跨保留/删除边界的三角形
+    // 直接丢弃——蒙皮变形下缝隙由腕带遮盖）。顶点级悬空索引会以 0xFFFF 读出越界
+    // 蒙皮权重 → applyBoneTransform 崩溃，所以绝不能只重映射 index。
+    // 量化 GLB 的属性常共享交错缓冲，attr.array 不能当独立数组按位读——
+    // 一律走 getX/getY/getZ/getW 接口取分量（对交错属性也正确）。
+    const tris = src.index ? src.index.array : null
+    const keptTris = []
+    if (tris) {
+      for (let t = 0; t < tris.length; t += 3) {
+        if (keepV[tris[t]] && keepV[tris[t + 1]] && keepV[tris[t + 2]]) keptTris.push(tris[t], tris[t + 1], tris[t + 2])
+      }
+    } else {
+      for (let i = 0; i < si.count; i += 3) {
+        if (keepV[i] && keepV[i + 1] && keepV[i + 2]) keptTris.push(i, i + 1, i + 2)
+      }
+    }
+    const getter = ['getX', 'getY', 'getZ', 'getW']
+    const geo = new THREE.BufferGeometry()
+    for (const name of Object.keys(src.attributes)) {
+      const attr = src.attributes[name]
+      const n = attr.itemSize
+      const dst = new Float32Array(keptTris.length * n)
+      let j = 0
+      for (const vi of keptTris) {
+        for (let k = 0; k < n; k++) dst[j++] = attr[getter[k]](vi)
+      }
+      geo.setAttribute(name, new THREE.BufferAttribute(dst, n))
+    }
+    o.geometry = geo
+  })
+}
+
 function placeArmsIK(sys, group, arms, tR, tL) {
   const root = cloneSkinned(arms)
   root.traverse(o => {
@@ -23,6 +79,7 @@ function placeArmsIK(sys, group, arms, tR, tL) {
       if (/glove/i.test(o.material?.name || '')) o.visible = false // 只留袖/皮肤小臂
     }
   })
+  stripHandVertices(root)
   // 绑定长度必须在挂载前量（挂载后 wp 读数被 holder 缩放污染）
   root.quaternion.identity()
   root.position.set(0, 0, 0)
@@ -138,35 +195,40 @@ export const GLOVE_POSES = {
   // 以下为双枪 GLB 实测推导值（2026-09-04，居中作者系；数据见会话记录：
   // vandal 12.1u/m、phantom 3.04u/m；fDes/sDes 为相机系掌向、跨枪可沿用，
   // 腕锚/curls 按各枪握把/护木/扳机实测位置推导，特写评审后微调）
-  // vandal（2026-09-04 页面内坐标下降收敛：R 食指 1mm/中指 3mm，L 食指 0/余 1.2cm）
+  // vandal（2026-09-05 按枪模顶点切片轮廓重推：握把顶开口 x≈0.7/y≈0、
+  // 前握把面下探至 (2.0,-0.65)、右侧面 z≈-0.2；护木 x -2.4..-1.2、底 y≈0.6、
+  // 半宽 0.23。R 腕置握把顶右后、指绕前握把带；L 腕置护木底下、指前伸上卷包左侧）
   vandal: {
     handR: {
       mirror: true,
-      wrist: [2.496, -0.167, 0.349],
-      fDes: [-0.32, 0.012, -1.366],
-      sDes: [-0.33, 0.512, -0.181],
-      curls: { pinky: [28.3, 119.3, 92.3, 20], ring: [27.5, 120, 99.1, 22], middle: [55.3, 113.3, 114.9, 24], index: [-9, 72.6, 75.2, 14], thumb: [22.1, 38.1, 16.9, 5] },
+      wrist: [1.7, 0.1, -0.22],
+      fDes: [-0.3, -0.88, -0.36],
+      sDes: [0.2, 0.8, -0.55],
+      curls: { pinky: [30, 115, 110, 18], ring: [30, 120, 115, 20], middle: [28, 115, 115, 22], index: [0, 60, 60, 20], thumb: [-25, 15, 5, 5] },
     },
     handL: {
-      wrist: [-1.409, -0.575, 0.911],
-      fDes: [0.674, 1.104, -0.6],
-      sDes: [0.066, 0.943, 0.178],
-      curls: { pinky: [9.6, 11.9, 15.9, 12], ring: [3.4, -1.9, -13.7, 13], middle: [-6.1, -22.3, -40, 14], index: [-14.8, -40, -36.5, 12], thumb: [-23.7, -20.7, 1.3, 0] },
+      wrist: [-1.35, 0.38, 0.0],
+      fDes: [-0.2, -0.1, -0.97],
+      sDes: [0.95, 0.25, -0.2],
+      curls: { pinky: [32, 74, 78, 16], ring: [30, 72, 78, 17], middle: [28, 68, 78, 18], index: [26, 62, 72, 16], thumb: [-20, -18, -4, 0] },
     },
   },
+  // phantom（2026-09-05 按该枪顶点切片重推：全长仅 2.4 作者单位，1u≈35cm。
+  // 护木/消音管段 x -0.8..-0.4、管轴 y≈0.19、半径≈0.08；机匣 -0.2..0.6；
+  // 握把下探至 (0.2..0.4,-0.27)、宽 ±0.06。R 腕置握把顶右后、L 腕托护木管下侧）
   phantom: {
     handR: {
       mirror: true,
-      wrist: [0.83, -0.01, 0.06], // 机匣尾直握（该枪无垂坠握把，掌托机匣尾右下）
-      fDes: [-0.42, 0.012, -1.205],
-      sDes: [-0.158, 0.633, -0.46],
-      curls: { pinky: [53.9, 120, 80, 20], ring: [10.9, 120, 68.1, 22], middle: [19, 95.2, 111.8, 24], index: [-17.6, 69.2, 72.6, 14], thumb: [36.1, 10.6, 8, 5] },
+      wrist: [0.42, 0.1, -0.09],
+      fDes: [-0.3, -0.88, -0.36],
+      sDes: [0.2, 0.8, -0.55],
+      curls: { pinky: [30, 115, 110, 18], ring: [30, 120, 115, 20], middle: [28, 115, 115, 22], index: [0, 55, 55, 18], thumb: [-25, 15, 5, 5] },
     },
     handL: {
-      wrist: [-0.39, -0.23, 0.39], // 护木前段（消音器后）下侧托握
-      fDes: [1.141, 0.656, -0.46],
-      sDes: [0.414, 0.628, 0.493],
-      curls: { pinky: [9.9, 8.8, 12.8, 12], ring: [19.4, -16.2, -19.8, 13], middle: [16.2, -40, -40, 14], index: [-9, -13.3, -21.2, 12], thumb: [15.8, 10.5, 16.8, 0] },
+      wrist: [-0.2, 0.05, 0.04],
+      fDes: [-0.2, -0.1, -0.97],
+      sDes: [0.95, 0.25, -0.2],
+      curls: { pinky: [42, 92, 95, 20], ring: [40, 88, 95, 21], middle: [38, 85, 95, 22], index: [36, 80, 90, 20], thumb: [-20, -18, -4, 0] },
     },
   },
 }

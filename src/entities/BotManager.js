@@ -1,8 +1,9 @@
 import { Bot } from './Bot.js'
 import { CONFIG } from '../core/Config.js'
 
-// 纯架枪对枪训练：随机延迟后 Bot 从缺口拉出横移，玩家须在 aimTime 内击杀，否则判负
-export const MODE_INFO = { label: '架枪对枪', desc: 'Bot 从缺口拉出 · 打慢了会被反杀' }
+// 纯架枪对枪训练：随机延迟后 Bot 从缺口拉出横移，玩家须在击杀时限内命中——
+// 没打中 Bot 缩回、记一次对枪败，继续下一波（无伤害/死亡，训练不中断）
+export const MODE_INFO = { label: '架枪对枪', desc: 'Bot 从缺口拉出 · 没打中就继续打' }
 
 const rand = (a, b) => a + Math.random() * (b - a)
 
@@ -212,9 +213,10 @@ export class BotManager {
 
   _loseDuel(bot) {
     this.stats.duelsLost++
-    // 敌方枪声从 Bot 位置响起（可听声辨位：死也要知道子弹从哪个缺口来的），随后受击/倒地
+    // 敌方枪声从 Bot 位置响起（可听声辨位：输了也要知道子弹从哪个缺口来的），
+    // 随后一声受击闷响——只是"这波慢了"的音画反馈，玩家不掉血、继续架枪
     this.audio.shot('rifle', { x: bot.pos.x, y: 1.3, z: bot.pos.z }, { pos: this.player.pos, yaw: this.player.yaw })
-    this.player.onShot(100) // 致死伤害，内部已播放 hurt + death 音效
+    this.audio.hurt()
     this.onEvent?.('lost-duel', { bot })
     // Bot 开火视觉表现（枪口焰/曳光由 main 注入的 onBotFire 完成）→ 原地停留后缩回淡出
     this.onBotFire?.(bot)

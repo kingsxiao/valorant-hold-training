@@ -12,7 +12,6 @@ export class HUD {
     this.stats = el(`<div id="hud-stats" class="hud-block"></div>`)
     this.score = el(`<div id="hud-score" class="hud-block"><span class="lbl">SCORE</span><b class="num">0</b><span class="best">BEST 0</span></div>`)
     this.scoreFloat = el(`<div id="hud-score-float"></div>`)
-    this.hp = el(`<div id="hud-hp" class="hud-block"><span>100</span><div class="bar"><i></i></div></div>`)
     this.speed = el(`<div id="hud-speed">0.0 m/s</div>`)
     this.center = el(`<div id="hud-center"></div>`)
     this.toast = el(`<div id="hud-toast"></div>`)
@@ -22,7 +21,7 @@ export class HUD {
     this.hitmarker = el(`<div id="hitmarker"><div class="hm" style="transform:translate(6px,6px) rotate(45deg)"></div><div class="hm" style="transform:translate(-14px,6px) rotate(-45deg)"></div><div class="hm" style="transform:translate(6px,-7px) rotate(-45deg)"></div><div class="hm" style="transform:translate(-14px,-7px) rotate(45deg)"></div></div>`)
     this.killfeed = el(`<div id="killfeed"></div>`)
     this.killBanner = el(`<div id="kill-banner"></div>`)
-    for (const e of [this.ammo, this.mode, this.stats, this.score, this.scoreFloat, this.hp, this.speed, this.center, this.toast, this.fpsBox, this.hurt, this.dmgDir, this.hitmarker, this.killfeed, this.killBanner]) root.appendChild(e)
+    for (const e of [this.ammo, this.mode, this.stats, this.score, this.scoreFloat, this.speed, this.center, this.toast, this.fpsBox, this.hurt, this.dmgDir, this.hitmarker, this.killfeed, this.killBanner]) root.appendChild(e)
 
     this.fpsCanvas = this.fpsBox.querySelector('canvas')
     this.fpsCtx = this.fpsCanvas.getContext('2d')
@@ -74,11 +73,6 @@ export class HUD {
     this.stats.innerHTML = rows.map(([k, v]) =>
       `<div class="row"><span>${k}</span><b>${v}</b></div>`).join('') +
       `<div class="row" style="margin-top:4px"><span>FPS / 1%low</span><b class="accent">${engine.fps} / ${engine.low1Pct}</b></div>`
-  }
-
-  setHP(hpVal) {
-    this.setText(this.hp.querySelector('span'), 'hp', String(hpVal))
-    if (this._cache.hpBar !== hpVal) { this._cache.hpBar = hpVal; this.hp.querySelector('.bar i').style.width = hpVal + '%' }
   }
 
   setSpeed(v) { this.setText(this.speed, 'speed', v.toFixed(1) + ' m/s') }

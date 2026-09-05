@@ -227,7 +227,6 @@ function startRound(cfg) {
 
   // 出生点：架枪位正后，面向两个缺口
   player.respawn(map.spawn.x, map.spawn.z, map.spawn.yaw)
-  player.hp = 100
 
   weapons.primaryId = cfg.primary
   weapons.secondaryId = cfg.secondary
@@ -271,13 +270,8 @@ engine.preFrame = () => {
 engine.simStep = (dt) => {
   if (!state.playing) return
   player.step(dt, input, weapons.weapon)
-  if (player.alive) weapons.step(dt, input)
+  weapons.step(dt, input)
   bots.step(dt, 1)
-
-  // 玩家死亡（对枪失败）→ 1.2s 后原地复活继续训练（逻辑帧计时，暂停时冻结）
-  if (!player.alive && player.deadT > 1.2) {
-    player.respawn(player.pos.x, player.pos.z, player.yaw)
-  }
 }
 
 const _hudAccum = { stats: 0, fpsText: 0 }
@@ -307,11 +301,14 @@ engine.renderFrame = (alpha, dtMs) => {
       const n = Math.ceil(remain)
       if (n !== countLast) { countLast = n; audio.countTick(false) }
       hud.setCenter(`<div class="big">${n}</div><div style="opacity:.55;font-size:12px;letter-spacing:4px;margin-top:4px">GET READY</div>`)
-    } else if (countLast !== null || goShowUntil > nowS) {
-      if (countLast !== null) { audio.countTick(true); goShowUntil = nowS + 0.55 }
+    } else if (countLast !== null) {
+      audio.countTick(true)
+      goShowUntil = nowS + 0.55
       countLast = null
       hud.setCenter(`<div class="big" style="color:#7dff9a;text-shadow:0 2px 18px rgba(125,255,154,.4),0 2px 10px rgba(0,0,0,.7)">GO!</div>`)
-      if (nowS > goShowUntil) hud.setCenter('')
+    } else if (goShowUntil > 0 && nowS > goShowUntil) {
+      hud.setCenter('') // GO! 展示窗口结束，清空中央提示（否则整局都挂在屏幕上）
+      goShowUntil = 0
     }
   } else if (!state.playing) {
     hud.setCenter('')
@@ -319,8 +316,6 @@ engine.renderFrame = (alpha, dtMs) => {
 
   // HUD（节流写入，避免每帧 DOM 重排）
   hud.setSpeed(player.moveSpeed)
-  hud.setHP(player.hp)
-  hud.hurt.classList.toggle('dead', !player.alive) // 阵亡红屏 + 复活提示
   const remainS = bots.params.roundSeconds > 0 && bots.running && bots.roundEndAt > 0
     ? Math.max(0, bots.roundEndAt - bots.now())
     : null

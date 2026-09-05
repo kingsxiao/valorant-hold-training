@@ -35,7 +35,7 @@ export class ResultPanel {
         <button class="btn-start">再来一局</button>
         <button class="btn-ghost">调整设置</button>
       </div>
-      <div class="hint">结算后可在设置中微调 Bot 延迟 / 反杀时间，针对性练习。</div>
+      <div class="hint">结算后可在设置中微调 Bot 延迟 / 击杀时限，针对性练习。</div>
     `
     this.overlay.appendChild(p)
     this.panel = p

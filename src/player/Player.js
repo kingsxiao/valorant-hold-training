@@ -4,7 +4,6 @@ import { CONFIG } from '../core/Config.js'
 // 玩家控制器：Valorant 移动手感
 // - 全速 5.4 m/s（主武器）/ 6.75（刀），Shift=50% 无声，蹲≈34%
 // - 急促加速/急停（counter-strafe 反向键更快刹住）
-// - 被击中 tagging 减速到 72%
 // - 鼠标灵敏度：0.07°/count × 灵敏度（与游戏同换算）
 const V = { // 复用向量，避免每帧分配（性能）
   wish: new THREE.Vector3(), fwd: new THREE.Vector3(), right: new THREE.Vector3(),
@@ -27,11 +26,6 @@ export class Player {
     this.crouching = false
     this.crouchAmt = 0                          // 0..1
     this.grounded = true
-    this.tagger = 0                             // 受击减速剩余时间
-
-    this.hp = 100
-    this.alive = true
-    this.deadT = 0 // 死亡后累计时长（逻辑帧推进，暂停时冻结）
 
     this.moveSpeed = 0                          // 当前水平速度（HUD 显示用）
     this.running = false                        // 是否发出脚步声（全速跑）
@@ -49,9 +43,7 @@ export class Player {
     this.yaw = yaw; this.pitch = 0; this.punchPitch = this.punchYaw = 0
     this.crouching = false; this.crouchAmt = 0
     this.grounded = true
-    this.tagger = 0
     this.landKick = 0 // 最近一次落地的冲击速度（m/s，WeaponSystem 消费）
-    this.hp = 100; this.alive = true
   }
 
   // 每渲染帧：鼠标视角（无延迟直通，保证跟手）
@@ -68,18 +60,9 @@ export class Player {
     this.punchYaw += y
   }
 
-  onShot(dmg) { // 被机器人命中
-    if (!this.alive) return
-    this.hp -= dmg
-    this.tagger = CONFIG.movement.tagDuration
-    this.audio.hurt()
-    if (this.hp <= 0) { this.hp = 0; this.alive = false; this.deadT = 0; this.audio.death() }
-  }
-
   // 固定 128Hz 物理步进
   step(dt, input, weapon) {
     this.prevPos.copy(this.pos)
-    if (!this.alive) { this.deadT += dt; return }
 
     const M = CONFIG.movement
     const wishDir = V.wish.set(0, 0, 0)
@@ -96,7 +79,6 @@ export class Player {
     this.crouching = wantCrouch || (this.crouching && !this.grounded) // 空中蹲保持
     if (holdingWalk) maxSpeed *= M.walkMult
     if (this.crouching) maxSpeed *= M.crouchMult
-    if (this.tagger > 0) maxSpeed *= M.tagSlow
     this.running = !holdingWalk && !this.crouching && this.grounded
 
     if (wishDir.lengthSq() > 0) {
@@ -134,7 +116,6 @@ export class Player {
       // 空中：轻微操控
       this.vel.addScaledVector(wishDir, M.airAccel * dt)
     }
-    this.tagger = Math.max(0, this.tagger - dt)
 
     // 蹲姿过渡
     const crouchTarget = this.crouching ? 1 : 0

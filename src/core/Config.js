@@ -26,8 +26,6 @@ export const CONFIG = {
     playerHeight: 1.8,      // 胶囊总高（探身/掩体尺寸以此为基准）
     crouchHeight: 1.28,
     playerRadius: 0.4,
-    tagSlow: 0.72,          // 被子弹命中后的减速到 72%（tagging）
-    tagDuration: 0.55,
     crouchLerpTime: 0.14,   // 蹲起过渡
   },
 
@@ -111,7 +109,7 @@ export const CONFIG = {
     moveSpeed: 5.4,         // Bot 拉出角度的横移速度 = 玩家全速
     walkSpeed: 2.7,
     accel: 55, decel: 55,   // 与玩家一致的启停（counter-strafe 急停）
-    aimTimeMs: 450,         // Bot 完全可见后多少毫秒"击杀"你（对枪输了）
+    aimTimeMs: 450,         // Bot 完全可见后超此时限未击杀 → 对枪失败（Bot 缩回，玩家无伤害）
     hitFlashTime: 0.09,
     deathTime: 0.55,
     spawnGuardMs: 250,      // 出生保护（不可被击中）

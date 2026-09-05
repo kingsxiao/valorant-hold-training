@@ -494,7 +494,7 @@ export class WeaponSystem {
     const ha = this.handsAnim
     if (!ha) return
     // 扳机扣合度：快扣慢松（扣 40ms 级，松 ~100ms）
-    const trigTarget = this._trigHeld && this.player.alive ? 1 : 0
+    const trigTarget = this._trigHeld ? 1 : 0
     const trigRate = trigTarget > this.trig ? 26 : 10
     this.trig += (trigTarget - this.trig) * Math.min(1, dt * trigRate)
     this.grip = Math.max(0, this.grip - dt * 7)

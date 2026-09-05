@@ -119,7 +119,7 @@ export class Menu {
         <div class="slider-row"><label>Bot 出现最小延迟</label><input type="range" data-key="delayMin" min="200" max="2000" step="100"><span class="val"></span></div>
         <div class="slider-row"><label>Bot 出现最大延迟</label><input type="range" data-key="delayMax" min="500" max="5000" step="100"><span class="val"></span></div>
         <div class="slider-row"><label>Bot 横移速度</label><input type="range" data-key="speedMult" min="0.4" max="1.3" step="0.05"><span class="val"></span></div>
-        <div class="slider-row"><label>Bot 反杀时间</label><input type="range" data-key="aimTimeMs" min="250" max="1200" step="50"><span class="val"></span></div>
+        <div class="slider-row"><label>击杀时限</label><input type="range" data-key="aimTimeMs" min="250" max="1200" step="50"><span class="val"></span></div>
         <div class="slider-row"><label>音量</label><input type="range" data-key="volume" min="0" max="1" step="0.05"><span class="val"></span></div>
       </div>
       <div class="opt-grid" data-group="trainOpts"></div>
@@ -157,7 +157,7 @@ export class Menu {
         <span class="kbd">左键</span> 开火（弹药无限）· <span class="kbd">右键</span> Classic 三连发<br/>
         开局 3 秒倒计时热身，GO 后才开始计时 · 准星随移动/开火实时扩张，收束时才是出手时机 ·
         Bot 横移带脚步声，听声辨位先于目视 · 部分 Bot"露头即缩"，守住准星等第二拉 ·
-        架枪对枪：在"反杀时间"内未击杀则判负；击杀得分冲击个人最佳 ★
+        架枪对枪：在"击杀时限"内没打中，Bot 缩回记一次对枪败，无伤害继续下一波；击杀得分冲击个人最佳 ★
       </div>
     `
     p.append(scroll, foot)

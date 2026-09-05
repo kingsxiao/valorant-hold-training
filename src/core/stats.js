@@ -53,6 +53,6 @@ export function coachingTip(c) {
   if (c.maxStreak <= 1 && c.kills >= 2)
     return '连杀总是断 —— 击杀后立刻回准星到缺口，别跟着尸体压枪。'
   if (c.avgReactionMs > 0 && c.avgReactionMs < 350 && c.accuracy >= 45)
-    return '反应与命中都在线 —— 试着调快 Bot 出现间隔或反杀时间，逼出自己的上限。'
+    return '反应与命中都在线 —— 试着调快 Bot 出现间隔或缩短击杀时限，逼出自己的上限。'
   return null
 }

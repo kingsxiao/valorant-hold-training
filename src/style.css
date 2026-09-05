@@ -253,13 +253,22 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 .panel {
   position: relative;
   width: min(940px, 94vw);
-  max-height: 92vh; overflow-y: auto; overflow-x: hidden;
+  max-height: 92vh;
+  display: flex; flex-direction: column;
+  overflow: hidden; /* 滚动收敛到 .panel-scroll，操作条固定在面板底部 */
   background: linear-gradient(180deg, rgba(17, 27, 38, 0.96), rgba(11, 17, 25, 0.97));
   border: 1px solid var(--line);
-  padding: 26px 36px 30px;
+  padding: 26px 36px 18px;
   animation: panelIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.panel-scroll {
+  min-height: 0; overflow-y: auto; overflow-x: hidden;
   scrollbar-width: thin; scrollbar-color: rgba(236, 232, 225, 0.25) transparent;
 }
+.panel-foot { flex: none; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.panel-foot .actions { margin-top: 0; }
+/* display:flex 会压过 [hidden] 的 UA 样式——菜单/结算面板的显隐都靠 hidden 属性 */
+.panel[hidden] { display: none; }
 .panel::before, .panel::after { content: ""; position: absolute; width: 18px; height: 18px; pointer-events: none; z-index: 1; }
 .panel::before { top: -1px; left: -1px; border-top: 2px solid var(--accent); border-left: 2px solid var(--accent); }
 .panel::after { bottom: -1px; right: -1px; border-bottom: 2px solid var(--accent); border-right: 2px solid var(--accent); }
@@ -289,6 +298,7 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
   clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
 }
 .menu-best b { font-family: var(--font-num); font-size: 16px; margin-left: 2px; }
+.menu-best[hidden] { display: none; }
 
 /* 暂停时的本局进行中战绩条 */
 .menu-live {

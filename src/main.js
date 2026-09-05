@@ -162,17 +162,26 @@ const killTimes = []
 
 // ---- 指针锁定 ⇄ 暂停 ----
 // 暂停中恢复当前回合：不重置分数/计时/弹匣（game clock 冻结保证回合时间不流失）
+// 开局/恢复后的指针锁定保护窗：浏览器可能让刚建立的锁定立刻退出（ESC 后 ~1s
+// 冷却内重进、窗口失焦、请求被拒），随之而来的 lockchange(false) 并不代表用户
+// 按 ESC 暂停——保护窗内忽略之，保持回合进行；点击画面可重新锁定
+let lockGuardUntil = 0
+
 function resumeRound() {
   menu.hide()
   input.lock()
   state.playing = true
+  lockGuardUntil = performance.now() + 600
 }
 
 input.onLockChange = (locked) => {
   if (locked) {
     menu.hide()
     state.playing = true
-  } else if (state.playing) {
+    return
+  }
+  if (state.playing && performance.now() < lockGuardUntil) return // 锁定回弹，非用户暂停
+  if (state.playing) {
     state.playing = false
     // 暂停面板顶部带一条"本局进行中"战绩（回合已结束/未开局时无数据）
     const midRound = bots.running && bots.roundEndAt > bots.now()
@@ -240,7 +249,13 @@ function startRound(cfg) {
   result.hide()
   input.lock() // unadjustedMovement 原始输入优先，失败自动回退（内部静默）
   state.playing = true
+  lockGuardUntil = performance.now() + 600
 }
+
+// 锁定意外丢失后（保护窗内回弹 / pointerlockerror），点击画面重新锁定
+canvas.addEventListener('click', () => {
+  if (state.playing && !input.locked) input.lock()
+})
 
 // ---- 主循环 ----
 // 每渲染帧最先消费鼠标增量：视角直通（零延迟），边沿喂给逻辑步

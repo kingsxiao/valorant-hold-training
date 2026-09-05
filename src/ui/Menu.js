@@ -90,7 +90,12 @@ export class Menu {
   build() {
     const p = document.createElement('div')
     p.className = 'panel'
-    p.innerHTML = `
+    // 结构：设置区（panel-scroll，超高时内部滚动）+ 底部固定操作条（panel-foot）。
+    // 操作条不参与滚动——任何窗口高度下"开始训练/继续训练"都完整可见可点，
+    // 不会被 max-height 裁剪到点不到（按钮中心落在 overlay 上 = 点击无反应）
+    const scroll = document.createElement('div')
+    scroll.className = 'panel-scroll'
+    scroll.innerHTML = `
       <header class="panel-head">
         <div>
           <h1>架枪训练 <em>HOLD ANGLE TRAINER</em></h1>
@@ -134,7 +139,10 @@ export class Menu {
       <div class="opt-grid" data-group="chColor"></div>
       <div style="height:8px"></div>
       <div class="opt-grid" data-group="chOpts"></div>
-
+    `
+    const foot = document.createElement('div')
+    foot.className = 'panel-foot'
+    foot.innerHTML = `
       <div class="actions">
         <button class="btn-continue btn-start" hidden>继续训练</button>
         <button class="btn-start">开始训练</button>
@@ -152,8 +160,10 @@ export class Menu {
         架枪对枪：在"反杀时间"内未击杀则判负；击杀得分冲击个人最佳 ★
       </div>
     `
+    p.append(scroll, foot)
     this.overlay.appendChild(p)
     this.panel = p
+    this.scrollBox = scroll
 
     // 武器按钮
     const wname = { vandal: 'Vandal（自动步战）', phantom: 'Phantom（消音/衰减）', sheriff: 'Sheriff（重左轮）', classic: 'Classic（手枪/右键三连发）', ghost: 'Ghost（消音手枪）' }
@@ -262,7 +272,10 @@ export class Menu {
       }
     }
 
-    p.querySelector('.btn-start').onclick = () => this.onReady?.({ ...this.cfg })
+    // 绑定注意：继续训练按钮复用 .btn-start 样式且排在前面，querySelector('.btn-start')
+    // 会命中它——用 :not(.btn-continue) 精确匹配"开始训练"，否则 onReady 绑错按钮、
+    // 点击开始无任何反应（第十四轮引入的回归）
+    p.querySelector('.btn-start:not(.btn-continue)').onclick = () => this.onReady?.({ ...this.cfg })
     // 暂停中恢复当前回合（不重置分数/计时）
     p.querySelector('.btn-continue').onclick = () => this.onContinue?.()
     // 清除全部个人纪录（最佳/最快/历史/上局）
@@ -334,6 +347,7 @@ export class Menu {
     }
     this.refreshSliders()
     this.syncButtons()
+    this.scrollBox.scrollTop = 0 // 每次呼出回到设置顶部（操作条固定在底部始终可见）
   }
 
   hide() {

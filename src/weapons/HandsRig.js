@@ -57,6 +57,7 @@ function stripHandVertices(armsRoot) {
     }
     const getter = ['getX', 'getY', 'getZ', 'getW']
     const geo = new THREE.BufferGeometry()
+    geo.userData.ownedByRig = true // 重摆时可安全 dispose（cloneSkinned 的其余几何与模板共享，不可释放）
     for (const name of Object.keys(src.attributes)) {
       const attr = src.attributes[name]
       const n = attr.itemSize
@@ -92,6 +93,8 @@ function placeArmsIK(sys, group, arms, tR, tL) {
   const armL = { up: bonesA.UpperArmL, low: bonesA.LowerArmL, hand: bonesA.HandL }
   if ([armR.up, armR.low, armR.hand, armL.up, armL.low, armL.hand, bonesA.IndexTipR001].some(b => !b)) {
     console.warn('[VHT] hands.glb 臂骨不全，建模手臂未接入')
+    // 早退也释放已过滤的新建几何（仅 owned 标记，模板共享资源不动）
+    root.traverse(o => { if (o.isMesh && o.geometry?.userData?.ownedByRig) o.geometry.dispose() })
     return null
   }
   const wp = (o) => { sys.vmScene.updateMatrixWorld(true); return o.getWorldPosition(new THREE.Vector3()) }
@@ -171,7 +174,9 @@ function placeArmsIK(sys, group, arms, tR, tL) {
   }
   bandFor(armR.hand, armR.low)
   bandFor(armL.hand, armL.low)
-  group.add(new THREE.Mesh(mergeGeometries(bandGeos, false), sys.armMats.sleeve))
+  const bandGeo = mergeGeometries(bandGeos, false)
+  bandGeo.userData.ownedByRig = true // 同 stripHandVertices：本文件新建，可释放
+  group.add(new THREE.Mesh(bandGeo, sys.armMats.sleeve))
   return root
 }
 
@@ -287,7 +292,15 @@ export function poseGloveHands(sys, scene, arms, weaponId = sys.currentVmId) {
   const handLenBind = bp(F.middle[3]).distanceTo(bp(wristB))     // 腕→中指尖实测长度
 
   // ---- 挂载组与矩阵工具（沿用 poseCustomHands 的教训：先挂载、vmScene 根级联刷新）----
-  if (sys.customHands) sys.vmHolder.remove(sys.customHands)
+  // 旧手部资源释放：重摆是切枪级频率，stripHandVertices/护腕环每次都新建
+  // BufferGeometry，只 remove 不 dispose 会持续泄漏显存。cloneSkinned 的几何/
+  // 材质与 GLB 模板共享——只释放带 ownedByRig 标记的本文件新建几何
+  if (sys.customHands) {
+    sys.customHands.traverse(o => {
+      if (o.isMesh && o.geometry?.userData?.ownedByRig) o.geometry.dispose()
+    })
+    sys.vmHolder.remove(sys.customHands)
+  }
   const group = new THREE.Group()
   sys.customHands = group
   sys.vmHolder.add(group)

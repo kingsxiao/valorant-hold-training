@@ -107,7 +107,7 @@ export class AudioSys {
     if (this._loadStarted) return
     this._loadStarted = true
     const names = ['shot_rifle', 'shot_phantom', 'shot_pistol', 'shot_ghost', 'shot_handcannon', 'shot_knife',
-      'headshot', 'kill', 'death', 'hurt', 'footstep', 'round_start']
+      'headshot', 'hit', 'kill', 'death', 'hurt', 'footstep', 'round_start']
     await Promise.all(names.map(async (name) => {
       for (const ext of ['mp3', 'wav', 'ogg']) {
         try {
@@ -143,6 +143,9 @@ export class AudioSys {
       p.connect(muffle).connect(this.bus)
       const send = this.ctx.createGain(); send.gain.value = 0.4
       muffle.connect(send).connect(this.reverb)
+      // 节点生命周期：连入常驻图的 Panner/Filter/Gain 不会被 GC，脚步声等高频
+      // 空间音会无限累积（音频线程 CPU 缓慢上涨）。所有 SFX 都 <2s，3s 后拆链
+      setTimeout(() => { try { send.disconnect(); muffle.disconnect(); p.disconnect() } catch { /* 已断 */ } }, 3000)
       return muffle
     }
     return this.bus // 非空间：直接走主总线（混响发送已在 ensure 里一次性接好）
@@ -267,13 +270,13 @@ export class AudioSys {
     this.ensure()
     if (!this.ctx) return
     if (head) {
-      if (this.user.headshot) { this._playBuffer(this.user.headshot, this.master, { delay }); return }
+      if (this.user.headshot) { this._playBuffer(this.user.headshot, this.bus, { delay }); return }
       // 爆头"叮"：金属瞬态 + 不谐和钟体长衰减 + 头盔"顿"感 —— 清脆、有分量、辨识度
       this._noiseBurst(this.master, { dur: 0.006, freq: 7000, q: 0.6, gain: 0.5, type: 'highpass', delay })
       this._metal(this.master, 2560, 0.3, 0.42, delay)
       this._thump(this.master, { freq: 210, freqEnd: 90, dur: 0.06, gain: 0.26, delay })
     } else {
-      if (this.user.hit) { this._playBuffer(this.user.hit, this.master, { delay }); return }
+      if (this.user.hit) { this._playBuffer(this.user.hit, this.bus, { delay }); return }
       // 身体命中："肉感"闷击 + 冲击体 + 脆点
       this._noiseBurst(this.master, { dur: 0.035, freq: 850, freqEnd: 300, q: 1.1, gain: 0.5, delay })
       this._osc(this.master, { type: 'sine', freq: 240, freqEnd: 130, dur: 0.045, gain: 0.3, delay })
@@ -284,7 +287,7 @@ export class AudioSys {
   kill(delay = 0, pitch = 1) {
     this.ensure()
     if (!this.ctx) return
-    if (this.user.kill) { this._playBuffer(this.user.kill, this.master, { delay, rate: pitch }); return }
+    if (this.user.kill) { this._playBuffer(this.user.kill, this.bus, { delay, rate: pitch }); return }
     // 击杀确认：低频"分量"落点 + 撕裂脆层 + 上行铃尾（确认感）+ 高频光泽
     // pitch：连杀每级升半音（上限 +4），听觉反馈连杀节奏
     this._thump(this.master, { freq: 170 * pitch, freqEnd: 44, dur: 0.13, gain: 0.55, delay })
@@ -297,7 +300,7 @@ export class AudioSys {
   death() { // 你被击杀
     this.ensure()
     if (!this.ctx) return
-    if (this.user.death) { this._playBuffer(this.user.death, this.master); return }
+    if (this.user.death) { this._playBuffer(this.user.death, this.bus); return }
     this._osc(this.master, { type: 'triangle', freq: 130, freqEnd: 42, dur: 0.36, gain: 0.9 })
     this._noiseBurst(this.master, { dur: 0.32, freq: 700, freqEnd: 110, q: 0.5, gain: 0.5 })
     this._thump(this.master, { freq: 90, freqEnd: 30, dur: 0.3, gain: 0.5, delay: 0.02 })
@@ -306,7 +309,7 @@ export class AudioSys {
   hurt() {
     this.ensure()
     if (!this.ctx) return
-    if (this.user.hurt) { this._playBuffer(this.user.hurt, this.master); return }
+    if (this.user.hurt) { this._playBuffer(this.user.hurt, this.bus); return }
     this._osc(this.master, { type: 'triangle', freq: 210, freqEnd: 80, dur: 0.12, gain: 0.6 })
     this._noiseBurst(this.master, { dur: 0.05, freq: 2500, q: 0.7, gain: 0.25 })
   }
@@ -336,7 +339,7 @@ export class AudioSys {
   roundStart() {
     this.ensure()
     if (!this.ctx) return
-    if (this.user.round_start) { this._playBuffer(this.user.round_start, this.master); return }
+    if (this.user.round_start) { this._playBuffer(this.user.round_start, this.bus); return }
     this._osc(this.master, { type: 'sine', freq: 880, dur: 0.1, gain: 0.35 })
     this._osc(this.master, { type: 'sine', freq: 1174, dur: 0.16, gain: 0.38, delay: 0.13 })
   }

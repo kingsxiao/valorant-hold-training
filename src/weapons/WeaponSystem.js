@@ -538,13 +538,15 @@ export class WeaponSystem {
           ch[3].rotateX(_deg(1.8) * g)
         }
       }
-      // 待机肌腱微动：中节 ±0.5° 慢漂移（~5.7s 周期），开火时收敛归零
+      // 待机肌腱微动：中节 ±0.8° 慢漂移（~5.7s 周期），开火时收敛归零。
+      // 2026-09-07 幅度实测校准：0.5° 折合指尖位移仅 ~0.26mm（1080p 下 ~1px），
+      // 深灰手套近景下几乎不可感知；0.8°（~0.4mm/2px）仍远低于穿插余量
       const twitchK = (1 - this.grip) * idleFactor
       if (twitchK > 0.01) {
         for (const k in h.fingers) {
           const ch = h.fingers[k]
           const ph = WeaponSystem.FINGER_TWITCH[k] ?? 0
-          ch[2].rotateX(_deg(0.5) * twitchK * Math.sin(this.idleT * 1.1 + ph))
+          ch[2].rotateX(_deg(0.8) * twitchK * Math.sin(this.idleT * 1.1 + ph))
         }
       }
     }

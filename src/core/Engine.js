@@ -151,6 +151,34 @@ export class Engine {
     sunSprite.position.set(120, 190, 76)
     sunSprite.scale.set(70, 70, 1)
     this.scene.add(sunSprite)
+
+    // 云：程序化软团贴图，几个大精灵贴在天穹上（不参与雾/深度），给天空层次
+    const cc = document.createElement('canvas')
+    cc.width = 256; cc.height = 128
+    const cg2 = cc.getContext('2d')
+    for (let i = 0; i < 14; i++) {
+      const x = 30 + Math.random() * 196, y = 40 + Math.random() * 55, r = 18 + Math.random() * 34
+      const rg = cg2.createRadialGradient(x, y, 2, x, y, r)
+      rg.addColorStop(0, 'rgba(255,255,255,0.55)')
+      rg.addColorStop(0.6, 'rgba(248,250,252,0.28)')
+      rg.addColorStop(1, 'rgba(255,255,255,0)')
+      cg2.fillStyle = rg
+      cg2.fillRect(0, 0, 256, 128)
+    }
+    const cloudTex = new THREE.CanvasTexture(cc)
+    cloudTex.colorSpace = THREE.SRGBColorSpace
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2 + Math.random() * 0.5
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: cloudTex, transparent: true, opacity: 0.5 + Math.random() * 0.3,
+        fog: false, depthWrite: false,
+      }))
+      s.position.set(Math.cos(ang) * 150, 62 + Math.random() * 45, Math.sin(ang) * 150)
+      const w = 60 + Math.random() * 55
+      s.scale.set(w, w * 0.42, 1)
+      s.renderOrder = -9
+      this.scene.add(s)
+    }
   }
 
   start() {

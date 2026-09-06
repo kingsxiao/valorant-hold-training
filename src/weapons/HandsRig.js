@@ -240,7 +240,7 @@ export const GLOVE_POSES = {
       // curls 2026-09-07 指尖贴合坐标下降优化：四指远端加卷把指尖距护木面从
       // 6-9mm 收到 0-4mm（且指尖不入枪体）；拇指卷曲无法进一步贴合（39mm 悬空
       // 为指向问题，留待后续按瞄准向量处理）
-      curls: { pinky: [32, 79, 103, 21], ring: [30, 77, 103, 27], middle: [28, 73, 103, 43], index: [26, 62, 97, 36], thumb: [-20, -18, -4, 0] },
+      curls: { pinky: [32, 79, 103, 21], ring: [30, 77, 103, 27], middle: [28, 73, 103, 43], index: [26, 62, 97, 36], thumb: [[20, 40, 40], [-8, 10, 0], -4, 0] },
     },
   },
   // phantom（2026-09-05 按该枪顶点切片重推：全长仅 2.4 作者单位，1u≈35cm。
@@ -260,7 +260,7 @@ export const GLOVE_POSES = {
       wrist: [-0.2, 0.05, 0.016],
       fDes: [-0.2, -0.1, -0.97],
       sDes: [0.95, 0.25, -0.2],
-      curls: { pinky: [42, 92, 95, 20], ring: [40, 88, 95, 21], middle: [38, 85, 95, 22], index: [36, 80, 90, 20], thumb: [-20, -18, -4, 0] },
+      curls: { pinky: [42, 92, 95, 20], ring: [40, 88, 95, 26], middle: [38, 103, 120, 22], index: [36, 80, 115, 35], thumb: [-20, -18, -4, 0] },
     },
   },
 }
@@ -359,10 +359,18 @@ export function poseGloveHands(sys, scene, arms, weaponId = sys.currentVmId) {
     sys.vmScene.updateMatrixWorld(true)
     // 五指逐节本地卷曲：绕各节本地 X 轴（骨骼沿 +Y 延伸），+ 角度 = 向掌心（实测）。
     // curls 四值 = [指根meta, 近节, 中节, 远节]：指根小幅参与让掌指关节成弧，
-    // 其余递减出自然梯度；指根本地 X 卷曲不改变绑定 Z 向扇形展开角
+    // 其余递减出自然梯度；指根本地 X 卷曲不改变绑定 Z 向扇形展开角。
+    // 数组值 [x,y,z] = 依次本地 rotateX/Y/Z（拇指对握需展开+卷曲多轴，2026-09-07）
     for (const [k, degs] of Object.entries(cfg.curls)) {
       const ch = F[k].map(b => bones[b.name])
-      degs.forEach((deg, i) => { if (deg) ch[i].rotateX(THREE.MathUtils.degToRad(deg)) })
+      degs.forEach((deg, i) => {
+        if (Array.isArray(deg)) {
+          const [rx, ry, rz] = deg.map(d => THREE.MathUtils.degToRad(d || 0))
+          if (rx) ch[i].rotateX(rx)
+          if (ry) ch[i].rotateY(ry)
+          if (rz) ch[i].rotateZ(rz)
+        } else if (deg) ch[i].rotateX(THREE.MathUtils.degToRad(deg))
+      })
     }
     sys.vmScene.updateMatrixWorld(true)
     // 动画基准存档：指骨本地四元数 + 根变换。WeaponSystem._animateHands 每帧

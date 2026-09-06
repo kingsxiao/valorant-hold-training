@@ -391,6 +391,9 @@ export class Bot {
     this.velX = 0
     this.mesh.visible = true
     this.blob.visible = !Bot.realShadows
+    // 上一次死亡淡出可能关闭了网格投影（setOpacity 半程切换 blob 补位）——重生恢复
+    this._casting = true
+    this.mesh.traverse?.(o => { if (o.isMesh) o.castShadow = true })
     this.mesh.rotation.set(0, 0, 0)
     this.mesh.position.copy(this.pos)
     this.walkPhase = 0
@@ -421,6 +424,14 @@ export class Bot {
       m.transparent = o < 1
       m.opacity = o
     }
+    // 真实阴影随淡出衰减：材质透明不影响 depth pass，影子会保持实心到 hide
+    // 才突然消失。半程后关掉投影，blob 接触阴影（透明度跟随）补位过渡
+    if (o <= 0.55 && Bot.realShadows && this._casting) {
+      this._casting = false
+      this.mesh.traverse?.(obj => { if (obj.isMesh) obj.castShadow = false })
+      this.blob.visible = true
+    }
+    if (o <= 0.55 && this.blob.visible) this.blobMat.opacity = o * 0.7
   }
 
   get invulnerable() { return this.now() < (this.spawnGuardUntil ?? 0) || !this.active || this.mode === 'dying' || this.mode === 'won' }

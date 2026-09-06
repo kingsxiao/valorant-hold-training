@@ -30,7 +30,7 @@ npm run optimize:models  # 压缩 public/models/*.glb（换入自有模型后执
 
 ## 部署
 
-纯静态 SPA，`dist/` 可托管在任意静态服务器 / GitHub Pages / Vercel / Netlify / Cloudflare Pages / Docker。资源全部相对路径（`base: './'`），支持任意子路径部署；字体自托管，无第三方请求。全量约 3.3 MB（gzip ~1.1 MB）。缓存策略、nginx 配置样例与各平台步骤见 **[DEPLOY.md](DEPLOY.md)**。
+纯静态 SPA，`dist/` 可托管在任意静态服务器 / GitHub Pages / Vercel / Netlify / Cloudflare Pages / Docker。资源全部相对路径（`base: './'`），支持任意子路径部署；字体自托管，无第三方请求。全量约 4.9 MB（GLB 模型已预压缩约占 4.1 MB；JS/CSS/字体 gzip 后合计 ~0.5 MB）。缓存策略、nginx 配置样例与各平台步骤见 **[DEPLOY.md](DEPLOY.md)**。
 
 ## 操作
 

@@ -7,12 +7,12 @@
 | 文件 | 大小 | 缓存建议 |
 | --- | --- | --- |
 | `index.html` | ~1 KB | **不缓存**（每次都拿最新的资源 hash） |
-| `assets/*.js/.css/.woff2` | ~800 KB | 带内容 hash，可 `immutable` 长缓存 |
-| `models/*.glb` | ~2.0 MB | 无 hash，`no-cache` 或短缓存（见下） |
+| `assets/*.js/.css/.woff2` | ~840 KB（gzip 后 ~350 KB） | 带内容 hash，可 `immutable` 长缓存 |
+| `models/*.glb` | ~4.1 MB（已量化预压缩） | 无 hash，`no-cache` 或短缓存（见下） |
 | `sfx/README.txt`、`models/README.txt` | ~4 KB | 随意 |
 | `robots.txt`、`llms.txt` | ~2 KB | 随意（SEO/爬虫与 AI 代理站点说明） |
 
-首次加载全量约 **3.3 MB**（gzip 后约 **1.1 MB**）；二次访问命中缓存后几乎零下载。字体已自托管（原 Google Fonts 外链移除），**无任何第三方请求**，断网/内网环境完整可用。
+首次加载全量约 **4.9 MB**（GLB 已预压缩；JS/CSS/字体 gzip 后约 **0.5 MB**）；二次访问命中缓存后几乎零下载。字体已自托管（原 Google Fonts 外链移除），**无任何第三方请求**，断网/内网环境完整可用。
 
 要点：
 

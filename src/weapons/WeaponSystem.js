@@ -255,7 +255,15 @@ export class WeaponSystem {
     this.burstLeft = 0
     this.equipUntil = this.now + CONFIG.weapons[id].equipTime * (instant ? 0 : 1)
     this.sprayIndex = 0
-    this.weaponMeshFor(id)
+    // 两段式切枪（2026-09-07）：旧枪先在装备动画前 35% 内下移出画，到边界帧才
+    // 换枪+重摆手姿，再托起新枪——旧版切换帧旧枪原地消失、新枪瞬移到下方，
+    // 手腕单帧跳变 0.56 NDC（实测），硬切可见
+    if (instant) {
+      this._pendingVmSwap = null
+      this.weaponMeshFor(id)
+    } else {
+      this._pendingVmSwap = { id, at: this.now + CONFIG.weapons[id].equipTime * 0.35 }
+    }
     if (!instant && this.audio?.ctx) this.audio.equip() // 切枪机械声（开局静默，避免未解锁的 AudioContext）
     this.onAmmoChange?.(this)
   }
@@ -459,9 +467,20 @@ export class WeaponSystem {
     const breatheY = Math.sin(this.idleT * 1.7) * 0.0022 * idleK
     const breatheX = Math.cos(this.idleT * 0.9) * 0.0016 * idleK
     // 换枪缓动（从下方托起，ease-out + 出枪弧线：低位时枪口上抬侧倾）
+    // 两段式：前 35% 旧枪 ease-in 下移（到 _pendingVmSwap.at 换枪+重摆手姿），
+    // 后 65% 新枪 ease-out 托起（原单段曲线）
+    if (this._pendingVmSwap && this.now >= this._pendingVmSwap.at) {
+      this.weaponMeshFor(this._pendingVmSwap.id)
+      this._pendingVmSwap = null
+    }
     const equipT = Math.max(0.01, this.weapon.equipTime)
     const ep = this.now < this.equipUntil ? 1 - (this.equipUntil - this.now) / equipT : 1
-    const raise = (1 - Math.pow(THREE.MathUtils.clamp(ep, 0, 1), 3)) * 0.17
+    const SWAP_AT = 0.35
+    const epc = THREE.MathUtils.clamp(ep, 0, 1)
+    const raise = (this._pendingVmSwap
+      ? Math.pow(epc / SWAP_AT, 2) // 阶段1：旧枪下移（epc ≤ 0.35）
+      : 1 - Math.pow(THREE.MathUtils.clamp((epc - SWAP_AT) / (1 - SWAP_AT), 0, 1), 3) // 阶段2：新枪托起
+    ) * 0.17
     const lower = raise
     const crouchDrop = p.crouchAmt * 0.02
     // 挥刀弧线（sin 包络：抬起 → 劈下 → 回位）

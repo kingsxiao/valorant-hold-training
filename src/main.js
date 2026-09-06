@@ -288,6 +288,10 @@ engine.renderFrame = (alpha, dtMs) => {
   const dt = dtMs / 1000
     player.updateCamera(engine.camera, alpha)
     bots.renderSync(alpha) // Bot 网格插值与相机同 alpha（掉帧时不相对视野抖动）
+    // 相机矩阵即时刷新：HUD 伤害数字在渲染前 project，用的是 matrixWorldInverse，
+    // 不手动更新会滞后一帧（快速甩视角时数字明显拖影）
+    engine.camera.updateMatrixWorld()
+    engine.camera.matrixWorldInverse.copy(engine.camera.matrixWorld).invert()
   weapons.updateViewmodel(dt, frameMouse.dx, frameMouse.dy)
   fx.calibrate(innerWidth, innerHeight, engine.camera.fov) // 粒子点大小随窗口/FOV 校准
   fx.update(dt)

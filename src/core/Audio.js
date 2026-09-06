@@ -324,6 +324,15 @@ export class AudioSys {
     this._osc(this.master, { type: 'sawtooth', freq: 900, freqEnd: 180, dur: 0.22, gain: 0.1, delay: 0.02 })
   }
 
+  // 落地闷响：与 viewmodel 颠簸弹簧同步的触地反馈（强度随下落速度）
+  land(k = 1) {
+    this.ensure()
+    if (!this.ctx) return
+    const g = Math.min(0.5, 0.15 + k * 0.06)
+    this._thump(this.bus, { freq: 130, freqEnd: 42, dur: 0.12, gain: g })
+    this._noiseBurst(this.bus, { dur: 0.05, freq: 900, freqEnd: 220, q: 0.8, gain: g * 0.5 })
+  }
+
   footstep(pos, listener, running) {
     this.ensure()
     if (!this.ctx) return

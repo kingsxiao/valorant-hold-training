@@ -129,7 +129,10 @@ export class Player {
     const vyBefore = this.vel.y
     this._moveAxis('y', this.vel.y * dt)
     // 落地冲击（viewmodel 颠簸弹簧消费一次后清零；站立支撑不触发）
-    if (!wasGrounded && this.grounded) this.landKick = Math.max(0, -vyBefore)
+    if (!wasGrounded && this.grounded) {
+      this.landKick = Math.max(0, -vyBefore)
+      if (this.landKick > 2) this.audio.land?.(this.landKick) // 真跳落地才有声响，小台阶不算
+    }
 
     // 脚步声
     const hSpeed = Math.hypot(this.vel.x, this.vel.z)

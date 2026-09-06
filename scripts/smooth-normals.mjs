@@ -4,11 +4,15 @@
 // 法线仍等于面法线）；weld 又因重复顶点间法线/UV 不一致而拒绝合并（鸡生蛋）。
 // 本脚本绕开拓扑：同位置（1e-5 精度）顶点的法线取均值写回每个顶点——
 // 跨 UV/材质缝的着色连续，且完全不动索引/权重/UV（蒙皮与穿插审计结果不变）。
+// 折角阈值 creaseDeg（默认 50）：同位置但法线差超过该值的顶点视为刻意硬边
+// （枪械机械棱线），各自保留不平滑——有机模型（手套/手臂）全平滑无妨，
+// 机械模型需保留棱线。
 // 用法：node scripts/smooth-normals.mjs [file.glb ...]（默认 glove.glb + hands.glb）
 import { NodeIO } from '@gltf-transform/core'
 import { KHRMeshQuantization } from '@gltf-transform/extensions'
 import { quantize } from '@gltf-transform/functions'
 
+const CREASE_DEG = 50
 const io = new NodeIO().registerExtensions([KHRMeshQuantization])
 const files = process.argv.slice(2).length ? process.argv.slice(2) : ['public/models/glove.glb', 'public/models/hands.glb']
 for (const path of files) {
@@ -27,15 +31,28 @@ for (const path of files) {
     const arr = nor.getArray()
     const out = new Float32Array(arr.length)
     for (const idxs of groups.values()) {
-      let sx = 0, sy = 0, sz = 0
-      for (const i of idxs) { const n = nor.getElement(i, [0, 0, 0]); sx += n[0]; sy += n[1]; sz += n[2] }
-      const len = Math.hypot(sx, sy, sz) || 1
-      for (const i of idxs) { out[i * 3] = sx / len; out[i * 3 + 1] = sy / len; out[i * 3 + 2] = sz / len }
+      // 硬边分组：法线差 > CREASE_DEG 的顶点各自成组不平均
+      const clusters = []
+      for (const i of idxs) {
+        const n = nor.getElement(i, [0, 0, 0])
+        let placed = false
+        for (const cl of clusters) {
+          const ref = nor.getElement(cl[0], [0, 0, 0])
+          const dot = Math.max(-1, Math.min(1, n[0]*ref[0] + n[1]*ref[1] + n[2]*ref[2]))
+          if (Math.acos(dot) * 180 / Math.PI < CREASE_DEG) { cl.push(i); placed = true; break }
+        }
+        if (!placed) clusters.push([i])
+      }
+      for (const cl of clusters) {
+        let sx = 0, sy = 0, sz = 0
+        for (const i of cl) { const n = nor.getElement(i, [0, 0, 0]); sx += n[0]; sy += n[1]; sz += n[2] }
+        const len = Math.hypot(sx, sy, sz) || 1
+        for (const i of cl) { out[i * 3] = sx / len; out[i * 3 + 1] = sy / len; out[i * 3 + 2] = sz / len }
+      }
     }
     prim.setAttribute('NORMAL', doc.createAccessor().setType('VEC3').setArray(out))
   }
   await doc.transform(quantize({ quantizeNormal: 12 }))
   await io.write(path, doc)
-  console.log(`${path}: 法线已按位置聚合平滑（${groups0(doc)} 顶点组）`)
+  console.log(`${path}: 法线已按位置聚合平滑（折角阈值 ${CREASE_DEG}° 保留硬边）`)
 }
-function groups0() { return '' }

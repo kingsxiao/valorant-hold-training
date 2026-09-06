@@ -486,6 +486,19 @@ export class FX {
       if (r.life <= 0) r.mesh.visible = false
     }
   }
+
+  // 回合重置：清掉上一局残留的弹孔/曳光/弹壳/火花/烟/环/头盔 —— 新回合干净靶场
+  clearAll() {
+    for (const t of this.tracers) { t.life = 0; t.mesh.visible = false }
+    for (const d of this.decals) { d.life = 0; d.mesh.visible = false }
+    for (const s of this.shells) { s.life = 0; s.mesh.visible = false }
+    for (const r of this.rings) { r.life = 0; r.mesh.visible = false }
+    for (const h of this.helmets) { h.life = 0; h.mesh.visible = false }
+    this.sparks.n = 0
+    this.puffs.n = 0
+    this.flashLife = 0; this.flash.visible = false
+    this.lightLife = 0; this.flashLight.intensity = 0
+  }
 }
 
 const _dq = new THREE.Quaternion()

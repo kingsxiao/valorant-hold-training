@@ -244,6 +244,7 @@ function startRound(cfg) {
   goShowUntil = 0
 
   bots.resetRound()
+  fx.clearAll() // 清上一局残留的弹孔/弹壳等特效，新回合干净靶场
   hud.setAmmo(weapons.weapon)
   hud.clearKillfeed() // 新回合干净的信息流
   hud.setMode(MODE_INFO.label, MODE_INFO.desc)

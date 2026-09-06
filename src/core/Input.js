@@ -23,7 +23,7 @@ export class Input {
 
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas
-      if (!this.locked) { this.keys.clear(); this.mouse0 = this.mouse1 = false }
+      if (!this.locked) { this.keys.clear(); this.mouse0 = this.mouse1 = false; this.mouse0Edge = this.mouse1Edge = false } // 暂停时丢掉未消费的射击沿，否则恢复后第一 tick 走火
       this.onLockChange?.(this.locked)
     })
 

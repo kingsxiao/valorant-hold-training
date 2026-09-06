@@ -400,6 +400,7 @@ export class Bot {
     this.blobMat.opacity = 1
     this.spawnGuardUntil = this.now() + CONFIG.bot.spawnGuardMs / 1000
     this.firstVisibleAt = -1
+    this.reactRecorded = false // 反应样本每次出场只记一条（防多段击杀重复计数）
     this.flinch = 0 // 复用的 Bot 不带旧受击踉跄
     this.hitFlash = 0
     this._restoreEmissive() // 也不带旧受击红光（如被击杀后立刻复用）
@@ -579,6 +580,16 @@ export class Bot {
     ctx.drive?.(this, dt)
 
     _v.copy(this.prevPos).lerp(this.pos, ctx.alpha ?? 1)
+    this.mesh.position.x = _v.x
+    this.mesh.position.z = _v.z
+    this.blob.position.set(_v.x, 0.02, _v.z)
+  }
+
+  // 渲染帧插值：128Hz 逻辑位 → 渲染帧用 accumulator alpha 重采样网格位置。
+  // 相机在 renderFrame 里是插值的，Bot 不插值会在掉帧时相对视野抖动
+  syncVisual(alpha) {
+    if (!this.active && this.mode !== 'dying') return
+    _v.copy(this.prevPos).lerp(this.pos, alpha)
     this.mesh.position.x = _v.x
     this.mesh.position.z = _v.z
     this.blob.position.set(_v.x, 0.02, _v.z)

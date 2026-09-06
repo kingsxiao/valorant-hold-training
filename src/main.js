@@ -282,7 +282,8 @@ let goShowUntil = 0
 
 engine.renderFrame = (alpha, dtMs) => {
   const dt = dtMs / 1000
-  player.updateCamera(engine.camera, alpha)
+    player.updateCamera(engine.camera, alpha)
+    bots.renderSync(alpha) // Bot 网格插值与相机同 alpha（掉帧时不相对视野抖动）
   weapons.updateViewmodel(dt, frameMouse.dx, frameMouse.dy)
   fx.calibrate(innerWidth, innerHeight, engine.camera.fov) // 粒子点大小随窗口/FOV 校准
   fx.update(dt)

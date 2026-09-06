@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { CONFIG, makeSprayPattern } from '../core/Config.js'
 import { damageFor, spreadAt } from './ballistics.js'
 import { buildWeaponModels, buildCustomArms } from './ViewmodelFactory.js'
@@ -149,7 +150,14 @@ export class WeaponSystem {
   // 入参支持 {vandal: scene, phantom: scene} 映射或单场景（两把步枪共用）
   setCustomViewmodel(input) {
     const map = input?.isObject3D ? { vandal: input, phantom: input } : input
-    for (const [id, scene] of Object.entries(map)) this._attachCustomVm(id, scene)
+    const seen = new Set()
+    for (const [id, scene] of Object.entries(map)) {
+      // 旧单模型回退：两 id 共享同一 scene。_attachCustomVm 会移动/缩放/重新
+      // 包装 children，重复 attach 会二次包裹、二次缩放、挂两遍 —— 先克隆再装
+      if (seen.has(scene)) { this._attachCustomVm(id, SkeletonUtils.clone(scene)); continue }
+      seen.add(scene)
+      this._attachCustomVm(id, scene)
+    }
     this.weaponMeshFor(this.currentVmId)
   }
 

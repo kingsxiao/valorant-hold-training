@@ -61,6 +61,12 @@ export class BotManager {
 
   now() { return this.t }
 
+  // 渲染帧视觉同步：Bot 网格位置按主循环 accumulator alpha 插值（与相机一致），
+  // 由 main.renderFrame 每帧调用；sim step 内的写入只是兜底
+  renderSync(alpha) {
+    for (const b of this.bots) b.syncVisual(alpha)
+  }
+
   // ---- 每个固定步长驱动 ----
   step(dt, alpha) {
     if (!this.running) return
@@ -194,10 +200,12 @@ export class BotManager {
 
   damage(bot, dmg, zone) {
     if (bot.invulnerable) return false
-    // 反应时间：首次命中 - 首次可见
-    if (bot.firstVisibleAt > 0 && this.stats.reactions.length < 500) {
+    // 反应时间：首次命中 - 首次可见（每次出场只记一条：多发击杀的第一发才是"反应"，
+    // 后续弹只是补伤害，计入会把均值拖慢、最快反应刷假纪录）
+    if (bot.firstVisibleAt > 0 && !bot.reactRecorded && this.stats.reactions.length < 500) {
       const ms = Math.round((this.now() - bot.firstVisibleAt) * 1000)
       if (ms >= 0 && ms < 3000) { this.stats.reactions.push(ms); this.stats.lastReaction = ms }
+      bot.reactRecorded = true
     }
     bot.hp -= dmg
     bot.flashHit(zone === 'head')

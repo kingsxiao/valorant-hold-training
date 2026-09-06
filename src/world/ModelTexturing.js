@@ -108,7 +108,9 @@ export function applyViewmodelTextures(root) {
 export function applyHandsTextures(root) {
   eachMat(root, m => {
     if (!m.isMeshStandardMaterial) return
-    if (/glove|mitt/i.test(m.name)) {
+    if (/glove|mitt|^arm$/i.test(m.name)) {
+      // 2026-09-07 ^arm$ 并入：glove.glb 手模型的腕段子网格材质名为 Arm（裸名），
+      // 深灰与手套一体（读作手套内衬/腕筒延伸），肤色在该处呈"露腕"感（A/B 评审）
       assign(m, Tex.skin(), { tint: 0x4d545c, roughness: 0.88, metalness: 0, normalScale: 1.2 })
     } else if (/hand|arm|skin|face|body/i.test(m.name)) {
       assign(m, Tex.skin(), { tint: 0xd9a882, roughness: 0.58, metalness: 0, normalScale: 0.55 })

@@ -7,7 +7,7 @@ import { KHRMeshQuantization } from '@gltf-transform/extensions'
 import { weld, quantize } from '@gltf-transform/functions'
 
 const io = new NodeIO().registerExtensions([KHRMeshQuantization])
-const path = 'public/models/glove.glb'
+const path = process.argv[2] ?? 'public/models/glove.glb'
 const doc = await io.read(path)
 let added = 0
 for (const prim of doc.getRoot().listMeshes().flatMap(m => m.listPrimitives())) {

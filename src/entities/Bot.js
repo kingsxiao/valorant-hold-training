@@ -217,10 +217,13 @@ export class Bot {
         o.material = Array.isArray(o.material) ? o.material.map(m => m.clone()) : o.material.clone()
         const all = Array.isArray(o.material) ? o.material : [o.material]
         this._ownMats.push(...all)
-        const m0 = all[0]
-        this.mats['m' + i++] = m0
-        m0.userData.em ??= m0.emissive?.getHex() ?? 0   // 受击闪红后按原始值恢复
-        m0.userData.emI ??= m0.emissiveIntensity ?? 1
+        // 全部材质都入 mats：flashHit/setOpacity/_restoreEmissive 都遍历 mats，
+        // 多材质网格只注册首个会让其余子网格不闪红、死亡淡出时保持不透明
+        for (const m0 of all) {
+          this.mats['m' + i++] = m0
+          m0.userData.em ??= m0.emissive?.getHex() ?? 0   // 受击闪红后按原始值恢复
+          m0.userData.emI ??= m0.emissiveIntensity ?? 1
+        }
         o.frustumCulled = false // 蒙皮网格包围盒不随骨骼更新，禁用裁剪防闪没
       }
     })

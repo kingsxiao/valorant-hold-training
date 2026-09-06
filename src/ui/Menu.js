@@ -83,8 +83,35 @@ export class Menu {
       crosshair: {},
       ...loadSettings(),
     }
+    this._sanitizeCfg()
     this.build()
     this.applyAll = null // main 注入：设置实时生效
+  }
+
+  // 持久化脏数据防线：localStorage 可能被手改/半截写入（sens:"abc"、crosshair:3、
+  // 越界 sens:5）。不清洗会：字符串让 toFixed 抛错整屏菜单挂掉；crosshair 非
+  // 对象让 ??= 赋值到原始值上抛错；越界值滑条显示被钳但 cfg 用原值——所见非所用
+  _sanitizeCfg() {
+    const c = this.cfg
+    const NUM = { // 与 build() 里滑条 min/max 一一对应
+      sens: [0.05, 1.5], roundSeconds: [0, 180], delayMin: [200, 2000],
+      delayMax: [500, 5000], speedMult: [0.4, 1.3], aimTimeMs: [250, 1200],
+      volume: [0, 1], resScale: [0.5, 2],
+    }
+    const DEF = {
+      sens: CONFIG.mouse.defaultSens, roundSeconds: 60,
+      delayMin: CONFIG.training.peekDelayMinMs, delayMax: CONFIG.training.peekDelayMaxMs,
+      speedMult: 1, aimTimeMs: CONFIG.bot.aimTimeMs, volume: 0.7, resScale: 1,
+    }
+    for (const [k, [min, max]] of Object.entries(NUM)) {
+      const v = Number(c[k])
+      c[k] = Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : DEF[k]
+    }
+    const WEAPONS = Object.keys(CONFIG.weapons)
+    if (!WEAPONS.includes(c.primary)) c.primary = 'vandal'
+    if (!WEAPONS.includes(c.secondary)) c.secondary = 'classic'
+    for (const k of ['showFps', 'shadows', 'autoRes', 'rampUp', 'doubleGap']) c[k] = !!c[k]
+    c.crosshair = (typeof c.crosshair === 'object' && c.crosshair !== null) ? c.crosshair : {}
   }
 
   build() {

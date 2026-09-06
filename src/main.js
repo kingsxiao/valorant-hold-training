@@ -214,6 +214,8 @@ menu.applyAll = () => {
   engine.autoRes = cfg.autoRes !== false
   engine.setResolutionScale(cfg.resScale ?? 1)
   engine.setShadows(!!cfg.shadows)
+  Bot.realShadows = !!cfg.shadows // 真实阴影下隐藏 Bot 的 blob 接触阴影（防双重投影）
+  for (const b of bots.bots) b.blob.visible = b.active && !Bot.realShadows
   hud.fpsBox.style.display = cfg.showFps === false ? 'none' : ''
 }
 menu.applyAll()

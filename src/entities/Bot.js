@@ -23,6 +23,7 @@ export class Bot {
   static customTemplate = null   // 用户 GLB 模板（UserAssets 注入）
   static customAnimations = null // 模板动画 clips
   static _baseMats = null        // 基础材质（纹理共享，逐 bot clone）
+  static realShadows = false     // 真实阴影开启时隐藏 blob 接触阴影（防双重投影）
 
   constructor(scene, world) {
     this.scene = scene
@@ -176,6 +177,7 @@ export class Bot {
     for (const [name, geos] of Object.entries(buckets)) {
       const mesh = new THREE.Mesh(mergeGeometries(geos, false), M[name])
       mesh.matrixAutoUpdate = false
+      mesh.castShadow = true // Bot 投真实阴影（blob 接触阴影在其关闭时兜底）
       g.add(mesh)
     }
 
@@ -211,6 +213,7 @@ export class Bot {
     let i = 0
     clone.traverse(o => {
       if (o.isMesh) {
+        o.castShadow = true
         o.material = Array.isArray(o.material) ? o.material.map(m => m.clone()) : o.material.clone()
         const all = Array.isArray(o.material) ? o.material : [o.material]
         this._ownMats.push(...all)
@@ -387,7 +390,7 @@ export class Bot {
     this.mode = mode
     this.velX = 0
     this.mesh.visible = true
-    this.blob.visible = true
+    this.blob.visible = !Bot.realShadows
     this.mesh.rotation.set(0, 0, 0)
     this.mesh.position.copy(this.pos)
     this.walkPhase = 0

@@ -187,6 +187,9 @@ export class MapBuilder {
       const merged = mergeGeometries(arr, false)
       const mesh = new THREE.Mesh(merged, mats[key])
       mesh.matrixAutoUpdate = false
+      // 真实阴影：围/墙/箱投影 + 地板/墙面接收（renderer.shadowMap 关闭时零成本）
+      mesh.castShadow = key !== 'floor' && key !== 'lamp'
+      mesh.receiveShadow = key !== 'lamp'
       this.scene.add(mesh)
       for (const g of arr) g.dispose()
     }

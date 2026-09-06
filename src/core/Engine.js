@@ -14,7 +14,7 @@ export class Engine {
     })
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, CONFIG.graphics.maxPixelRatio))
     this.renderer.shadowMap.enabled = CONFIG.graphics.shadows
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    this.renderer.shadowMap.type = THREE.PCFShadowMap // PCFSoft 在 r185 已弃用（PCF 本身即软过滤）
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.06
 
@@ -53,10 +53,12 @@ export class Engine {
     const sun = new THREE.DirectionalLight(0xfff2dc, 1.05)
     sun.position.set(28, 46, 18)
     sun.castShadow = true // 阴影贴图只在 renderer.shadowMap.enabled 时分配/使用，可运行时切换
-    sun.shadow.mapSize.set(1024, 1024)
-    sun.shadow.camera.left = -45; sun.shadow.camera.right = 45
-    sun.shadow.camera.top = 45; sun.shadow.camera.bottom = -45
+    sun.shadow.mapSize.set(2048, 2048)
+    sun.shadow.camera.left = -40; sun.shadow.camera.right = 40
+    sun.shadow.camera.top = 40; sun.shadow.camera.bottom = -40
     sun.shadow.camera.far = 120
+    sun.shadow.bias = -0.0004
+    sun.shadow.normalBias = 0.03 // 消自阴影痤疮（墙面/箱体大面积接收面）
     this.scene.add(sun)
     this.sun = sun
 

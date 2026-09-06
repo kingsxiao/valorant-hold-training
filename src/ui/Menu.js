@@ -16,7 +16,15 @@ export function saveSettings(patch) {
 }
 // 个人最佳成绩（按模式持久化，破纪录才有训练意义）
 export function loadBests() {
-  try { return JSON.parse(localStorage.getItem(BEST_KEY)) ?? {} } catch { return {} }
+  try {
+    const v = JSON.parse(localStorage.getItem(BEST_KEY))
+    if (typeof v !== 'object' || v === null) return {}
+    // 各模式最佳分须为有限数：字符串/NaN 会让 Math.max 与破纪录比较失真
+    for (const k of Object.keys(v)) {
+      if (typeof v[k] !== 'number' || !Number.isFinite(v[k])) delete v[k]
+    }
+    return v
+  } catch { return {} }
 }
 export function saveBest(mode, score) {
   const b = loadBests(); b[mode] = score
@@ -26,7 +34,10 @@ export function saveBest(mode, score) {
 // 上一局摘要（结算面板"对比上局"用）
 const LAST_KEY = 'vht-last-round-v1'
 export function loadLastRound() {
-  try { return JSON.parse(localStorage.getItem(LAST_KEY)) ?? null } catch { return null }
+  try {
+    const v = JSON.parse(localStorage.getItem(LAST_KEY))
+    return (typeof v === 'object' && v !== null) ? v : null
+  } catch { return null }
 }
 export function saveLastRound(s) {
   try { localStorage.setItem(LAST_KEY, JSON.stringify(s)) } catch { /* 同上 */ }
@@ -35,16 +46,23 @@ export function saveLastRound(s) {
 // 个人最快单次反应（跨回合持久化；样本 ≥5 才认，避免运气值）
 const FAST_KEY = 'vht-fastest-v1'
 export function loadFastest() {
-  try { return JSON.parse(localStorage.getItem(FAST_KEY)) ?? null } catch { return null }
+  try {
+    const v = JSON.parse(localStorage.getItem(FAST_KEY))
+    return (typeof v === 'object' && v !== null && Number.isFinite(v.ms)) ? v : null
+  } catch { return null }
 }
 export function saveFastest(ms) {
   try { localStorage.setItem(FAST_KEY, JSON.stringify({ ms })) } catch { /* 同上 */ }
 }
 
-// 近 10 局得分历史（结算面板趋势图用）
+// 近 10 局得分历史（结算面板趋势图用）。手改/半截写入可能存出非数组，
+// main 的 [...loadHistory(), score] 对非可迭代值会抛错炸掉回合结算 → 类型守卫
 const HIST_KEY = 'vht-history-v1'
 export function loadHistory() {
-  try { return JSON.parse(localStorage.getItem(HIST_KEY)) ?? [] } catch { return [] }
+  try {
+    const v = JSON.parse(localStorage.getItem(HIST_KEY))
+    return Array.isArray(v) ? v.filter(x => typeof x === 'number' && Number.isFinite(x)) : []
+  } catch { return [] }
 }
 export function saveHistory(scores) {
   try { localStorage.setItem(HIST_KEY, JSON.stringify(scores.slice(-10))) } catch { /* 同上 */ }
@@ -53,7 +71,10 @@ export function saveHistory(scores) {
 // 生涯累计击杀
 const TOTAL_KEY = 'vht-total-kills-v1'
 export function loadTotalKills() {
-  try { return JSON.parse(localStorage.getItem(TOTAL_KEY)) ?? 0 } catch { return 0 }
+  try {
+    const v = JSON.parse(localStorage.getItem(TOTAL_KEY))
+    return typeof v === 'number' && Number.isFinite(v) ? v : 0
+  } catch { return 0 }
 }
 export function saveTotalKills(n) {
   try { localStorage.setItem(TOTAL_KEY, JSON.stringify(n)) } catch { /* 同上 */ }

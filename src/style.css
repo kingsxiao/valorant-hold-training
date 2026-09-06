@@ -358,6 +358,8 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
   transition: border-color 0.15s, background 0.15s;
 }
 .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+/* 清除纪录的两步确认态：红色警示 */
+.btn-ghost.danger { border-color: #ff4655; color: #ff4655; background: rgba(255, 70, 85, 0.12); }
 
 .hint { opacity: 0.5; font-size: 12px; margin-top: 16px; line-height: 2.1; letter-spacing: 0.5px; }
 .kbd {

@@ -284,12 +284,27 @@ export class Menu {
     p.querySelector('.btn-start:not(.btn-continue)').onclick = () => this.onReady?.({ ...this.cfg })
     // 暂停中恢复当前回合（不重置分数/计时）
     p.querySelector('.btn-continue').onclick = () => this.onContinue?.()
-    // 清除全部个人纪录（最佳/最快/历史/上局）
-    p.querySelector('.btn-clear-records').onclick = () => {
-      for (const k of ['vht-bests-v1', 'vht-fastest-v1', 'vht-history-v1', 'vht-last-round-v1', 'vht-total-kills-v1']) {
-        try { localStorage.removeItem(k) } catch { /* 忽略 */ }
+    // 清除全部个人纪录（最佳/最快/历史/上局）——两步确认：第一次点变红要确认，
+    // 3 秒内再点才真正清除（误触一次不丢生涯数据）
+    const clearBtn = p.querySelector('.btn-clear-records')
+    let confirmUntil = 0
+    clearBtn.onclick = () => {
+      if (performance.now() < confirmUntil) {
+        for (const k of ['vht-bests-v1', 'vht-fastest-v1', 'vht-history-v1', 'vht-last-round-v1', 'vht-total-kills-v1']) {
+          try { localStorage.removeItem(k) } catch { /* 忽略 */ }
+        }
+        confirmUntil = 0
+        clearBtn.textContent = '已清除'
+        setTimeout(() => { clearBtn.textContent = '清除纪录'; clearBtn.classList.remove('danger') }, 1200)
+        this.show(this._live ?? null) // 刷新徽标
+        return
       }
-      this.show(this._live ?? null) // 刷新徽标
+      confirmUntil = performance.now() + 3000
+      clearBtn.textContent = '确认清除？（再点一次）'
+      clearBtn.classList.add('danger')
+      setTimeout(() => {
+        if (performance.now() >= confirmUntil) { clearBtn.textContent = '清除纪录'; clearBtn.classList.remove('danger') }
+      }, 3100)
     }
     this.syncButtons()
   }

@@ -156,6 +156,8 @@ export class Engine {
     this.running = true
     this.lastTime = performance.now()
     this.accumulator = 0
+    // 开局首帧含着色器编译/纹理上传的长帧，清空统计避免 1% low 被启动卡顿污染
+    this.frameTimes.fill(0)
     const loop = (now) => {
       if (!this.running) return
       this._raf = requestAnimationFrame(loop)

@@ -64,14 +64,14 @@ export class Bot {
       const visorMat = pbr({ maps: Tex.visor(), roughness: 0.12, metalness: 0.6 })
       visorMat.emissiveMap = Tex.visorGlow()
       visorMat.emissive = new THREE.Color(0x7fdcff)
-      visorMat.emissiveIntensity = 1.1
+      visorMat.emissiveIntensity = 1.5
       Bot._baseMats = {
         suit: pbr({ maps: Tex.suit(), roughness: 0.9 }),
         vest: pbr({ maps: Tex.vest(), roughness: 0.7 }),
         head: pbr({ maps: Tex.robotJoint(), color: 0xb8bdc4, roughness: 0.5, metalness: 0.3 }),
         visor: visorMat,
         glove: pbr({ maps: Tex.fabric(), color: 0x4a4f57, roughness: 0.88 }),
-        accent: new THREE.MeshStandardMaterial({ color: 0xd8454e, roughness: 0.55, emissive: 0x2a0708 }),
+        accent: new THREE.MeshStandardMaterial({ color: 0xe84b55, roughness: 0.55, emissive: 0x55131a }),
         gun: pbr({ maps: Tex.metal(), roughness: 0.45, metalness: 0.75 }),
       }
     }

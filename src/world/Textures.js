@@ -110,7 +110,7 @@ function get(name, build) {
 // ---- 战术服织物（人物全身）----
 const suit = () => get('suit', () => {
   const { color, height } = pair(512, (cg, hg, s) => {
-    cg.fillStyle = '#39414e'; cg.fillRect(0, 0, s, s)
+    cg.fillStyle = '#4c566a'; cg.fillRect(0, 0, s, s) // 敌我识别：比场景底色亮一档，深缺口里一秒锁定
     hg.fillStyle = '#808080'; hg.fillRect(0, 0, s, s)
     // 细织物纹（双向）
     for (let y = 0; y < s; y += 3) {
@@ -166,7 +166,7 @@ const suit = () => get('suit', () => {
 // ---- 护甲/背心（MOLLE 织带 + 弹匣袋 + 钢印）----
 const vest = () => get('vest', () => {
   const { color, height } = pair(512, (cg, hg, s) => {
-    cg.fillStyle = '#22262d'; cg.fillRect(0, 0, s, s)
+    cg.fillStyle = '#333a47'; cg.fillRect(0, 0, s, s)
     hg.fillStyle = '#808080'; hg.fillRect(0, 0, s, s)
     // MOLLE 织带（凸起横带）
     for (let y = 14; y < s - 10; y += 42) {

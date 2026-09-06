@@ -76,4 +76,10 @@ describe('raySphere 命中球检测', () => {
     const hit = { x: 0, y: 0.6 * t, z: -0.8 * t }
     expect(Math.hypot(hit.x - 0.6, hit.y - 6, hit.z + 8)).toBeCloseTo(1, 6)
   })
+  it('射线起点在球内（贴脸）：拒绝负 t 而非命中"背后"', () => {
+    // 回归：原实现返回负 t → 命中点在相机背后、伤害距离为负
+    expect(raySphere(0, 0, 0, 0, 0, -1, 0, 0, -0.5, 1)).toBeNull()
+    // 从球内射向远处同样拒绝
+    expect(raySphere(0, 0, 0, 0, 0, 1, 0, 0, 0.5, 1)).toBeNull()
+  })
 })

@@ -143,7 +143,7 @@ export class AudioSys {
       p.connect(muffle).connect(this.bus)
       const send = this.ctx.createGain(); send.gain.value = 0.4
       muffle.connect(send).connect(this.reverb)
-      // 节点生命周期：连入常驻图的 Panner/Filter/Gain 不会被 GC，脚步声等高频
+      // 节点生命周期：连入常驻图的 Panner/Filter/Gain 不会被 GC，高频
       // 空间音会无限累积（音频线程 CPU 缓慢上涨）。所有 SFX 都 <2s，3s 后拆链
       setTimeout(() => { try { send.disconnect(); muffle.disconnect(); p.disconnect() } catch { /* 已断 */ } }, 3000)
       return muffle
@@ -161,7 +161,9 @@ export class AudioSys {
     f.type = type; f.frequency.setValueAtTime(freq, t); f.Q.value = q
     if (freqEnd) f.frequency.exponentialRampToValueAtTime(freqEnd, t + dur)
     const g = this.ctx.createGain()
-    g.gain.setValueAtTime(gain, t)
+    // 2ms 线性起振：噪声起点从 0 爬升，避免瞬态"咔"声（全音效通用）
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(gain, t + 0.002)
     g.gain.exponentialRampToValueAtTime(0.001, t + dur)
     src.connect(f).connect(g).connect(dest)
     src.start(t); src.stop(t + dur + 0.02)
@@ -174,7 +176,9 @@ export class AudioSys {
     o.frequency.setValueAtTime(freq, t)
     if (freqEnd) o.frequency.exponentialRampToValueAtTime(freqEnd, t + dur)
     const g = this.ctx.createGain()
-    g.gain.setValueAtTime(gain, t)
+    // 4ms 线性起振：正弦/方波类音符从 0 起振，消除爆音点击感（UI 音与长尾音受益最明显）
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(gain, t + 0.004)
     g.gain.exponentialRampToValueAtTime(0.001, t + dur)
     o.connect(g).connect(dest)
     o.start(t); o.stop(t + dur + 0.02)
@@ -333,16 +337,20 @@ export class AudioSys {
     this._noiseBurst(this.bus, { dur: 0.05, freq: 900, freqEnd: 220, q: 0.8, gain: g * 0.5 })
   }
 
+  // 玩家自己的脚步（非空间音）：鞋底蹭地高频"沙" + 落地闷推 + 低频触地，
+  // 每步随机音高/增益，跑动时明显更实
   footstep(pos, listener, running) {
     this.ensure()
     if (!this.ctx) return
     const out = this._spatial(pos, listener)
+    const j = 1 + (Math.random() * 2 - 1) * 0.15
     if (this.user.footstep) {
       this._playBuffer(this.user.footstep, out, { gain: running ? 0.55 : 0.2, rate: 0.9 + Math.random() * 0.2 })
       return
     }
-    this._noiseBurst(out, { dur: 0.05, freq: running ? 750 : 480, freqEnd: 220, q: 1.1, gain: running ? 0.5 : 0.16 })
-    this._osc(out, { type: 'sine', freq: 95, freqEnd: 55, dur: 0.05, gain: running ? 0.22 : 0.08 })
+    this._noiseBurst(out, { dur: 0.035, freq: 2600 * j, freqEnd: 900, q: 0.7, gain: running ? 0.18 : 0.06, type: 'highpass' })
+    this._noiseBurst(out, { dur: 0.05, freq: (running ? 750 : 480) * j, freqEnd: 220, q: 1.1, gain: running ? 0.5 : 0.16 })
+    this._osc(out, { type: 'sine', freq: 95 * j, freqEnd: 55, dur: 0.05, gain: running ? 0.22 : 0.08 })
   }
 
   roundStart() {
@@ -362,23 +370,26 @@ export class AudioSys {
   }
 
   // 倒计时：前 3 秒低音 tick，最后一声高音"开始"提示
+  // （三角波代替方波：方波奇次谐波太扎耳，长时间倒计时听感发噪）
   countTick(final = false) {
     this.ensure()
     if (!this.ctx) return
     if (final) {
-      this._osc(this.master, { type: 'square', freq: 880, dur: 0.12, gain: 0.3 })
-      this._osc(this.master, { type: 'square', freq: 1760, dur: 0.2, gain: 0.22, delay: 0.02 })
+      this._osc(this.master, { type: 'triangle', freq: 880, dur: 0.12, gain: 0.34 })
+      this._osc(this.master, { type: 'triangle', freq: 1760, dur: 0.2, gain: 0.24, delay: 0.02 })
+      this._osc(this.master, { type: 'sine', freq: 2637, dur: 0.26, gain: 0.1, delay: 0.04 })
     } else {
-      this._osc(this.master, { type: 'square', freq: 660, dur: 0.07, gain: 0.22 })
+      this._osc(this.master, { type: 'triangle', freq: 660, dur: 0.07, gain: 0.26 })
     }
   }
 
-  // 切枪：短促机械"咔啦"声（抽枪 + 上膛提示）
+  // 切枪：短促机械"咔啦"声（抽枪 + 上膛提示），音高/时长微抖避免每次切枪完全一样
   equip() {
     this.ensure()
     if (!this.ctx) return
-    this._noiseBurst(this.master, { dur: 0.035, freq: 2400, q: 1.8, gain: 0.32 })
-    this._noiseBurst(this.master, { dur: 0.025, freq: 3600, q: 2.2, gain: 0.28, delay: 0.09 })
-    this._osc(this.master, { type: 'square', freq: 480, dur: 0.02, gain: 0.1, delay: 0.1 })
+    const j = 1 + (Math.random() * 2 - 1) * 0.08
+    this._noiseBurst(this.master, { dur: 0.035, freq: 2400 * j, q: 1.8, gain: 0.32 })
+    this._noiseBurst(this.master, { dur: 0.025, freq: 3600 * j, q: 2.2, gain: 0.28, delay: 0.09 })
+    this._osc(this.master, { type: 'square', freq: 480 * j, dur: 0.02, gain: 0.1, delay: 0.1 })
   }
 }

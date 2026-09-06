@@ -11,7 +11,7 @@
   kill            击杀确认音
   death           你被击杀
   hurt            受击
-  footstep        脚步声（会随机变调播放）
+  footstep        你自己的脚步声（会随机变调播放；Bot 不发出脚步声）
   round_start     回合开始
 
 示例：shot_rifle.mp3

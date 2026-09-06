@@ -15,8 +15,8 @@ import { raySphere } from '../world/World.js'
 //    idle/walk/run 按实际移速加权混合，脚步速率与位移同步 —— 拉出/横移真在跑；
 //    单 clip 老模型（BrainStem）静止时 timeScale→0 冻结、移动时恢复
 //  - 腿部遵循无畏契约运动规则：peek 面向目标持枪侧移（strafe）、步频与位移/
-//    脚步声锁相、counter-strafe 急停即刻站定、身体向移动方向微倾
-const STEP_LEN = 1.15 // 一步的位移（m）：脚步声触发与步态相位锁相共用
+//    步态相位锁相、counter-strafe 急停即刻站定、身体向移动方向微倾
+const STEP_LEN = 1.15 // 一步的位移（m）：步态相位与位移锁相的基准步长
 const _v = new THREE.Vector3()
 
 export class Bot {
@@ -39,7 +39,6 @@ export class Bot {
     this.firstVisibleAt = -1
     this.visibleNow = false
     this.walkPhase = 0
-    this.stepDist = 0   // 脚步声里程（与位移同步）
     this.lean = 0       // 身体侧倾量（向移动方向倾，平滑跟踪局部横向速度）
     this.plantT = 0     // 急停卸力下沉的剩余时间
     this._prevSpeed = 0 // 检测"高速→近停"跨越，触发一次 plant settle
@@ -294,16 +293,6 @@ export class Bot {
       ? Math.min(speed / 1.9, 2.1)
       : THREE.MathUtils.clamp(speed / 1.9, 0.6, 2.1)
     if (A.run) A.run.timeScale = THREE.MathUtils.clamp(speed / 5.2, 0.9, 1.5)
-    // 脚步声步长 = 动画 cadence 换算（步/秒 → 米/步），声与腿同拍（音画锁相，
-    // 与程序化假人的 STEP_LEN 锁相同规则）；idle 不算步，walk/run 权重归一
-    let sps = 0, wSum = 0
-    for (const a of [A.walk, A.run]) {
-      if (!a) continue
-      const w = a.getEffectiveWeight()
-      sps += w * 2 * a.getEffectiveTimeScale() / a.getClip().duration
-      wSum += w
-    }
-    this._audioStepLen = wSum > 0.01 && speed > 0.3 ? speed / (sps / wSum) : STEP_LEN
   }
 
   _stepAnim(speed, dt) {
@@ -319,7 +308,6 @@ export class Bot {
 
   // 程序化假人腿部：按无畏契约 strafe 运动规则驱动
   //  1) 步频与位移锁相：walkPhase 由里程推进（每 STEP_LEN 米 = 一步 = π），相位无跳变；
-  //     摆动取 cos —— stepDist 越过 STEP_LEN 触发脚步声时 |cos|=1 正是落脚极值，音画同步
   //  2) 横移步态（cross-side-step）：双腿镜像侧摆（步距开合交替）+ 双髋同向偏转
   //     （脚尖朝行进方向）+ 步内小幅反摆；朝/背玩家移动的前后分量按局部速度方向混合
   //  3) counter-strafe 急停：硬站定快速收步（不做长缓动漂浮）+ 一次短促下沉卸力
@@ -330,12 +318,11 @@ export class Bot {
     const yaw = this.mesh.rotation.y
     const lx = this.velX * Math.cos(yaw)
 
-    // 相位始终随位移推进（与 stepDist 同一积分），跨低速段也不失锁
+    // 相位始终随位移推进（里程积分），跨低速段也不失锁
     this.walkPhase += speed * dt * Math.PI / STEP_LEN
 
     if (speed > 0.3) {
-      // 摆动取 cos：脚步声触发时 stepDist 整除 STEP_LEN → walkPhase = kπ → |cos|=1
-      // 正是落脚（步距最开）的瞬间，声画严格同拍
+      // 摆动取 cos：walkPhase = kπ（每步整除 STEP_LEN）时 |cos|=1，正是落脚（步距最开）瞬间
       const s = Math.cos(this.walkPhase)
       const sp = Math.max(speed, 1e-4)
       const wLat = Math.min(1, Math.abs(lx) / sp)      // 横向权重：纯侧移 = 1
@@ -351,7 +338,7 @@ export class Bot {
       const hipYaw = -Math.sign(lx || 1) * 0.26 * wLat + s * 0.12 * wLat
       legL.rotation.y = hipYaw
       legR.rotation.y = hipYaw
-      // 步态起伏：落脚张开时最低（重心压上支撑步）、并腿过中点最高 —— 与脚步声同拍
+      // 步态起伏：落脚张开时最低（重心压上支撑步）、并腿过中点最高
       this.mesh.position.y = (1 - Math.abs(s)) * (0.01 + speed * 0.0036)
     } else {
       // 急停即刻站定：快速收步 + 高度归零（counter-strafe 是硬停，不做漂浮缓动）
@@ -400,7 +387,6 @@ export class Bot {
     this.mesh.rotation.set(0, 0, 0)
     this.mesh.position.copy(this.pos)
     this.walkPhase = 0
-    this.stepDist = 0
     this.lean = 0        // 复用的 Bot 归位站姿：不带旧侧倾/急停残余
     this.plantT = 0
     this._prevSpeed = 0
@@ -563,17 +549,6 @@ export class Bot {
 
     // 移动表现：程序化假人 = VALORANT 横移步态；骨骼假人播放混合动画（脚步与位移同步）
     const speed = Math.abs(this.velX)
-    // 脚步声：与位移同步的 HRTF 空间音 —— 架枪时可听声预判拉出方向与时机
-    // （GLB 假人用动画 cadence 换算的步长，程序化假人用固定 STEP_LEN —— 两者都与腿同拍）
-    this.stepDist += speed * dt
-    if (this.stepDist > (this._audioStepLen ?? STEP_LEN)) {
-      this.stepDist = 0
-      this.manager?.audio?.footstep(
-        { x: this.pos.x, z: this.pos.z },
-        { pos: ctx.player.pos, yaw: ctx.player.yaw },
-        true,
-      )
-    }
     if (this.legL && this.legR) {
       this._stepLegs(speed, dt)
     } else if (this.mixer) {

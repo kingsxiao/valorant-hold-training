@@ -51,6 +51,9 @@ export class Engine {
     // 世界系）跟随枪口，强度由 FX 与主场景灯同步衰减
     this.vmFlashLight = new THREE.PointLight(0xffbe7a, 0, 0.7, 2)
     this.vmScene.add(this.vmFlashLight)
+    // 注：vmScene 三盏灯均不投影、不随菜单"阴影"开关变化 → 第一人称深灰手套
+    // 材质在各图形档位（阴影开/关、分辨率缩放）下渲染恒一致（2026-09-07 核验：
+    // 开关阴影仅主场景地面阴影变化，vmScene 输出不受影响；resScale 只改像素比）
 
     // 光照：半球光（天空补光）+ 平行光（太阳）+ 环境反射，强度按 ACES 色调映射调校避免过曝
     const hemi = new THREE.HemisphereLight(0xcfe5f2, 0x8a7a63, 0.72)

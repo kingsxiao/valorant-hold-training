@@ -102,12 +102,15 @@ export function applyViewmodelTextures(root) {
 }
 
 // ---- 第一人称手臂（hands.glb / glove.glb，如 J-Toastie 系列模型）----
-// 拟人手：手/手套网格 → 皮肤贴图（毛孔/红晕/静脉/皱纹，暖色 tint）；
-// 腕臂同样皮肤（袖管由程序化布料圆柱接管）；其余（袖臂）→ 战术布料
+// 拟人手：手套网格 → 深灰战术手套（2026-09-07 页内 A/B 评审：肤色手套读作
+// "裸手"且显平，深灰+高粗糙+强法线后指节/掌面纹路更清晰，织物感明显更好；
+// 仍用 skin 贴图借其皱纹细节当指节纹）；皮肤/腕臂保持暖色皮肤；其余 → 战术布料
 export function applyHandsTextures(root) {
   eachMat(root, m => {
     if (!m.isMeshStandardMaterial) return
-    if (/glove|mitt|hand|arm|skin|face|body/i.test(m.name)) {
+    if (/glove|mitt/i.test(m.name)) {
+      assign(m, Tex.skin(), { tint: 0x4d545c, roughness: 0.88, metalness: 0, normalScale: 1.2 })
+    } else if (/hand|arm|skin|face|body/i.test(m.name)) {
       assign(m, Tex.skin(), { tint: 0xd9a882, roughness: 0.58, metalness: 0, normalScale: 0.55 })
     } else {
       assign(m, Tex.fabric(), { tint: liftedTint(m.color, 0.2, 0.45), roughness: 0.9, metalness: 0, normalScale: 1.0 })

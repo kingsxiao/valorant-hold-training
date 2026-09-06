@@ -24,6 +24,16 @@ export class HUD {
     for (const e of [this.ammo, this.mode, this.stats, this.score, this.scoreFloat, this.speed, this.center, this.toast, this.fpsBox, this.hurt, this.dmgDir, this.hitmarker, this.killfeed, this.killBanner]) root.appendChild(e)
 
     this.fpsCanvas = this.fpsBox.querySelector('canvas')
+    // 高分屏清晰：曲线 canvas 逻辑分辨率 ×DPR（CSS 宽高固定 150×36，绘制以
+    // canvas.width/height 为基准，等比放大即可）
+    {
+      const d = Math.min(2, devicePixelRatio || 1)
+      this.fpsCanvas.width = 150 * d
+      this.fpsCanvas.height = 36 * d
+      this.fpsCanvas.style.width = '150px'
+      this.fpsCanvas.style.height = '36px'
+      this._fpsDpr = d
+    }
     this.fpsCtx = this.fpsCanvas.getContext('2d')
     this.fpsFrames = new Float32Array(150)
     this.fpsIdx = 0
@@ -209,6 +219,8 @@ export class HUD {
     this.fpsFrames[this.fpsIdx] = frameMs
     this.fpsIdx = (this.fpsIdx + 1) % this.fpsFrames.length
     const g = this.fpsCtx
+    // setTransform 把 150×36 的逻辑坐标系映射到 ×DPR 的物理像素
+    g.setTransform(this._fpsDpr ?? 1, 0, 0, this._fpsDpr ?? 1, 0, 0)
     g.clearRect(0, 0, 150, 36)
     g.fillStyle = 'rgba(255,255,255,0.12)'
     g.fillRect(0, 30, 150, 1) // 16.6ms 参考线（60fps）

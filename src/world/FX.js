@@ -134,9 +134,10 @@ class ParticleSys {
 }
 
 export class FX {
-  constructor(scene, camera) {
+  constructor(scene, camera, engine = null) {
     this.scene = scene
     this.camera = camera
+    this.vmFlash = engine?.vmFlashLight ?? null // vmScene 枪口焰点光（见 Engine）
 
     // 曳光：细长加法混合的拉伸盒（几何体沿 +Z 延伸，配合 lookAt 使 +Z 指向目标）
     const tGeo = new THREE.BoxGeometry(0.014, 0.014, 1)
@@ -281,6 +282,15 @@ export class FX {
       this.lightPeak = 16
       this.lightDur = 0.06
       this.lightLife = this.lightDur
+      // vmScene 通道同款闪光：枪口世界位换算到相机本地系（vmScene 世界系）。
+      // 距离尺度小一个量级（0.2-0.5m），峰值按平方衰减比例取 1.2。
+      // 仅玩家开火参与（WeaponSystem 传 Vector3；bot 擦身弹道传普通对象，
+      // 且 bot 枪口位映到相机系毫无意义）
+      if (this.vmFlash && worldPos.isVector3) {
+        this.vmFlash.position.copy(this.camera.worldToLocal(worldPos.clone()))
+        this.vmFlash.color.setHex(0xffbe7a)
+        this.vmPeak = 1.2
+      }
     }
   }
 
@@ -429,12 +439,14 @@ export class FX {
       this.flash.material.opacity = Math.max(0, this.flashLife / 0.045) * 0.9
       if (this.flashLife <= 0) this.flash.visible = false
     }
-    // 动态光衰减
+    // 动态光衰减（主场景灯 + vmScene 灯同步）
     if (this.lightLife > 0) {
       this.lightLife -= dt
       this.flashLight.intensity = this.lightPeak * Math.max(0, this.lightLife / this.lightDur)
+      if (this.vmFlash) this.vmFlash.intensity = this.vmPeak * Math.max(0, this.lightLife / this.lightDur)
     } else if (this.flashLight.intensity !== 0) {
       this.flashLight.intensity = 0
+      if (this.vmFlash) this.vmFlash.intensity = 0
     }
     this.sparks.update(dt)
     this.puffs.update(dt)
@@ -498,6 +510,7 @@ export class FX {
     this.puffs.n = 0
     this.flashLife = 0; this.flash.visible = false
     this.lightLife = 0; this.flashLight.intensity = 0
+    if (this.vmFlash) this.vmFlash.intensity = 0
   }
 }
 

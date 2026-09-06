@@ -46,6 +46,11 @@ export class Engine {
     const vmSun = new THREE.DirectionalLight(0xfff2dc, 1.05)
     vmSun.position.set(28, 46, 18) // 与主场景太阳同向 → 枪身光影与场景一致
     this.vmScene.add(vmHemi, vmSun)
+    // 枪口焰点光（FX.muzzle 驱动）：vmScene 独立渲染通道吃不到主场景的
+    // flashLight → 开火时枪身/手套无瞬时高光。此灯在相机本地系（=vmScene
+    // 世界系）跟随枪口，强度由 FX 与主场景灯同步衰减
+    this.vmFlashLight = new THREE.PointLight(0xffbe7a, 0, 0.7, 2)
+    this.vmScene.add(this.vmFlashLight)
 
     // 光照：半球光（天空补光）+ 平行光（太阳）+ 环境反射，强度按 ACES 色调映射调校避免过曝
     const hemi = new THREE.HemisphereLight(0xcfe5f2, 0x8a7a63, 0.72)

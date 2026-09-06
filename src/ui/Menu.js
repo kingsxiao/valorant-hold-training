@@ -107,6 +107,8 @@ export class Menu {
 
       <div class="menu-live" hidden></div>
 
+      <div class="mobile-warn" hidden>⚠ 检测到触屏设备：本训练器需要键盘 + 鼠标（指针锁定），请在桌面浏览器打开。</div>
+
       <h2>武器</h2>
       <div class="opt-grid" data-group="primary"></div>
       <div style="height:8px"></div>
@@ -164,6 +166,11 @@ export class Menu {
     this.overlay.appendChild(p)
     this.panel = p
     this.scrollBox = scroll
+    // 触屏设备提示：纯 coarse 指针（无精细指针）= 手机/平板 → 训练器不可玩，
+    // 提前告知而不是让用户对着无效菜单点半天（带鼠标的二合一设备不受影响）
+    if (matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches) {
+      p.querySelector('.mobile-warn').hidden = false
+    }
     // 可访问性：label 未用 for/id 关联，读屏器读不到滑条用途 → 就地同步成 aria-label
     for (const row of p.querySelectorAll('.slider-row')) {
       const lab = row.querySelector('label'), inp = row.querySelector('input[type=range]')

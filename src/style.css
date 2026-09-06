@@ -289,6 +289,13 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
   font-family: var(--font-num); font-size: 13px; letter-spacing: 1px;
 }
 .menu-live[hidden] { display: none; }
+/* 触屏设备提示：不可玩告知（amber 警示，与红色 live 条区分） */
+.mobile-warn {
+  margin-top: 14px; padding: 10px 16px;
+  background: rgba(255, 201, 77, 0.08); border-left: 3px solid #ffc94d;
+  font-size: 13px; letter-spacing: 0.5px; color: #ffd98a;
+}
+.mobile-warn[hidden] { display: none; }
 .menu-live .ml-title { font-size: 11px; font-weight: 700; letter-spacing: 4px; color: var(--accent); margin-right: 8px; }
 .menu-live b { font-size: 19px; font-weight: 700; }
 .menu-live i { font-style: normal; opacity: 0.5; margin-right: 10px; font-family: var(--font-body); }

@@ -104,7 +104,11 @@ export class Engine {
       this.onContextLost?.()
     })
     canvas.addEventListener('webglcontextrestored', () => {
-      this.scene.traverse(o => { if (o.material) o.material.needsUpdate = true })
+      // 双 pass 场景都要标记：vmScene（第一人称枪/手套）漏标会导致恢复后
+      // 材质不重编译、渲染异常（2026-09-08 补）
+      for (const sc of [this.scene, this.vmScene]) {
+        sc.traverse(o => { if (o.material) o.material.needsUpdate = true })
+      }
       this.start()
       this.onContextRestored?.()
     })

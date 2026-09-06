@@ -164,6 +164,11 @@ export class Menu {
     this.overlay.appendChild(p)
     this.panel = p
     this.scrollBox = scroll
+    // 可访问性：label 未用 for/id 关联，读屏器读不到滑条用途 → 就地同步成 aria-label
+    for (const row of p.querySelectorAll('.slider-row')) {
+      const lab = row.querySelector('label'), inp = row.querySelector('input[type=range]')
+      if (lab && inp) inp.setAttribute('aria-label', lab.textContent.trim())
+    }
 
     // 武器按钮
     const wname = { vandal: 'Vandal（自动步战）', phantom: 'Phantom（消音/衰减）', sheriff: 'Sheriff（重左轮）', classic: 'Classic（手枪/右键三连发）', ghost: 'Ghost（消音手枪）' }
@@ -185,6 +190,7 @@ export class Menu {
     for (const c of ['#00ffb3', '#ffffff', '#7dff00', '#ff4655', '#00c8ff', '#ffe23d']) {
       const b = document.createElement('button')
       b.className = 'opt-btn'
+      b.setAttribute('aria-label', `准星颜色 ${c}`) // 色块按钮只有色块无文字，读屏器需要名称
       b.innerHTML = `<span style="display:inline-block;width:14px;height:14px;background:${c};border-radius:3px;vertical-align:-2px"></span>`
       b.dataset.value = c
       b.onclick = () => { this.cfg.crosshair.color = c; this.syncButtons(); saveSettings({ crosshair: this.cfg.crosshair }); this.applyAll?.() }

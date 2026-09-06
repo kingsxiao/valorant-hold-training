@@ -71,7 +71,9 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
 
 /* ===== HUD ===== */
-#hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 10;
+  /* 静态暗角：视线聚焦画面中心，纯 CSS 零成本；很淡，不压暗准星区域 */
+  background: radial-gradient(ellipse at center, transparent 58%, rgba(4, 8, 14, 0.32) 100%); }
 
 /* 通用 HUD 块：直角 + 角标括号 + 顶部微高光 */
 .hud-block {

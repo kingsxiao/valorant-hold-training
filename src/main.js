@@ -103,6 +103,7 @@ bots.onBotFire = (bot) => {
   const from = { x: bot.pos.x + dx / d * 0.55, y: 1.31, z: bot.pos.z + dz / d * 0.55 }
   fx.muzzle(from)
   fx.tracer(new THREE.Vector3(from.x, from.y, from.z), engine.camera.position)
+  audio.whiz()
   player.addPunch(0.02, (Math.random() - 0.5) * 0.01)
 }
 

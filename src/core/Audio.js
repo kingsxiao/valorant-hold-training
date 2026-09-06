@@ -311,6 +311,16 @@ export class AudioSys {
     this._noiseBurst(this.master, { dur: 0.05, freq: 2500, q: 0.7, gain: 0.25 })
   }
 
+  // 子弹掠过（对枪失败 Bot 朝你开火）：超音速爆裂"啪" + 下滑呼啸尾，
+  // 音量压在 hurt 之下——它只补方向感与威胁感，不盖过失败提示音
+  whiz() {
+    this.ensure()
+    if (!this.ctx) return
+    this._noiseBurst(this.master, { dur: 0.02, freq: 6000, q: 0.6, gain: 0.5, type: 'highpass' })
+    this._noiseBurst(this.master, { dur: 0.28, freq: 2600, freqEnd: 350, q: 2.4, gain: 0.22, delay: 0.015 })
+    this._osc(this.master, { type: 'sawtooth', freq: 900, freqEnd: 180, dur: 0.22, gain: 0.1, delay: 0.02 })
+  }
+
   footstep(pos, listener, running) {
     this.ensure()
     if (!this.ctx) return

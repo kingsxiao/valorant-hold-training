@@ -408,7 +408,11 @@ export function poseGloveHands(sys, scene, arms, weaponId = sys.currentVmId) {
   // poseHand：右手（镜像）握把/掌压右面/四指阶梯卷曲、食指扣扳机、拇指 high-thumb；
   // 左手（原生）护木/掌从左下兜底/四指绕前缘、拇指沿左侧对握。目标点按各枪
   // 射线实测表面内推 1cm 设定（指尖骨+节段延伸比 mesh 指尖长 ~1cm → 误差≈0 实贴）
-  const pose = GLOVE_POSES[weaponId] ?? GLOVE_POSES.default
+  // 旧版单模型回退（viewmodel.glb 双 id 共享，装载时克隆导致实例不同——
+  // 由 WeaponSystem.setCustomViewmodel 置 _sharedCustomVm 标记）。各武器 id 的
+  // 握姿锚点是为双枪 GLB 作者系逐枪调校的，用在单模型上单位错配（实测手浮空
+  // >99m），共享时强制走 default（Quarnius AK 实测握姿）
+  const pose = sys._sharedCustomVm ? GLOVE_POSES.default : (GLOVE_POSES[weaponId] ?? GLOVE_POSES.default)
   const toV3 = (a) => new THREE.Vector3(a[0], a[1], a[2])
   const handR = poseHand({
     mirror: pose.handR.mirror,

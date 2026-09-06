@@ -153,9 +153,12 @@ export class WeaponSystem {
     const seen = new Set()
     for (const [id, scene] of Object.entries(map)) {
       // 旧单模型回退：两 id 共享同一 scene。_attachCustomVm 会移动/缩放/重新
-      // 包装 children，重复 attach 会二次包裹、二次缩放、挂两遍 —— 先克隆再装
-      if (seen.has(scene)) { this._attachCustomVm(id, SkeletonUtils.clone(scene)); continue }
+      // 包装 children，重复 attach 会二次包裹、二次缩放、挂两遍 —— 先克隆再装。
+      // _sharedCustomVm 标记供 HandsRig 握姿选择：共享枪模时双 id 必须走
+      // default 握姿（各枪握姿锚点是为双枪 GLB 作者系调校的，单位错配）
+      if (seen.has(scene)) { this._sharedCustomVm = true; this._attachCustomVm(id, SkeletonUtils.clone(scene)); continue }
       seen.add(scene)
+      this._sharedCustomVm = false
       this._attachCustomVm(id, scene)
     }
     this.weaponMeshFor(this.currentVmId)

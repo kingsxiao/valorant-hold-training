@@ -6,6 +6,9 @@ export function computeStats(s) {
   const rs = s.reactions ?? []
   const n = rs.length
   const avg = n ? Math.round(rs.reduce((a, b) => a + b, 0) / n) : 0
+  // 反应稳定度（样本标准差 ms）：均值之外的第二维度 —— 均值低但波动大
+  // 说明状态起伏（瞄点不稳/注意力涣散），压波动往往比抠均值更有效
+  const std = n > 1 ? Math.round(Math.sqrt(rs.reduce((a, b) => a + (b - avg) ** 2, 0) / (n - 1))) : 0
   const best = n ? Math.min(...rs) : 0
   const aes = s.aimErrors ?? []
   const aimAvg = aes.length ? Math.round(aes.reduce((a, b) => a + b, 0) / aes.length * 10) / 10 : 0
@@ -18,6 +21,7 @@ export function computeStats(s) {
     headshotRate: s.hits ? Math.round(s.headshots / s.hits * 100) : 0,
     avgReactionMs: avg,
     bestReactionMs: best,
+    reactStdMs: std,
     maxStreak: s.maxStreak ?? 0,
     aimErrorDeg: aimAvg,
     aimSamples: aes.length,
@@ -46,6 +50,8 @@ export function coachingTip(c) {
     return `露头瞬间准星平均偏了 ${c.aimErrorDeg}°—— 预瞄点要贴在缺口沿（A 缺口看左沿、B 缺口看右沿），出现后只补最后几度。`
   if (c.avgReactionMs >= 550)
     return '平均反应偏慢 —— 别等看清楚再开枪：缺口出现动静（脚步/边缘露身）就预压准星。'
+  if (c.reactStdMs >= 160 && c.avgReactionMs > 0)
+    return `反应波动 ±${c.reactStdMs}ms 偏大 —— 快慢起伏说明瞄点不稳，先固定预瞄点压波动，再抠速度。`
   if (c.accuracy < 30 && c.shots >= 10)
     return '命中率偏低 —— 开枪前先急停：移动中弹道是扩散的，停稳的那一瞬才是出手时机。'
   if (c.headshotRate < 15 && c.hits >= 5)

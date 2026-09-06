@@ -81,6 +81,7 @@ export class ResultPanel {
       cell(c.headshotRate + '%', '爆头率') +
       cell(c.maxStreak > 1 ? '×' + c.maxStreak : '—', '最长连杀') +
       cell(c.avgReactionMs ? c.avgReactionMs + 'ms' : '—', '平均反应', delta(c.avgReactionMs || null, p?.avgReactionMs || null, true)) +
+      cell(c.reactStdMs ? '±' + c.reactStdMs + 'ms' : '—', '反应波动') +
       cell(
         (c.bestReactionMs ? c.bestReactionMs + 'ms' : '—') +
         (summary.newFastest ? ' <span class="new-best">★</span>' : summary.fastest != null ? `<span class="delta zero">/ ${summary.fastest}</span>` : ''),

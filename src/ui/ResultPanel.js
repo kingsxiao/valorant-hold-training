@@ -46,6 +46,13 @@ export class ResultPanel {
     this.trendWrap = p.querySelectorAll('.hist-wrap')[1]
     this.trend = p.querySelector('.trend')
     this.trendCap = p.querySelector('.trend-cap')
+    // 高分屏清晰度：canvas 逻辑分辨率 ×DPR（CSS width:100% 拉伸时 DPR2 屏只画一半
+    // 像素会发虚）。绘制代码全部以 canvas.width/height 为基准，等比放大无需改动
+    for (const c of [this.hist, this.trend]) {
+      const d = Math.min(2, devicePixelRatio || 1)
+      c.dataset.w = c.width; c.dataset.h = c.height
+      c.width = c.width * d; c.height = c.height * d
+    }
     p.querySelector('.btn-start').onclick = () => this.onRestart?.()
     p.querySelector('.btn-ghost').onclick = () => this.onSettings?.()
   }

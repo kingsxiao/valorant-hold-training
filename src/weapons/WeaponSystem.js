@@ -394,6 +394,8 @@ export class WeaponSystem {
 
   _meleeSwing() {
     const w = this.weapon
+    this.onShotFired?.() // 挥刀也计一次"射击"：命中仍会进 stats.hits，
+    // 不计 shots 会让刀局的命中率分母缺失（混枪后命中率失真甚至 >100%）
     this.audio.shot(w.sound, null, { pos: this.camera.position, yaw: this.player.yaw })
     this.sKick.impulse(0.09 * 40) // 挥击前冲冲量（弹簧路径与开火一致）
     this.vmSwing = 1 // 挥刀弧线（updateViewmodel 里 sin 包络）

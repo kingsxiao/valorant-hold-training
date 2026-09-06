@@ -572,7 +572,9 @@ export function poseCustomHands(sys, hands, weaponId = sys.currentVmId) {
   const vmP = (x, y, z) => vm.localToWorld(new THREE.Vector3(x, y, z))
   // 腕锚点（枪模本地系）：右手在握把右后下方（掌压握把右面）、左手在弹匣交界
   // 后下方（掌托护木底、指朝前上绕护木前缘 → C 型托握）；横向 z 取负 = 相机右侧
-  const P = ARMS_POSES[weaponId] ?? ARMS_POSES.default
+  const P = (sys._sharedCustomVm ? ARMS_POSES.default : (ARMS_POSES[weaponId] ?? ARMS_POSES.default))
+  // 共享单枪模（_sharedCustomVm，见 setCustomViewmodel）时各枪腕锚作者系单位
+  // 错配（实测臂离枪 65mm），走 default 旧 AK 实测六点
   const wristR = vmP(...P.wristR)
   const wristL = vmP(...P.wristL)
   // 解剖学定尺：腕→指尖恒 8.2cm（与 setGloveHands 同一标定），根缩放与臂长解耦——
@@ -641,11 +643,14 @@ export function poseCustomHands(sys, hands, weaponId = sys.currentVmId) {
   const R_DBL = new THREE.Vector3(-0.6, 0.75, -0.3), R_IDX = new THREE.Vector3(-0.5, 0.65, -0.6)
   const R_THB = new THREE.Vector3(0.5, 0.6, -0.3), L_DBL = new THREE.Vector3(0, 0.95, -0.3)
   const L_IDX = new THREE.Vector3(0.15, 0.9, -0.4), L_THB = new THREE.Vector3(0.2, 0.9, 0.3)
-  // 食指多退 1cm：扣扳机姿态下指尖卷进扳机护圈/机匣（IndexR001 8 顶点实测）
-  const aimR = weaponId === 'default'
+  // 食指多退 1cm：扣扳机姿态下指尖卷进扳机护圈/机匣（IndexR001 8 顶点实测）。
+  // 共享单枪模（_sharedCustomVm）时 default 六点也是归一化前旧坐标系（实测指尖
+  // 嵌入 8 视口顶点）→ 腕锚取 default 表、瞄准点仍走自动射线推导（2026-09-08）
+  const useTableAim = weaponId === 'default' && !sys._sharedCustomVm
+  const aimR = useTableAim
     ? { dbl: vmP(...P.aimR.dbl), idx: vmP(...P.aimR.idx), thb: vmP(...P.aimR.thb) }
     : { dbl: autoAim(wristR, R_DBL, P.aimR.dbl), idx: autoAim(wristR, R_IDX, P.aimR.idx, 0.022), thb: autoAim(wristR, R_THB, P.aimR.thb) }
-  const aimL = weaponId === 'default'
+  const aimL = useTableAim
     ? { dbl: vmP(...P.aimL.dbl), idx: vmP(...P.aimL.idx), thb: vmP(...P.aimL.thb) }
     : { dbl: autoAim(wristL, L_DBL, P.aimL.dbl), idx: autoAim(wristL, L_IDX, P.aimL.idx, 0.02), thb: autoAim(wristL, L_THB, P.aimL.thb) }
   aimFinger(F.R.dbl, armR.hand, aimR.dbl, [28, 46, 40])

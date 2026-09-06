@@ -10,6 +10,7 @@
 | `assets/*.js/.css/.woff2` | ~800 KB | 带内容 hash，可 `immutable` 长缓存 |
 | `models/*.glb` | ~2.0 MB | 无 hash，`no-cache` 或短缓存（见下） |
 | `sfx/README.txt`、`models/README.txt` | ~4 KB | 随意 |
+| `robots.txt`、`llms.txt` | ~2 KB | 随意（SEO/爬虫与 AI 代理站点说明） |
 
 首次加载全量约 **3.3 MB**（gzip 后约 **1.1 MB**）；二次访问命中缓存后几乎零下载。字体已自托管（原 Google Fonts 外链移除），**无任何第三方请求**，断网/内网环境完整可用。
 

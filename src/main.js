@@ -373,7 +373,10 @@ loadUserAssets().then(({ agent, agentAnimations, viewmodel, viewmodels, glove, h
   // hands.glb 整臂（四指合并）保留为后备（glove 缺失/骨架不符时回退）。
   if (glove && weapons.setGloveHands(glove, hands) !== false) changed = true
   else if (hands && weapons.setCustomHands(hands) !== false) changed = true
-  if (changed) bots.resetRound() // 场上的 Bot 换新外观
+  // 场上的 Bot 换新外观——但不能打断进行中的回合：资产加载可达数秒，晚到时
+  // 玩家可能已开局，resetRound 会清掉统计并重启倒计时（分数与击杀数错位）。
+  // 进行中就等下一局 startRound 自然应用新模板
+  if (changed && !bots.running) bots.resetRound()
 }).catch(e => console.error('[VHT] asset load failed', e))
 
 // 首屏菜单（弹药无限：HUD 显示 ∞）

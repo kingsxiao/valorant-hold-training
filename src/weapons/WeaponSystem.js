@@ -550,10 +550,12 @@ export class WeaponSystem {
         }
       }
     }
-    // 手部滞后回弹：手套+袖臂整组轻微后移/上旋（幅度远小于枪身后坐 → 读作握持压缩）
+    // 手部滞后回弹：手套+袖臂整组轻微后移/上旋（幅度远小于枪身后坐 → 读作握持压缩）。
+    // 旋转系数 2026-09-07 由 0.45 收至 0.3：开火冲量峰值帧实测 0.45 会把指尖
+    // 短暂压进机匣（8 采样顶点瞬时穿插，虽仅 1-2 帧且被枪口焰掩盖，仍按零容忍收窄）
     if (ha.group) {
       ha.group.position.z = this.sFlinch.x * 0.12
-      ha.group.rotation.x = this.sFlinch.x * 0.45
+      ha.group.rotation.x = this.sFlinch.x * 0.3
     }
   }
 

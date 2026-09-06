@@ -408,11 +408,12 @@ export function buildWeaponModels() {
     dot: new THREE.MeshStandardMaterial({ color: 0x7dff9a, emissive: 0x2fbf62, emissiveIntensity: 2.2, roughness: 0.4 }),
   }
   // 第一人称手臂材质：袖臂 = 战术布料织纹；手套 = 聚合物橘皮纹（法线加重出近景微凹凸）
+  // 2026-09-07 手套色与 GLB 手套（ModelTexturing 0x4d545c）统一为深灰战术色
   const fabricMaps = Tex.fabric()
   const armMats = {
     sleeve: new THREE.MeshStandardMaterial({ color: 0x8d949c, map: fabricMaps.map, roughnessMap: fabricMaps.roughnessMap, normalMap: fabricMaps.normalMap, roughness: 0.93, metalness: 0 }),
     glove: (() => {
-      const m = new THREE.MeshStandardMaterial({ color: 0xa8aeb5, map: polyMaps.map, roughnessMap: polyMaps.roughnessMap, normalMap: polyMaps.normalMap, roughness: 0.85, metalness: 0.05 })
+      const m = new THREE.MeshStandardMaterial({ color: 0x4d545c, map: polyMaps.map, roughnessMap: polyMaps.roughnessMap, normalMap: polyMaps.normalMap, roughness: 0.85, metalness: 0.05 })
       m.normalScale = new THREE.Vector2(1.3, 1.3) // 近景微凹凸加重
       return m
     })(),

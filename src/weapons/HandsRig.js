@@ -145,7 +145,9 @@ function placeArmsIK(sys, group, arms, tR, tL) {
   // stripHandVertices 丢弃腕口边界三角形后皮肤管是敞开的，只靠细环遮不住透空
   // （侧视能看穿到手套腕口与袖口之间的缝）。袖口圆柱沿前臂轴从手套腕口内侧
   // 伸向小臂、半径大于两侧敞口边缘，端盖封死管腔 → 任何角度不透。
-  const bandGeos = []
+  // 环单独成网格用深灰手套材质（与 glove.glb 手套色统一，读作手套腕筒的延伸）；
+  // 圆锥袖管+端盖用布料材质衔接袖子。2026-09-07
+  const bandGeos = [], ringGeos = []
   const _m4 = new THREE.Matrix4(), _q2 = new THREE.Quaternion(), _s2 = new THREE.Vector3(1, 1, 1)
   const bandFor = (handBone, lowerBone) => {
     const hw = wp(handBone)
@@ -155,7 +157,7 @@ function placeArmsIK(sys, group, arms, tR, tL) {
     _q2.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir)
     _m4.compose(center, _q2, _s2)
     ring.applyMatrix4(_m4).applyMatrix4(sys.vmHolder.matrixWorld.clone().invert())
-    bandGeos.push(ring)
+    ringGeos.push(ring)
     // 封堵袖口：锥形管只往小臂方向延伸（腕侧绝不越过腕点伸向枪体——会插进
     // 握把/弹匣），腕端 1.6cm 收窄、肘端 2.1cm 加粗出拟人的腕→前臂过渡
     const cuffLen = 0.03
@@ -174,9 +176,13 @@ function placeArmsIK(sys, group, arms, tR, tL) {
   }
   bandFor(armR.hand, armR.low)
   bandFor(armL.hand, armL.low)
+  // 释放重摆时需要两个网格都带 owned 标记（同 stripHandVertices 约定）
   const bandGeo = mergeGeometries(bandGeos, false)
   bandGeo.userData.ownedByRig = true // 同 stripHandVertices：本文件新建，可释放
   group.add(new THREE.Mesh(bandGeo, sys.armMats.sleeve))
+  const ringGeo = mergeGeometries(ringGeos, false)
+  ringGeo.userData.ownedByRig = true
+  group.add(new THREE.Mesh(ringGeo, sys.armMats.glove))
   return root
 }
 

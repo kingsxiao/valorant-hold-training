@@ -184,8 +184,9 @@ input.onLockChange = (locked) => {
   if (state.playing && performance.now() < lockGuardUntil) return // 锁定回弹，非用户暂停
   if (state.playing) {
     state.playing = false
-    // 暂停面板顶部带一条"本局进行中"战绩（回合已结束/未开局时无数据）
-    const midRound = bots.running && bots.roundEndAt > bots.now()
+    // 暂停面板顶部带一条"本局进行中"战绩（回合已结束/未开局时无数据）。
+    // 无限时长回合 roundEndAt=0，判定只看 running 即可，否则无限局 ESC 后没有"继续训练"
+    const midRound = bots.running
     menu.show(midRound
       ? {
           score: state.score, kills: bots.stats.kills, duelsLost: bots.stats.duelsLost,

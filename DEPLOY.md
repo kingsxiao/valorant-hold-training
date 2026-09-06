@@ -125,3 +125,18 @@ npm run optimize:models          # 压缩 public/models/*.glb（原地覆盖）
 ```
 
 注意脚本使用 `prune({ keepLeaves: true })` 保留空叶子节点——`Top_end`、`IndexTip.R.001` 等末端节点是手部 IK 装配的测量标记，被清掉会导致手套/手臂回退到程序化模型。
+
+### 换入手部/枪模 GLB 后的贴图与法线管线（2026-09-08 新增）
+
+很多免费 CC 模型（如 Poly Pizza 系）不带 TEXCOORD_0 或带逐面法线——贴图会被
+three.js 静默忽略（只剩纯色）、表面面片化。换入自己的 glove/hands/viewmodel 后按需运行：
+
+```bash
+# 1) 模型无 UV（材质贴图不显示）→ 盒式投影生成（皱纹/噪点类贴图对投影接缝不敏感）：
+node scripts/add-model-uvs.mjs public/models/glove.glb
+# 2) 表面呈面片棱线（逐面法线）→ 按位置聚合平滑（50° 折角阈值保留机械硬边；
+#    不动索引/蒙皮权重，穿插审计结果不受影响）：
+node scripts/smooth-normals.mjs public/models/glove.glb
+```
+
+两脚本均幂等（已有 UV / 已平滑则无操作或效果一致），内置 GLB 已处理完毕。

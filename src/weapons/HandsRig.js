@@ -436,7 +436,29 @@ export function poseGloveHands(sys, scene, arms, weaponId = sys.currentVmId) {
 //   aimArm 整臂绕肩旋转（直链，腕到肩距离=臂长恒定）；orientHand 三点基定腕朝向；
 //   aimFinger 指链先瞄特征点再逐节向掌心卷曲。
 // 注意：hands 需为未经本方法处理过的新实例（loadUserAssets 每次返回新场景）。
-export function poseCustomHands(sys, hands) {
+// 握姿表（2026-09-07）：default 六点为旧单模型（Quaternius AK）2026-09-04 实测值；
+// vandal/phantom 由单位换算（旧模型 1u≈0.625m；vandal 12.1u/m、phantom 3.04u/m，
+// 腕锚对齐 GLOVE_POSES 同名枪的腕锚）+ 页内穿插扫描校正——回退路径（glove.glb
+// 缺失）此前用 default 点在 vandal 上指尖深插握把（43 视口内穿插顶点）。
+export const ARMS_POSES = {
+  default: {
+    wristR: [-0.02, -0.055, -0.045], wristL: [-0.42, -0.27, 0.03],
+    aimR: { dbl: [-0.16, -0.075, -0.055], idx: [-0.17, -0.045, -0.03], thb: [0.03, 0, -0.05] },
+    aimL: { dbl: [-0.53, -0.08, -0.08], idx: [-0.55, -0.05, -0.085], thb: [-0.57, -0.02, 0.085] },
+  },
+  vandal: {
+    wristR: [1.7, 0.1, -0.32], wristL: [-1.5, 0.15, 0.2],
+    aimR: { dbl: [0.64, -0.05, -0.30], idx: [0.57, 0.18, -0.11], thb: [2.08, 0.52, -0.18] },
+    aimL: { dbl: [-2.18, 1.8, -0.83], idx: [-2.33, 2.0, -1.0], thb: [-2.48, 2.15, 0.48] },
+  },
+  phantom: {
+    wristR: [0.42, 0.1, -0.09], wristL: [-0.2, 0.05, 0.04],
+    aimR: { dbl: [0.16, -0.05, -0.13], idx: [0.14, 0.15, -0.06], thb: [0.52, 0.37, -0.09] },
+    aimL: { dbl: [-0.55, 0.85, -0.36], idx: [-0.59, 0.94, -0.43], thb: [-0.63, 1.02, 0.27] },
+  },
+}
+
+export function poseCustomHands(sys, hands, weaponId = sys.currentVmId) {
   const vm = sys.activeCustomVm()
   if (!vm) return false // 无自有枪模时握点无法推导，直接回退内置手臂
   sys.handsAnim = null // 本路径无逐指动画基准（四指合并骨架），禁用 _animateHands
@@ -528,8 +550,9 @@ export function poseCustomHands(sys, hands) {
   const vmP = (x, y, z) => vm.localToWorld(new THREE.Vector3(x, y, z))
   // 腕锚点（枪模本地系）：右手在握把右后下方（掌压握把右面）、左手在弹匣交界
   // 后下方（掌托护木底、指朝前上绕护木前缘 → C 型托握）；横向 z 取负 = 相机右侧
-  const wristR = vmP(-0.02, -0.055, -0.045)
-  const wristL = vmP(-0.42, -0.27, 0.03)
+  const P = ARMS_POSES[weaponId] ?? ARMS_POSES.default
+  const wristR = vmP(...P.wristR)
+  const wristL = vmP(...P.wristL)
   // 解剖学定尺：腕→指尖恒 8.2cm（与 setGloveHands 同一标定），根缩放与臂长解耦——
   // 旧方案"扫描臂长使双肩恰好够到双腕"把手的尺寸绑死在肩腕距离上，左腕移近后
   // 整条手臂+手缩到 60%（戴手套的玩偶手）。肩位在画外可自由放置，够距交给两骨 IK。
@@ -575,14 +598,40 @@ export function poseCustomHands(sys, hands) {
   const V = (x, y, z) => new THREE.Vector3(x, y, z).normalize()
   orientHand(armR, F.R, V(-0.6, -0.4, -0.68), V(-0.95, -0.2, -0.25))
   orientHand(armL, F.L, V(0.22, 0.55, -0.8), V(0.2, 0.95, 0.15))
-  // 指尖瞄准点（枪模本地系）：R 四指绕握把前缘 / 食指沿扳机护圈 / 拇指压握把后脊；
-  // L 四指卷向护木右前侧面 / 拇指沿护木左侧上提对握
-  aimFinger(F.R.dbl, armR.hand, vmP(-0.16, -0.075, -0.055), [28, 46, 40])
-  aimFinger(F.R.idx, armR.hand, vmP(-0.17, -0.045, -0.03), [8, 14, 12])
-  aimFinger(F.R.thb, armR.hand, vmP(0.03, 0, -0.05), [8, 12, 0])
-  aimFinger(F.L.dbl, armL.hand, vmP(-0.53, -0.08, -0.08), [30, 50, 44])
-  aimFinger(F.L.idx, armL.hand, vmP(-0.55, -0.05, -0.085), [26, 43, 37])
-  aimFinger(F.L.thb, armL.hand, vmP(-0.57, -0.02, 0.085), [10, 10, 4])
+  // 指尖瞄准点（枪模本地系，per-weapon 表）：R 四指绕握把前缘 / 食指沿扳机护圈 /
+  // 拇指压握把后脊；L 四指卷向护木右前侧面 / 拇指沿护木左侧上提对握。
+  // 非 default 枪（几何与旧 AK 不同、无法沿用六点）→ 从腕锚沿特征方向对枪模
+  // 射线求面，命中点沿射线回退 1.2cm（指尖网格比链末骨长 ~1cm → 实贴表面）；
+  // 未命中（如方向打到画外）回退表值。2026-09-07
+  const gunMeshes = []
+  vm.traverse(o => { if (o.isMesh) gunMeshes.push(o) })
+  const _ray = new THREE.Raycaster()
+  const autoAim = (wristWorld, camDir, fallback, pullback = 0.012) => {
+    if (!gunMeshes.length) return vmP(...fallback)
+    const dir = camDir.clone().normalize()
+    _ray.set(wristWorld, dir)
+    _ray.far = 0.6
+    const hit = _ray.intersectObjects(gunMeshes, false)[0]
+    if (!hit) return vmP(...fallback)
+    return hit.point.clone().addScaledVector(dir, -pullback)
+  }
+  // 方向为相机系实测：vandal/phantom 的腕锚在握把/护木下方，枪面在腕上方
+  const R_DBL = new THREE.Vector3(-0.6, 0.75, -0.3), R_IDX = new THREE.Vector3(-0.5, 0.65, -0.6)
+  const R_THB = new THREE.Vector3(0.5, 0.6, -0.3), L_DBL = new THREE.Vector3(0, 0.95, -0.3)
+  const L_IDX = new THREE.Vector3(0.15, 0.9, -0.4), L_THB = new THREE.Vector3(0.2, 0.9, 0.3)
+  // 食指多退 1cm：扣扳机姿态下指尖卷进扳机护圈/机匣（IndexR001 8 顶点实测）
+  const aimR = weaponId === 'default'
+    ? { dbl: vmP(...P.aimR.dbl), idx: vmP(...P.aimR.idx), thb: vmP(...P.aimR.thb) }
+    : { dbl: autoAim(wristR, R_DBL, P.aimR.dbl), idx: autoAim(wristR, R_IDX, P.aimR.idx, 0.022), thb: autoAim(wristR, R_THB, P.aimR.thb) }
+  const aimL = weaponId === 'default'
+    ? { dbl: vmP(...P.aimL.dbl), idx: vmP(...P.aimL.idx), thb: vmP(...P.aimL.thb) }
+    : { dbl: autoAim(wristL, L_DBL, P.aimL.dbl), idx: autoAim(wristL, L_IDX, P.aimL.idx, 0.02), thb: autoAim(wristL, L_THB, P.aimL.thb) }
+  aimFinger(F.R.dbl, armR.hand, aimR.dbl, [28, 46, 40])
+  aimFinger(F.R.idx, armR.hand, aimR.idx, [8, 14, 12])
+  aimFinger(F.R.thb, armR.hand, aimR.thb, [8, 12, 0])
+  aimFinger(F.L.dbl, armL.hand, aimL.dbl, [30, 50, 44])
+  aimFinger(F.L.idx, armL.hand, aimL.idx, [26, 43, 37])
+  aimFinger(F.L.thb, armL.hand, aimL.thb, [10, 10, 4])
 
   hands.traverse(o => { if (o.isMesh) o.frustumCulled = false }) // 蒙皮包围盒不随骨骼更新
   sys.weaponMeshFor(sys.currentVmId)

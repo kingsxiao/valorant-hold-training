@@ -427,6 +427,9 @@ export function buildWeaponModels() {
     knife: buildKnife(vmMats),
   }
   // 静态持枪手臂跟随各武器（继承位置/缩放/后坐摆动，本身不做独立动画）
+  // 穿插审计（2026-09-07 顶点级射线奇偶检测）：sheriff 6 / classic 17 / ghost 17 /
+  // knife 4 个采样顶点位于枪体内部，但全部在视口外（NDC |x|>1 或 |y|>1，画面
+  // 右下出画区）——玩家不可见，无需修正；classic/knife 放大目检握持自然
   const armFor = { vandal: 'rifle', phantom: 'rifle', sheriff: 'pistol', classic: 'pistol', ghost: 'pistol', knife: 'knife' }
   for (const [id, kind] of Object.entries(armFor)) viewmodels[id].add(buildArms(armMats, kind))
   return { viewmodels, vmMats, armMats }

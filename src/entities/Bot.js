@@ -621,12 +621,16 @@ export class Bot {
     for (const m of Object.values(this.mats)) m.emissive?.setHex?.(c)
   }
 
-  // 射线 vs 命中球体
+  // 射线 vs 命中球体。命中球中心跟随网格当前姿态（受击踉跄后仰/横移侧倾
+  // 会让头部视觉偏移可达 ~0.4m，命中区不跟着转会"看着打头却打空气"）：
+  // 局部 (0, z.y, 0) 经网格四元数旋转 + 网格位置。绕 Y 的朝向对轴上点无平移，
+  // 实际生效的是后仰（rot.x）与侧倾（rot.z）
   raycast(ox, oy, oz, dx, dy, dz, maxT) {
     if (this.invulnerable) return null
     let bestT = maxT, bestZone = null
     for (const z of this.zones) {
-      const t = raySphere(ox, oy, oz, dx, dy, dz, this.pos.x, z.y, this.pos.z, z.r)
+      _v.set(0, z.y, 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
+      const t = raySphere(ox, oy, oz, dx, dy, dz, _v.x, _v.y, _v.z, z.r)
       if (t !== null && t < bestT) { bestT = t; bestZone = z.zone }
     }
     if (!bestZone) return null

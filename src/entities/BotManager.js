@@ -200,6 +200,7 @@ export class BotManager {
 
   damage(bot, dmg, zone) {
     if (bot.invulnerable) return false
+    if (bot.mode === 'dying') return false // 倒地动画中的尸体不可再伤害（重复计击杀/重启动画）
     // 反应时间：首次命中 - 首次可见（每次出场只记一条：多发击杀的第一发才是"反应"，
     // 后续弹只是补伤害，计入会把均值拖慢、最快反应刷假纪录）
     if (bot.firstVisibleAt > 0 && !bot.reactRecorded && this.stats.reactions.length < 500) {

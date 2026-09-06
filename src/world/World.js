@@ -9,7 +9,8 @@ export function raySphere(ox, oy, oz, dx, dy, dz, cx, cy, cz, r) {
   const d2 = lx * lx + ly * ly + lz * lz - tca * tca
   const r2 = r * r
   if (d2 > r2) return null
-  return tca - Math.sqrt(r2 - d2)
+  const t = tca - Math.sqrt(r2 - d2)
+  return t < 0 ? null : t // 眼睛已在球内（贴脸）：负 t 会命中"背后"且距离为负，拒绝
 }
 
 export class World {

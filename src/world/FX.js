@@ -226,12 +226,23 @@ export class FX {
   }
 
   tracer(from, to) {
+    // 近场钳制：端点离相机 <2m 时，盒体近端顶点的投影角尺寸爆炸，
+    // 会把整条曳光拉成横穿屏幕的光柱（Bot 还击的束终点曾是相机位置，
+    // 每次对枪失败都有一条戳脸光束）。贴脸端沿束方向推到 2m 外；
+    // 两端都在近场则整条不画（贴脸射击本就不需要曳光）
+    const cam = this.camera.position
+    const dF = from.distanceTo(cam), dT = to.distanceTo(cam)
+    const MIN = 2
+    if (dF < MIN && dT < MIN) return
+    let a = from, b = to
+    if (dF < MIN) a = _ta.lerpVectors(from, to, (MIN - dF) / (dT - dF))
+    if (dT < MIN) b = _tb.lerpVectors(from, to, (MIN - dT) / (dF - dT))
     const t = this.tracers[this.tracerIdx]
     this.tracerIdx = (this.tracerIdx + 1) % MAX_TRACERS
     const m = t.mesh
-    m.position.copy(from)
-    m.lookAt(to)
-    const dist = from.distanceTo(to)
+    m.position.copy(a)
+    m.lookAt(b)
+    const dist = a.distanceTo(b)
     m.scale.set(1, 1, Math.max(dist, 0.1))
     m.visible = true
     m.updateMatrix()
@@ -480,3 +491,5 @@ const _dq = new THREE.Quaternion()
 const _fwd = new THREE.Vector3(0, 0, 1)
 const _n = new THREE.Vector3()
 const _v = new THREE.Vector3()
+const _ta = new THREE.Vector3()
+const _tb = new THREE.Vector3()

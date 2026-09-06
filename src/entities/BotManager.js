@@ -117,7 +117,6 @@ export class BotManager {
     const activeBot = slot.bot && slot.bot.active && slot.bot.mode === 'peek' ? slot.bot : null
 
     if (slot.nextAt === 0) { // 未排程 → 按渐进难度随机下一次出现时间
-      if (slot.gapIdx < 0) slot.gapIdx = Math.floor(Math.random() * this.map.gaps.length)
       const dMin = Math.max(250, this.params.delayMin * this._rampDelay)
       const dMax = Math.max(dMin + 100, this.params.delayMax * this._rampDelay)
       slot.nextAt = nowMs + rand(dMin, dMax)
@@ -125,6 +124,9 @@ export class BotManager {
     }
 
     if (!activeBot && nowMs >= slot.nextAt) {
+      // 单缺口模式（gapIdx -1 哨兵）：出人瞬间才随机缺口——任何重排程路径
+      // （走完缩回/对枪失败）都先重置 -1，保证每波都是 A/B 重新随机
+      if (slot.gapIdx < 0) slot.gapIdx = Math.floor(Math.random() * this.map.gaps.length)
       const gap = this.map.gaps[slot.gapIdx]
       const b = this._bot()
       const fromLeft = Math.random() > 0.5
@@ -171,6 +173,9 @@ export class BotManager {
           activeBot.hide()
           slot.bot = null
           slot.nextAt = 0 // 重新排程（渐进难度系数在排程时生效）
+          // 单缺口模式：每次出人重新随机缺口。缺口只在排程时随机一次，
+          // 不重置的话整局锁死同一个缺口（撞上出生点被墙垛挡住的 A 缺口 = 整局看不到人）
+          if (!this.params.doubleGap) slot.gapIdx = -1
         }
       }
     }
@@ -221,8 +226,11 @@ export class BotManager {
     // Bot 开火视觉表现（枪口焰/曳光由 main 注入的 onBotFire 完成）→ 原地停留后缩回淡出
     this.onBotFire?.(bot)
     bot.startWon()
-    // 该槽位短暂停顿后重新排程（双缺口模式下只停自己的槽位）
-    if (bot.slot) bot.slot.nextAt = this.now() * 1000 + 1200
+    // 该槽位短暂停顿后重新排程（双缺口模式下只停自己的槽位）；单缺口重新随机缺口
+    if (bot.slot) {
+      bot.slot.nextAt = this.now() * 1000 + 1200
+      if (!this.params.doubleGap) bot.slot.gapIdx = -1
+    }
   }
 
   registerShot() { this.stats.shots++ }

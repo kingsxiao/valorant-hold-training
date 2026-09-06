@@ -138,7 +138,10 @@ function placeArmsIK(sys, group, arms, tR, tL) {
   // 右肘弯向右下（肘压低出画），左肘弯向左下（前臂自下而上托向护木）
   ik2(armR, segR, tR, elbowDirR)
   ik2(armL, segL, tL, new THREE.Vector3(-0.3, -0.95, -0.05).normalize())
-  // ---- 腕带：战术护腕环，盖住手套腕口与建模手臂的衔接（兼遮粗细差）----
+  // ---- 腕口封堵：战术护腕环 + 带端盖的袖口圆柱 ----
+  // stripHandVertices 丢弃腕口边界三角形后皮肤管是敞开的，只靠细环遮不住透空
+  // （侧视能看穿到手套腕口与袖口之间的缝）。袖口圆柱沿前臂轴从手套腕口内侧
+  // 伸向小臂、半径大于两侧敞口边缘，端盖封死管腔 → 任何角度不透。
   const bandGeos = []
   const _m4 = new THREE.Matrix4(), _q2 = new THREE.Quaternion(), _s2 = new THREE.Vector3(1, 1, 1)
   const bandFor = (handBone, lowerBone) => {
@@ -150,6 +153,21 @@ function placeArmsIK(sys, group, arms, tR, tL) {
     _m4.compose(center, _q2, _s2)
     ring.applyMatrix4(_m4).applyMatrix4(sys.vmHolder.matrixWorld.clone().invert())
     bandGeos.push(ring)
+    // 封堵袖口：锥形管只往小臂方向延伸（腕侧绝不越过腕点伸向枪体——会插进
+    // 握把/弹匣），腕端 1.6cm 收窄、肘端 2.1cm 加粗出拟人的腕→前臂过渡
+    const cuffLen = 0.03
+    const cuffCenter = hw.clone().addScaledVector(dir, 0.002 + cuffLen / 2)
+    const cuff = new THREE.CylinderGeometry(0.021, 0.016, cuffLen, 16, 1, true)
+    _q2.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir)
+    _m4.compose(cuffCenter, _q2, _s2)
+    cuff.applyMatrix4(_m4).applyMatrix4(sys.vmHolder.matrixWorld.clone().invert())
+    bandGeos.push(cuff)
+    // 端盖（肘侧管口封死；腕侧由手套网格+护腕环遮盖）
+    const cap = new THREE.CircleGeometry(0.021, 16)
+    _q2.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir)
+    _m4.compose(cuffCenter.clone().addScaledVector(dir, cuffLen / 2), _q2, _s2)
+    cap.applyMatrix4(_m4).applyMatrix4(sys.vmHolder.matrixWorld.clone().invert())
+    bandGeos.push(cap)
   }
   bandFor(armR.hand, armR.low)
   bandFor(armL.hand, armL.low)

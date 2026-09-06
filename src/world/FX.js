@@ -183,9 +183,10 @@ export class FX {
     this.sparks = new ParticleSys(scene, Tex.spark(), THREE.AdditiveBlending, MAX_SPARKS)
     this.puffs = new ParticleSys(scene, Tex.smoke(), THREE.NormalBlending, MAX_PUFFS)
 
-    // 抛壳：黄铜小盒，带重力/落地反弹/自旋
-    const sGeo = new THREE.BoxGeometry(0.011, 0.011, 0.027)
-    const brass = new THREE.MeshStandardMaterial({ color: 0xc9a24b, metalness: 0.9, roughness: 0.32 })
+    // 抛壳：黄铜小盒，带重力/落地反弹/自旋。尺寸比真弹壳放大 ~1.5 倍 +
+    // 微自发光：第一人称右下视野里抛出的壳要一眼可见（真实 11mm 反而看不见）
+    const sGeo = new THREE.BoxGeometry(0.017, 0.017, 0.04)
+    const brass = new THREE.MeshStandardMaterial({ color: 0xd9b25e, metalness: 0.9, roughness: 0.3, emissive: 0x2a1d05 })
     this.shells = []
     for (let i = 0; i < MAX_SHELLS; i++) {
       const m = new THREE.Mesh(sGeo, brass)
@@ -405,7 +406,7 @@ export class FX {
     _v.setFromMatrixColumn(ref, 2) // back
     s.vel.addScaledVector(_v, 0.4 + vary() * 0.4)
     s.ang.set(vary() * 14 - 7, vary() * 14 - 7, vary() * 14 - 7)
-    s.life = 1.5
+    s.life = 2.2
     m.rotation.set(vary() * 3, vary() * 3, vary() * 3)
     m.visible = true
   }

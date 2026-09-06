@@ -126,7 +126,7 @@ tests/      纯逻辑单元测试（Vitest）：碰撞/射线/弹道/伤害/散�
 - HUD 只在文本变化时写 DOM；碰撞/实体数据为扁平数组
 - 程序化纹理的 Sobel 法线转换为行索引外提的热循环实现；首屏载入页覆盖初始化期（生产构建 ~350ms 就绪）
 - 真实阴影（太阳投影，静态几何已合并，实测无帧率损失）默认开启，菜单可关；构建时 three.js 独立成 vendor chunk（业务更新不重复下载渲染库）
-- 打包体积：全量 ~3.3 MB（gzip ~1.1 MB）；GLB 量化压缩（KHR_mesh_quantization，GLTFLoader 原生支持）、字体自托管（无第三方请求）、无用的备份模型不进 dist（见 `scripts/optimize-models.mjs` 与 DEPLOY.md）
+- 打包体积：全量 ~4.9 MB（GLB 模型约 4.1 MB；JS/CSS/字体 gzip 后 ~0.5 MB）；GLB 量化压缩（KHR_mesh_quantization，GLTFLoader 原生支持）、字体自托管（无第三方请求）、无用的备份模型不进 dist（见 `scripts/optimize-models.mjs` 与 DEPLOY.md）
 
 ## 已知边界
 

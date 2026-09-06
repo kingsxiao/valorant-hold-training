@@ -112,11 +112,11 @@ src/
   entities/ Bot(命中球体/peek状态机/骨骼动画混合) · BotManager(架枪对枪轮次/统计)
   ui/       Crosshair(DOM准星) · HUD(节流更新+FPS图) · Menu(设置持久化) · ResultPanel(回合结算)
 
-tests/      纯逻辑单元测试（Vitest）：碰撞/射线/弹道/伤害/散布/统计/PRNG/HRTF方位换算
+tests/      纯逻辑单元测试（Vitest）：碰撞/射线/弹道/伤害/散布/统计/评级建议/反应去重/PRNG/HRTF方位换算
 ```
 
 质量保障：
-- `npm run verify` = ESLint + Vitest（40 用例）+ 生产构建；GitHub Actions CI 对每次 push/PR 运行同款门禁
+- `npm run verify` = ESLint + Vitest（54 用例）+ 生产构建；GitHub Actions CI 对每次 push/PR 运行同款门禁
 - 纯逻辑（弹道、散布、统计、碰撞、方位换算）全部抽成无渲染依赖的函数并覆盖测试
 - 关键回归用例：HRTF 听者方位换算与 three.js 相机矩阵交叉验证（修复过一次前后颠倒）
 

@@ -353,11 +353,24 @@ export class WeaponSystem {
     // userData 点位是枪组本地系 → 经枪自身世界矩阵变换（含持枪偏移/缩放/内偏旋转）；
     // vmScene 世界系 == 相机本地系，再过主相机矩阵落进世界（FX 都在世界场景）
     const vm = this.activeCustomVm() ?? this.viewmodels[this.currentId]
+    // 相机位姿即时刷新：simStep 里 matrixWorld 还是上一渲染帧的（本帧鼠标在
+    // preFrame 已改 yaw/pitch，但 updateMatrixWorld 在 renderFrame 才跑）。
+    // 快速甩枪时旧矩阵会把火苗/点光锚到旧视角方向 → 枪口闪光与枪身错位。
+    // alpha=1 取当前逻辑帧状态（开火即本帧状态，枪口焰应锚在最新视角上）
+    this.player.updateCamera(this.camera, 1)
     this.camera.updateMatrixWorld()
     _muzzle.copy(this.muzzleOffset)
     _muzzle.applyMatrix4(vm.matrixWorld).applyMatrix4(this.camera.matrixWorld)
-    this.fx.muzzle(_muzzle)
-    this.fx.muzzleSmoke(_muzzle, _dir, this.heat)
+    // 枪口风格随武器：消音枪小火苗+弱点光+暗曳光+淡烟（音画一致的"闷"），
+    // 大口径（Sheriff）更大更亮的火球与更硬的照明
+    const sup = w.sound.endsWith('_suppressed')
+    const muzzleStyle = sup
+      ? { scale: 0.45, lightPeak: 4, lightDur: 0.045 }
+      : w.sound === 'handcannon'
+        ? { scale: 1.3, lightPeak: 22, lightDur: 0.075, flashColor: 0xfff2dc }
+        : {}
+    this.fx.muzzle(_muzzle, muzzleStyle)
+    this.fx.muzzleSmoke(_muzzle, _dir, this.heat * (sup ? 0.45 : 1))
     if (vm.userData.eject) {
       _eject.copy(vm.userData.eject)
       _eject.applyMatrix4(vm.matrixWorld).applyMatrix4(this.camera.matrixWorld)
@@ -368,10 +381,10 @@ export class WeaponSystem {
     if (botHit) end.multiplyScalar(botHit.t).add(eye)
     else if (wallHit) end.set(wallHit.x, wallHit.y, wallHit.z)
     else end.multiplyScalar(maxDist).add(eye)
-    this.fx.tracer(_muzzle, end)
+    this.fx.tracer(_muzzle, end, sup ? 0.5 : 0.85)
 
-    // 声音
-    this.audio.shot(w.sound, null, { pos: eye, yaw: p.yaw })
+    // 声音（heat=连射热量 → 音色随持续射击渐变）
+    this.audio.shot(w.sound, null, { pos: eye, yaw: p.yaw }, this.heat)
 
     if (botHit) {
       const dmg = damageFor(this.weapon, botHit.zone, botHit.t)
@@ -380,6 +393,7 @@ export class WeaponSystem {
     } else if (wallHit) {
       this.fx.decal(wallHit.x, wallHit.y, wallHit.z, wallHit.nx, wallHit.ny, wallHit.nz)
       this.fx.impact(wallHit.x, wallHit.y, wallHit.z, wallHit.nx, wallHit.ny, wallHit.nz)
+      this.audio.surfaceHit({ x: wallHit.x, y: wallHit.y, z: wallHit.z }, { pos: p.pos, yaw: p.yaw }, wallHit.ny)
     }
 
     // 持枪模型后坐（弹簧冲量：快起峰 + 弹性回稳，连射自然堆叠）+ 每发随机

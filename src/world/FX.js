@@ -227,7 +227,7 @@ export class FX {
     this.puffs.setViewportScale(height, fovDeg)
   }
 
-  tracer(from, to) {
+  tracer(from, to, opacity = 0.85) {
     // 近场钳制：端点离相机 <2m 时，盒体近端顶点的投影角尺寸爆炸，
     // 会把整条曳光拉成横穿屏幕的光柱（Bot 还击的束终点曾是相机位置，
     // 每次对枪失败都有一条戳脸光束）。贴脸端沿束方向推到 2m 外；
@@ -248,9 +248,10 @@ export class FX {
     m.scale.set(1, 1, Math.max(dist, 0.1))
     m.visible = true
     m.updateMatrix()
-    m.material.opacity = 0.85
+    m.material.opacity = opacity
     m.material.color.setHSL(0.11 + vary() * 0.02, 0.92, 0.72) // 暖黄微扰动
     t.life = 0.07
+    t.baseOpacity = opacity
   }
 
   decal(x, y, z, nx, ny, nz) {
@@ -268,35 +269,47 @@ export class FX {
     d.life = 14
   }
 
-  muzzle(worldPos) {
+  // 枪口焰按武器风格参数化（默认=步枪）：
+  //  suppressed：贴消音器的暗小火苗 + 极弱点光（消音枪不该有照明弹般的火球）
+  //  heavy：大口径（Sheriff）更大更亮的火球与更硬的照明
+  muzzle(worldPos, style = {}) {
+    const scale = style.scale ?? 1
+    const lightPeak = style.lightPeak ?? 16
+    const lightDur = style.lightDur ?? 0.06
+    const color = style.color ?? 0xffbe7a
     if (worldPos) this.flash.position.copy(worldPos)
     this.flash.visible = true
     this.flash.material.opacity = 0.9
     this.flash.material.rotation = vary() * Math.PI * 2
-    const s = 0.26 + vary() * 0.14
+    this.flash.material.color.setHex(style.flashColor ?? 0xffffff)
+    const s = (0.26 + vary() * 0.14) * scale
     this.flash.scale.set(s, s, 1)
-    this.flashLife = 0.045
+    // +半帧：update 在本帧渲染前先扣整帧 dt（见 update 注释），补回平均损失
+    this.flashLife = 0.045 + 0.008
     if (worldPos) {
       this.flashLight.position.copy(worldPos)
-      this.flashLight.color.setHex(0xffbe7a)
-      this.lightPeak = 16
-      this.lightDur = 0.06
-      this.lightLife = this.lightDur
+      this.flashLight.color.setHex(color)
+      this.lightPeak = lightPeak
+      this.lightDur = lightDur
+      this.lightLife = lightDur + 0.008
       // vmScene 通道同款闪光：枪口世界位换算到相机本地系（vmScene 世界系）。
       // 距离尺度小一个量级（0.2-0.5m），峰值按平方衰减比例取 1.2。
       // 仅玩家开火参与（WeaponSystem 传 Vector3；bot 擦身弹道传普通对象，
       // 且 bot 枪口位映到相机系毫无意义）
       if (this.vmFlash && worldPos.isVector3) {
         this.vmFlash.position.copy(this.camera.worldToLocal(worldPos.clone()))
-        this.vmFlash.color.setHex(0xffbe7a)
-        this.vmPeak = 1.2
+        this.vmFlash.color.setHex(color)
+        this.vmPeak = 1.2 * (lightPeak / 16)
       }
     }
   }
 
-  // 墙面/硬表面命中：碎屑火花 + 尘雾
+  // 墙面/硬表面命中：碎屑火花 + 尘雾。地面（ny>0.7）火花减半、尘雾翻倍——
+  // 与 surfaceHit 的地面闷"噗"音色同一套材质判定，音画一致
   impact(x, y, z, nx, ny, nz) {
-    for (let i = 0; i < 8; i++) {
+    const floor = ny > 0.7
+    const nSparks = floor ? 4 : 8
+    for (let i = 0; i < nSparks; i++) {
       const sp = 1.2 + vary() * 2.6
       _v.set(nx + (vary() - 0.5) * 1.4, ny + vary() * 1.1, nz + (vary() - 0.5) * 1.4).normalize().multiplyScalar(sp)
       this.sparks.emit(x, y, z, _v.x, _v.y, _v.z, {
@@ -304,9 +317,12 @@ export class FX {
         r: 1, g: 0.82 + vary() * 0.15, b: 0.55, grav: 6, drag: 1.5,
       })
     }
-    this.puffs.emit(x + nx * 0.03, y + ny * 0.03, z + nz * 0.03,
-      nx * 0.3, 0.35, nz * 0.3,
-      { life: 0.5 + vary() * 0.25, size: 0.1, sizeEnd: 0.34, r: 0.62, g: 0.58, b: 0.52, alpha: 0.34, drag: 1.6 })
+    const nPuffs = floor ? 2 : 1
+    for (let i = 0; i < nPuffs; i++) {
+      this.puffs.emit(x + nx * 0.03 + (vary() - 0.5) * 0.05, y + ny * 0.03, z + nz * 0.03 + (vary() - 0.5) * 0.05,
+        nx * 0.3 + (vary() - 0.5) * 0.3, 0.35 + vary() * 0.25, nz * 0.3 + (vary() - 0.5) * 0.3,
+        { life: 0.5 + vary() * 0.25, size: 0.1, sizeEnd: 0.34, r: 0.62, g: 0.58, b: 0.52, alpha: 0.34, drag: 1.6 })
+    }
   }
 
   // 命中机器人：火花迸溅（爆头更密 + 泛红 + 白闪芯）
@@ -425,7 +441,7 @@ export class FX {
     for (const t of this.tracers) {
       if (t.life <= 0) continue
       t.life -= dt
-      t.mesh.material.opacity = Math.max(0, t.life / 0.07) * 0.85
+      t.mesh.material.opacity = Math.max(0, t.life / 0.07) * (t.baseOpacity ?? 0.85)
       if (t.life <= 0) t.mesh.visible = false
     }
     for (const d of this.decals) {
@@ -436,14 +452,18 @@ export class FX {
     }
     if (this.flashLife > 0) {
       this.flashLife -= dt
-      this.flash.material.opacity = Math.max(0, this.flashLife / 0.045) * 0.9
+      // 出生帧补偿：火苗在 simStep 生成，本帧 renderFrame 的 update 先扣掉整帧
+      // dt 才首次上屏 → 实际可见寿命 29-45ms 随出生相位抖动（亮度忽明忽暗）。
+      // muzzle() 里已 +半帧（0.008s），这里 clamp 到 1 保证峰值不超 0.9
+      this.flash.material.opacity = Math.min(1, Math.max(0, this.flashLife / 0.045)) * 0.9
       if (this.flashLife <= 0) this.flash.visible = false
     }
     // 动态光衰减（主场景灯 + vmScene 灯同步）
     if (this.lightLife > 0) {
       this.lightLife -= dt
-      this.flashLight.intensity = this.lightPeak * Math.max(0, this.lightLife / this.lightDur)
-      if (this.vmFlash) this.vmFlash.intensity = this.vmPeak * Math.max(0, this.lightLife / this.lightDur)
+      const k = Math.min(1, Math.max(0, this.lightLife / this.lightDur))
+      this.flashLight.intensity = this.lightPeak * k
+      if (this.vmFlash) this.vmFlash.intensity = this.vmPeak * k
     } else if (this.flashLight.intensity !== 0) {
       this.flashLight.intensity = 0
       if (this.vmFlash) this.vmFlash.intensity = 0
@@ -458,10 +478,12 @@ export class FX {
       s.vel.y -= 13 * dt
       s.mesh.position.addScaledVector(s.vel, dt)
       if (s.mesh.position.y < 0.012 && s.vel.y < 0) { // 落地弹跳
+        const impactV = -s.vel.y
         s.mesh.position.y = 0.012
         s.vel.y *= -0.32
         s.vel.x *= 0.72; s.vel.z *= 0.72
         s.ang.multiplyScalar(0.5)
+        if (impactV > 0.9) this.onShellBounce?.(Math.min(1, impactV / 2.5))
         if (Math.abs(s.vel.y) < 0.5) s.vel.y = 0
       }
       s.mesh.rotation.x += s.ang.x * dt
@@ -476,10 +498,12 @@ export class FX {
       h.vel.y -= 13 * dt
       h.mesh.position.addScaledVector(h.vel, dt)
       if (h.mesh.position.y < 0.05 && h.vel.y < 0) {
+        const impactV = -h.vel.y
         h.mesh.position.y = 0.05
         h.vel.y *= -0.38
         h.vel.x *= 0.7; h.vel.z *= 0.7
         h.ang.multiplyScalar(0.55)
+        if (impactV > 0.9) this.onHelmetBounce?.(Math.min(1, impactV / 2.5))
         if (Math.abs(h.vel.y) < 0.5) h.vel.y = 0
       }
       h.mesh.rotation.x += h.ang.x * dt

@@ -151,8 +151,22 @@ export class AudioSys {
     return this.bus // 非空间：直接走主总线（混响发送已在 ensure 里一次性接好）
   }
 
+  // 声画同步提前量：WebAudio 的声音要到扬声器还要走 outputLatency（常见
+  // 10-30ms，随设备/缓冲波动），而画面在下个 vsync（约半帧 ~8ms）就出现 →
+  // 声音系统性晚于枪口闪光。把所有调度点提前 (输出延迟 − 半帧)，让"听到"
+  // 与"看到"对齐；下限 0（延迟极低的设备不抢拍）。每秒刷新一次自适应缓冲变化
+  _syncLead() {
+    const now = this.ctx.currentTime
+    if (this._leadAt === undefined || now - this._leadAt > 1) {
+      const lat = this.ctx.outputLatency || this.ctx.baseLatency || 0
+      this._lead = Math.max(0, Math.min(0.08, lat - 0.008))
+      this._leadAt = now
+    }
+    return this._lead
+  }
+
   _noiseBurst(dest, { dur = 0.08, freq = 1800, freqEnd = null, q = 0.8, gain = 1, type = 'bandpass', delay = 0 } = {}) {
-    const t = this.ctx.currentTime + delay
+    const t = this.ctx.currentTime + delay + this._syncLead()
     const src = this.ctx.createBufferSource()
     src.buffer = this._noise
     src.loop = true
@@ -170,7 +184,7 @@ export class AudioSys {
   }
 
   _osc(dest, { type = 'triangle', freq = 200, freqEnd = null, dur = 0.1, gain = 0.5, delay = 0 } = {}) {
-    const t = this.ctx.currentTime + delay
+    const t = this.ctx.currentTime + delay + this._syncLead()
     const o = this.ctx.createOscillator()
     o.type = type
     o.frequency.setValueAtTime(freq, t)
@@ -199,7 +213,7 @@ export class AudioSys {
   }
 
   _playBuffer(buf, dest, { gain = 1, rate = 1, delay = 0 } = {}) {
-    const t = this.ctx.currentTime + delay
+    const t = this.ctx.currentTime + delay + this._syncLead()
     const src = this.ctx.createBufferSource()
     src.buffer = buf
     src.playbackRate.value = rate
@@ -211,7 +225,8 @@ export class AudioSys {
 
   // ---- 枪声 ----
   // 自有枪声（pos=null）全频段贴耳；敌方枪声（pos）经 HRTF + 距离低通
-  shot(kind, pos, listener) {
+  // heat 0..1（连射热量）：越热机械层越亮、腔体越紧——长点射听感渐变而非循环
+  shot(kind, pos, listener, heat = 0) {
     this.ensure()
     if (!this.ctx) return
     const out = this._spatial(pos, listener)
@@ -227,40 +242,45 @@ export class AudioSys {
 
     const own = !pos
     const v = own ? 1 : 0.8
+    // 热量调制：高热时高频脆层更亮、低频胸口感更紧（频率上探），
+    // 且枪管过热余振（微弱金属环）只在持续射击后出现
+    const hb = 1 + heat * 0.3   // 亮度
+    const ht = 1 + heat * 0.12  // 腔体张力
     // 每发微抖动：连射时层与层不完全一致 → 听感是"枪"而不是"循环"
     const j = 1 + (Math.random() * 2 - 1) * 0.1
     switch (kind) {
       case 'rifle': // 炸裂脆响 + 腔体扫频 + 中频拳 + 低频胸口 + 栓机循环
-        this._noiseBurst(out, { dur: 0.011, freq: 5500 * j, q: 0.5, gain: 1.15 * v, type: 'highpass' })
-        this._noiseBurst(out, { dur: 0.085, freq: 1400 * j, freqEnd: 300, q: 0.7, gain: 0.9 * v })
-        this._osc(out, { type: 'sawtooth', freq: 185 * j, freqEnd: 58, dur: 0.055, gain: 0.5 * v })
-        this._thump(out, { freq: 165, freqEnd: 46, dur: 0.08, gain: 0.62 * v })
-        this._noiseBurst(out, { dur: 0.022, freq: 3000, q: 2.5, gain: 0.26 * v, delay: 0.045 }) // 栓机回位
+        this._noiseBurst(out, { dur: 0.011, freq: 5500 * j * hb, q: 0.5, gain: 1.15 * v, type: 'highpass' })
+        this._noiseBurst(out, { dur: 0.085, freq: 1400 * j * ht, freqEnd: 300, q: 0.7, gain: 0.9 * v })
+        this._osc(out, { type: 'sawtooth', freq: 185 * j * ht, freqEnd: 58, dur: 0.055, gain: 0.5 * v })
+        this._thump(out, { freq: 165 * ht, freqEnd: 46, dur: 0.08, gain: 0.62 * v })
+        this._noiseBurst(out, { dur: 0.022, freq: 3000, q: 2.5, gain: 0.26 * v * hb, delay: 0.045 }) // 栓机回位
         this._osc(out, { type: 'square', freq: 620, dur: 0.012, gain: 0.06 * v, delay: 0.045 })
+        if (heat > 0.65) this._metal(out, 2900, 0.16, 0.05, 0.06) // 枪管过热余振
         break
       case 'rifle_suppressed': // Phantom："噗"——无炸裂脆响，整体更轻
-        this._noiseBurst(out, { dur: 0.065, freq: 1050 * j, freqEnd: 260, q: 0.9, gain: 0.85 * v })
-        this._noiseBurst(out, { dur: 0.008, freq: 2600, q: 0.6, gain: 0.32 * v, type: 'highpass' })
-        this._thump(out, { freq: 140, freqEnd: 55, dur: 0.06, gain: 0.4 * v })
+        this._noiseBurst(out, { dur: 0.065, freq: 1050 * j * ht, freqEnd: 260, q: 0.9, gain: 0.85 * v })
+        this._noiseBurst(out, { dur: 0.008, freq: 2600 * hb, q: 0.6, gain: 0.32 * v, type: 'highpass' })
+        this._thump(out, { freq: 140 * ht, freqEnd: 55, dur: 0.06, gain: 0.4 * v })
         this._noiseBurst(out, { dur: 0.018, freq: 2200, q: 3, gain: 0.18 * v, delay: 0.04 })
         break
       case 'handcannon': // Sheriff：大口径炸裂 + 深低频 + 转轮回位
-        this._noiseBurst(out, { dur: 0.012, freq: 4200 * j, q: 0.5, gain: 1.25 * v, type: 'highpass' })
-        this._noiseBurst(out, { dur: 0.15, freq: 1000 * j, freqEnd: 170, q: 0.6, gain: 1.1 * v })
-        this._osc(out, { type: 'sawtooth', freq: 150 * j, freqEnd: 40, dur: 0.11, gain: 0.8 * v })
-        this._thump(out, { freq: 130, freqEnd: 38, dur: 0.13, gain: 0.8 * v })
+        this._noiseBurst(out, { dur: 0.012, freq: 4200 * j * hb, q: 0.5, gain: 1.25 * v, type: 'highpass' })
+        this._noiseBurst(out, { dur: 0.15, freq: 1000 * j * ht, freqEnd: 170, q: 0.6, gain: 1.1 * v })
+        this._osc(out, { type: 'sawtooth', freq: 150 * j * ht, freqEnd: 40, dur: 0.11, gain: 0.8 * v })
+        this._thump(out, { freq: 130 * ht, freqEnd: 38, dur: 0.13, gain: 0.8 * v })
         this._noiseBurst(out, { dur: 0.025, freq: 2600, q: 2.5, gain: 0.28 * v, delay: 0.06 })
         break
       case 'pistol':
-        this._noiseBurst(out, { dur: 0.009, freq: 4600 * j, q: 0.5, gain: 0.9 * v, type: 'highpass' })
-        this._noiseBurst(out, { dur: 0.055, freq: 1800 * j, freqEnd: 420, q: 0.8, gain: 0.72 * v })
-        this._osc(out, { type: 'square', freq: 270 * j, freqEnd: 85, dur: 0.04, gain: 0.35 * v })
-        this._thump(out, { freq: 170, freqEnd: 60, dur: 0.055, gain: 0.34 * v })
-        this._noiseBurst(out, { dur: 0.016, freq: 3200, q: 2.5, gain: 0.18 * v, delay: 0.035 }) // 套筒复位
+        this._noiseBurst(out, { dur: 0.009, freq: 4600 * j * hb, q: 0.5, gain: 0.9 * v, type: 'highpass' })
+        this._noiseBurst(out, { dur: 0.055, freq: 1800 * j * ht, freqEnd: 420, q: 0.8, gain: 0.72 * v })
+        this._osc(out, { type: 'square', freq: 270 * j * ht, freqEnd: 85, dur: 0.04, gain: 0.35 * v })
+        this._thump(out, { freq: 170 * ht, freqEnd: 60, dur: 0.055, gain: 0.34 * v })
+        this._noiseBurst(out, { dur: 0.016, freq: 3200, q: 2.5, gain: 0.18 * v * hb, delay: 0.035 }) // 套筒复位
         break
       case 'pistol_suppressed': // Ghost：闷"噗" + 轻枪机
-        this._noiseBurst(out, { dur: 0.05, freq: 1200 * j, freqEnd: 300, q: 1, gain: 0.68 * v })
-        this._thump(out, { freq: 150, freqEnd: 60, dur: 0.045, gain: 0.3 * v })
+        this._noiseBurst(out, { dur: 0.05, freq: 1200 * j * ht, freqEnd: 300, q: 1, gain: 0.68 * v })
+        this._thump(out, { freq: 150 * ht, freqEnd: 60, dur: 0.045, gain: 0.3 * v })
         this._noiseBurst(out, { dur: 0.014, freq: 2600, q: 3, gain: 0.14 * v, delay: 0.035 })
         break
       case 'knife': // 挥砍破空声
@@ -381,6 +401,46 @@ export class AudioSys {
     } else {
       this._osc(this.master, { type: 'triangle', freq: 660, dur: 0.07, gain: 0.26 })
     }
+  }
+
+  // 子弹命中硬表面（弹孔位）：中频"叩"+脆屑声，空间化在命中点——
+  // 打墙有落点感，也补足"这发打偏了"的听觉信息。
+  // ny=命中面法线 y 分量：地面（ny>0.7）换更闷更钝的音色（材质区分）
+  surfaceHit(pos, listener, ny = 0) {
+    this.ensure()
+    if (!this.ctx) return
+    const out = this._spatial(pos, listener)
+    const j = 1 + (Math.random() * 2 - 1) * 0.15
+    if (ny > 0.7) { // 地面：尘土闷"噗"，无脆屑
+      this._noiseBurst(out, { dur: 0.045, freq: 520 * j, freqEnd: 160, q: 1, gain: 0.4 })
+      this._thump(out, { freq: 210, freqEnd: 80, dur: 0.06, gain: 0.24 })
+    } else { // 墙面/硬表面
+      this._noiseBurst(out, { dur: 0.03, freq: 900 * j, freqEnd: 260, q: 1.2, gain: 0.42 })
+      this._osc(out, { type: 'sine', freq: 300 * j, freqEnd: 120, dur: 0.05, gain: 0.22 })
+      this._noiseBurst(out, { dur: 0.012, freq: 5200, q: 0.8, gain: 0.12, type: 'highpass' })
+    }
+  }
+
+  // 抛壳落地"叮"：黄铜轻碰地面的高频金属泛音，音量极低（氛围细节，
+  // 绝不与下一发枪声打架）；每壳随机音高/响度，连发后地上一片碎铃
+  shellTink(intensity = 1) {
+    this.ensure()
+    if (!this.ctx) return
+    const j = 0.85 + Math.random() * 0.5
+    const g = 0.05 * intensity * (0.5 + Math.random() * 0.5)
+    this._noiseBurst(this.bus, { dur: 0.008, freq: 7000 * j, q: 0.7, gain: g * 1.4, type: 'highpass' })
+    this._metal(this.bus, 4300 * j, 0.06, g)
+  }
+
+  // 头盔落地"哐"：比弹壳低沉的中频金属磕碰（爆头击杀的余韵反馈）
+  helmetClank(intensity = 1) {
+    this.ensure()
+    if (!this.ctx) return
+    const j = 0.9 + Math.random() * 0.3
+    const g = 0.12 * intensity * (0.6 + Math.random() * 0.4)
+    this._noiseBurst(this.bus, { dur: 0.02, freq: 1600 * j, freqEnd: 500, q: 1.2, gain: g })
+    this._metal(this.bus, 940 * j, 0.14, g * 0.8)
+    this._thump(this.bus, { freq: 180, freqEnd: 70, dur: 0.06, gain: g * 0.6 })
   }
 
   // 切枪：短促机械"咔啦"声（抽枪 + 上膛提示），音高/时长微抖避免每次切枪完全一样

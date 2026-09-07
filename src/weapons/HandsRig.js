@@ -149,7 +149,7 @@ function placeArmsIK(sys, group, arms, tR, tL) {
   const _m4 = new THREE.Matrix4(), _q2 = new THREE.Quaternion(), _s2 = new THREE.Vector3(1, 1, 1)
   const bandFor = (handBone, lowerBone) => {
     const hw = wp(handBone)
-    const dir = hw.clone().sub(wp(lowerBone)).normalize() // 腕→小臂方向 = 前臂轴
+    const dir = wp(lowerBone).sub(hw).normalize() // 腕→肘侧（前臂来向）；取反会指向枪体插进握把/弹匣
     const center = hw.clone().addScaledVector(dir, 0.012) // 骑在手套腕口与袖口衔接缝上
     const ring = new THREE.TorusGeometry(0.015, 0.006, 10, 20)
     _q2.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir)

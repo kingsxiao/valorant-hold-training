@@ -108,9 +108,8 @@ bots.onBotFire = (bot) => {
 }
 
 bots.onEvent = (type, data) => {
-  if (type === 'lost-duel') {
-    hud.toastMsg('对枪失败 —— 慢了', 1400)
-  } else if (type === 'round-end') {
+  // 对枪判负不弹提示（用户要求）：Bot 反击后跑向对面掩体，判负只进统计面板
+  if (type === 'round-end') {
     state.playing = false
     document.exitPointerLock?.()
     audio.roundEnd() // 结束音与开局音呼应

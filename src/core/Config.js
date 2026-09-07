@@ -121,6 +121,9 @@ export const CONFIG = {
     peekDelayMinMs: 600,    // 架枪模式：Bot 出现前的随机等待
     peekDelayMaxMs: 2600,
     peekStopChance: 0.35,   // 横移中急停一瞬的概率（模拟真人 swing 抖动）
+    crossChance: 0.5,       // 每波风格：侧面跑过（贯穿缺口顺跑向）vs 横向拉出（肩peek 拉出对枪）
+    pullJiggleChance: 0.3,  // 拉出波里"露头即缩"jiggle-peek 的概率（拉到中段折返）
+    pullHoldMaxMs: 2400,    // 拉出后站定对枪的兜底时长（可见判负之外防挂场，如玩家挪位断 LOS）
   },
 
   graphics: {

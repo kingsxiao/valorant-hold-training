@@ -14,8 +14,9 @@ import { raySphere } from '../world/World.js'
 //  - 接触阴影；支持 agent.glb 骨骼模型整体替换（SkeletonUtils 克隆）：
 //    idle/walk/run 按实际移速加权混合，脚步速率与位移同步 —— 拉出/横移真在跑；
 //    单 clip 老模型（BrainStem）静止时 timeScale→0 冻结、移动时恢复
-//  - 腿部遵循无畏契约运动规则：peek 面向目标持枪侧移（strafe）、步频与位移/
-//    脚步声锁相、counter-strafe 急停即刻站定、身体向移动方向微倾
+//  - 腿部遵循无畏契约运动规则：拉出（pull）面向目标持枪侧移（strafe）、跑过
+//    （cross）顺跑向前进跑姿 + 上身前倾；步频与位移/脚步声锁相、counter-strafe
+//    急停即刻站定、身体向移动方向微倾
 const STEP_LEN = 1.15 // 一步的位移（m）：脚步声触发与步态相位锁相共用
 const _v = new THREE.Vector3()
 
@@ -41,6 +42,8 @@ export class Bot {
     this.walkPhase = 0
     this.stepDist = 0   // 脚步声里程（与位移同步）
     this.lean = 0       // 身体侧倾量（向移动方向倾，平滑跟踪局部横向速度）
+    this.foreLean = 0   // 上身前倾量（cross 顺跑向跑时的奔跑重心，负 rot.x）
+    this._foreW = 0     // 步态的前进权重（wFore>0 时才前倾：侧移对枪保持上身立直）
     this.plantT = 0     // 急停卸力下沉的剩余时间
     this._prevSpeed = 0 // 检测"高速→近停"跨越，触发一次 plant settle
     this.flinch = 0      // 受击踉跄相位（0~1+，衰减）
@@ -353,12 +356,14 @@ export class Bot {
       legR.rotation.y = hipYaw
       // 步态起伏：落脚张开时最低（重心压上支撑步）、并腿过中点最高 —— 与脚步声同拍
       this.mesh.position.y = (1 - Math.abs(s)) * (0.01 + speed * 0.0036)
+      this._foreW = wFore // 前倾只跟前进步态走：侧移对枪（wFore≈0）上身立直
     } else {
       // 急停即刻站定：快速收步 + 高度归零（counter-strafe 是硬停，不做漂浮缓动）
       const k = 1 - Math.min(1, dt * 22)
       legL.rotation.x *= k; legL.rotation.y *= k; legL.rotation.z *= k
       legR.rotation.x *= k; legR.rotation.y *= k; legR.rotation.z *= k
       this.mesh.position.y *= k
+      this._foreW = 0
     }
 
     // 身体侧倾：向移动方向倾（lean into strafe）；回正比起倾更快（急停干净利落）
@@ -366,6 +371,13 @@ export class Bot {
     const leanRate = Math.abs(leanTarget) > Math.abs(this.lean) ? 8 : 18
     this.lean += (leanTarget - this.lean) * Math.min(1, dt * leanRate)
     this.mesh.rotation.z = this.lean
+
+    // 上身前倾（cross 顺跑向跑）：负 rot.x 把重心压向跑动方向，急停/站定快速回正。
+    // 受击踉跄在其后写入 rot.x（后仰优先），衰减完自然交还前倾
+    const foreTarget = -this._foreW * Math.min(speed / CONFIG.bot.moveSpeed, 1) * 0.07
+    const foreRate = Math.abs(foreTarget) > Math.abs(this.foreLean) ? 7 : 16
+    this.foreLean += (foreTarget - this.foreLean) * Math.min(1, dt * foreRate)
+    this.mesh.rotation.x = this.foreLean
 
     // counter-strafe 卸力：高速 → 近停瞬间触发一次短促下沉（重心急停的重量感）
     if (this._prevSpeed > 2.2 && speed <= 1.0) this.plantT = 0.16
@@ -402,6 +414,8 @@ export class Bot {
     this.walkPhase = 0
     this.stepDist = 0
     this.lean = 0        // 复用的 Bot 归位站姿：不带旧侧倾/急停残余
+    this.foreLean = 0
+    this._foreW = 0
     this.plantT = 0
     this._prevSpeed = 0
     if (this.legL) { this.legL.rotation.set(0, 0, 0); this.legR.rotation.set(0, 0, 0) }
@@ -437,7 +451,7 @@ export class Bot {
     if (o <= 0.55 && this.blob.visible) this.blobMat.opacity = o * 0.7
   }
 
-  get invulnerable() { return this.now() < (this.spawnGuardUntil ?? 0) || !this.active || this.mode === 'dying' || this.mode === 'won' }
+  get invulnerable() { return this.now() < (this.spawnGuardUntil ?? 0) || !this.active || this.mode === 'dying' }
   now() { return this.manager ? this.manager.now() : performance.now() / 1000 } // 跟随游戏时钟（暂停时冻结）
 
   moveToward(targetVelX, dt) {
@@ -465,16 +479,8 @@ export class Bot {
     this._restoreEmissive()
   }
 
-  // 对枪获胜（击中玩家）：原地停留（枪口焰/曳光由 manager.onBotFire 表现）后缩回淡出
-  // —— 不再"赢了却播放死亡动画"的怪象
-  startWon() {
-    this.mode = 'won'
-    this.wonT = 0
-    this.velX = 0
-    this.flinch = 0
-    this.hitFlash = 0
-    this._restoreEmissive()
-  }
+  // 对枪获胜（玩家没打中）不再有独立的 won 模式：Bot 保持 peek 横移跑向
+  // 对面掩体撤离（BotManager._loseDuel 改写 peek 目标），到位躲进墙后 hide
 
   // 还原各材质的原始自发光（受击闪红后的恢复路径统一走这里）
   _restoreEmissive() {
@@ -488,24 +494,6 @@ export class Bot {
   step(dt, ctx) {
     this.prevPos.copy(this.pos)
     if (!this.active && this.mode !== 'dying') return
-
-    if (this.mode === 'won') {
-      // 获胜停留：转向玩家（复用 step 的平滑转向），短暂停留后淡出缩回
-      this.wonT += dt
-      const p = ctx.player
-      const targetYaw = Math.atan2(-(p.pos.x - this.pos.x), -(p.pos.z - this.pos.z))
-      let dy = targetYaw - this.mesh.rotation.y
-      dy = Math.atan2(Math.sin(dy), Math.cos(dy))
-      this.mesh.rotation.y += dy * Math.min(1, dt * 14)
-      this.mesh.rotation.x = Math.sin(Math.min(1, this.wonT * 6) * Math.PI) * 0.06 // 开火后坐轻晃
-      if (this.wonT > 0.55) {
-        const o = Math.max(0, 1 - (this.wonT - 0.55) / 0.4)
-        this.setOpacity(o)
-        this.blobMat.opacity = o
-      }
-      if (this.wonT > 0.95) this.hide()
-      return
-    }
 
     if (this.mode === 'dying') {
       this.deathT += dt
@@ -548,11 +536,13 @@ export class Bot {
       if (this.hitFlash <= 0) this._restoreEmissive()
     }
 
-    // 朝向：VALORANT peek 规则 —— 持枪面向对枪目标横移（strafe），不转身顺行进方向跑；
-    // 骨骼假人例外：GLB 只有前进向 walk/run clip，侧移时放前进 clip 会滑步穿帮 → 移动时朝行进方向
+    // 朝向：横向拉出 = VALORANT 肩peek，持枪面向对枪目标横移（strafe）；
+    // 侧面跑过 = 顺行进方向跑（旋转跑、侧身入镜），急停/站定时转回面向目标（停步挑战）；
+    // 骨骼假人例外：GLB 只有前进向 clip，任何移动中都朝行进方向（侧移放前进 clip 会滑步穿帮）
     const stopped = this.mode === 'peek' && this.peek?.stopUntil > this.now()
+    const moving = Math.abs(this.velX) > 0.4
     let targetYaw
-    if (this.mixer && Math.abs(this.velX) > 0.4 && !stopped) {
+    if ((this.mixer || this.peek?.style === 'cross') && moving && !stopped) {
       targetYaw = this.velX > 0 ? -Math.PI / 2 : Math.PI / 2
     } else {
       targetYaw = Math.atan2(-(p.pos.x - this.pos.x), -(p.pos.z - this.pos.z))

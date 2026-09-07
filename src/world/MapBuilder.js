@@ -4,17 +4,39 @@ import { Tex, pbr } from './Textures.js'
 
 // 训练馆布局（原创设计，尺寸按游戏内比例）：
 //   主厅 x∈[-16,16], z∈[6,-46]
-//   - 架枪巷道：z=-24 处横墙带两个缺口，Bot 在墙后 z=-30 横向拉出
+//   - 架枪巷道：z=-24 处横墙只开一个缺口（位置由设置选左/右），Bot 在墙后 z=-30 横向拉出
 //   - 中场木箱掩体若干（高 1.2 / 2.4，换点位架枪 / 练习绕点预瞄）
-// v2 视觉：地面距离标线+数字 / 缺口字母牌+警示条纹横梁 / 墙面灯带 / 踢脚线 / 远端场馆标牌
+// v2 视觉：地面距离标线+数字 / 缺口警示条纹横梁 / 墙面灯带 / 踢脚线 / 远端场馆标牌
 export class MapBuilder {
-  constructor(world, scene) {
+  // side: 'left' 缺口 x∈[-9,-6] / 'right' 缺口 x∈[3,7]（左右位置镜像等距，视线调校一致）
+  constructor(world, scene, side = 'left') {
     this.world = world
     this.scene = scene
     this.spawn = { x: 0, z: 0, yaw: 0 }
-    this.holdSpots = []   // 架枪推荐站位
-    this.gaps = []        // 巷道缺口 { x0, x1 }
+    this.gaps = []        // 巷道缺口 { x0, x1 }（恒为 1 个，位置随 side）
     this._signCache = {}
+    this._meshes = []     // 挂进场景的全部静态 mesh（rebuild 时统一回收）
+    this.rebuild(side)
+  }
+
+  get side() { return this._side }
+
+  // 切换缺口左右：回收旧静态几何后重排（PBR 纹理是单例缓存，重建只是重摆几何）
+  rebuild(side = this._side) {
+    for (const m of this._meshes) {
+      this.scene.remove(m)
+      m.geometry?.dispose()
+      const mats = Array.isArray(m.material) ? m.material : [m.material]
+      for (const mat of mats) {
+        for (const k of ['map', 'roughnessMap', 'normalMap', 'emissiveMap']) mat?.[k]?.dispose?.()
+        mat?.dispose?.()
+      }
+    }
+    this._meshes.length = 0
+    // 标牌 clone 共享缓存原型的几何/材质（上面已随 clone dispose），清缓存待下次重建
+    this._signCache = {}
+    this.world.solids.length = 0
+    this._side = side === 'right' ? 'right' : 'left'
     this.build()
   }
 
@@ -86,33 +108,16 @@ export class MapBuilder {
     box(geos.trim, -16.44, 0, -19.5, 0.12, 0.42, 56, false)
     box(geos.trim, 16.44, 0, -19.5, 0.12, 0.42, 56, false)
 
-    // ===== 架枪巷道：z=-24 横墙，两个缺口 =====
-    // 缺口 A x∈[-9,-6]（3m），缺口 B x∈[3,7]（4m）
-    box(geos.wall, -13, 0, -24, 8, 4, 0.8)   // -17..-9
-    box(geos.wall, -1.5, 0, -24, 9, 4, 0.8)  // -6..3
-    box(geos.wall, 12, 0, -24, 10, 4, 0.8)   // 7..17
-    box(geos.accent, -7.5, 4.05, -24, 3.4, 0.15, 1.1, false) // 缺口上沿标记
-    box(geos.accent, 5, 4.05, -24, 4.4, 0.15, 1.1, false)
-    // 缺口警示条纹横梁（门楣，快速识别架枪点位）
-    box(geos.stripe, -7.5, 3.72, -23.6, 4.2, 0.24, 0.16, false)
-    box(geos.stripe, 5, 3.72, -23.6, 5.2, 0.24, 0.16, false)
-    // 缺口字母牌（A / B，报点用）
-    const letter = (key, ch, x) => {
-      const m = this._sign(key, 0.9, 0.9, (g, W, H) => {
-        g.fillStyle = 'rgba(16,22,27,0.92)'; g.fillRect(0, 0, W, H)
-        g.strokeStyle = '#ff4655'; g.lineWidth = 14; g.strokeRect(10, 10, W - 20, H - 20)
-        g.fillStyle = '#ff4655'; g.font = `bold ${Math.round(H * 0.62)}px monospace`
-        g.textAlign = 'center'; g.textBaseline = 'middle'
-        g.fillText(ch, W / 2, H / 2 + 6)
-      })
-      m.position.set(x, 2.75, -23.56)
-      m.matrixAutoUpdate = false
-      m.updateMatrix()
-      this.scene.add(m)
+    // ===== 架枪巷道：z=-24 横墙，单缺口（左 x∈[-9,-6] / 右 x∈[3,7]）=====
+    const gap = this._side === 'right' ? { x0: 3, x1: 7 } : { x0: -9, x1: -6 }
+    for (const [a, b] of [[-17, gap.x0], [gap.x1, 17]]) {
+      box(geos.wall, (a + b) / 2, 0, -24, b - a, 4, 0.8)
     }
-    letter('gapA', 'A', -9.8)
-    letter('gapB', 'B', 7.8)
-    this.gaps.push({ x0: -9, x1: -6, name: 'A' }, { x0: 3, x1: 7, name: 'B' })
+    const gapCx = (gap.x0 + gap.x1) / 2, gapW = gap.x1 - gap.x0
+    box(geos.accent, gapCx, 4.05, -24, gapW + 0.4, 0.15, 1.1, false) // 缺口上沿标记
+    // 缺口警示条纹横梁（门楣，快速识别架枪点位）
+    box(geos.stripe, gapCx, 3.72, -23.6, gapW + 1.2, 0.24, 0.16, false)
+    this.gaps = [gap]
     // Bot 横移线（墙后 6m 处）
     this.peekLineZ = -30
     // 巷道后墙
@@ -139,6 +144,7 @@ export class MapBuilder {
         m.matrixAutoUpdate = false
         m.updateMatrix()
         this.scene.add(m)
+        this._meshes.push(m)
       }
     }
     distMark(10, -7); distMark(20, -17); distMark(30, -27); distMark(40, -37)
@@ -159,11 +165,13 @@ export class MapBuilder {
     board.matrixAutoUpdate = false
     board.updateMatrix()
     this.scene.add(board)
+    this._meshes.push(board)
 
-    // ===== 中场掩体木箱 =====
+    // ===== 中场掩体木箱（全部留在主厅 z>-24：巷道内不放箱，保证缺口视线干净）=====
     const crates = [
-      [-4.2, -12, 1.2], [5, -15, 2.4], [-2, -20, 1.2], [8, -26, 1.2],
-      [-10, -28, 2.4], [2, -8, 1.2], [-8, -5, 1.2], [10, -6, 2.4],
+      [-4.2, -12, 1.2], [5, -15, 2.4], [-2, -20, 1.2],
+      [2, -8, 1.2], [-8, -5, 1.2], [10, -6, 2.4],
+      [-12, -19, 1.2], [11, -21, 2.4],
     ]
     for (const [x, z, h] of crates) {
       box(geos.crate, x, 0, z, 1.6, h, 1.6)
@@ -171,15 +179,8 @@ export class MapBuilder {
       box(geos.accent, x, h, z, 1.65, 0.06, 1.65, false)
     }
 
-    // 架枪推荐站位（面向缺口）
-    this.holdSpots = [
-      { x: -7.5, z: -17, yaw: 0, gap: 0 },
-      { x: 5, z: -17, yaw: 0, gap: 1 },
-      { x: 0, z: -10, yaw: 0, gap: 0 },
-    ]
-
-    // 出生点：架枪位正后（中场掩体之间），面向两个缺口
-    this.spawn = { x: 0, z: -14, yaw: 0 }
+    // 出生点：缺口正前方架枪位——进局即对口架枪（要换位随时可以走）
+    this.spawn = { x: gapCx, z: -17, yaw: 0 }
 
     // 合并静态几何 → 每种材质 1 个 draw call
     for (const [key, arr] of Object.entries(geos)) {
@@ -191,6 +192,7 @@ export class MapBuilder {
       mesh.castShadow = key !== 'floor' && key !== 'lamp'
       mesh.receiveShadow = key !== 'lamp'
       this.scene.add(mesh)
+      this._meshes.push(mesh)
       for (const g of arr) g.dispose()
     }
   }

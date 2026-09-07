@@ -19,7 +19,6 @@ export class BotManager {
       aimTimeMs: CONFIG.bot.aimTimeMs,
       roundSeconds: CONFIG.training.roundSeconds,
       rampUp: false, // 渐进难度：随击杀数缩短延迟/提升横移速度
-      doubleGap: false, // 双缺口压力：A/B 缺口独立出人
     }
     this.onEvent = null // (type, data) → HUD 提示：'lost-duel' / 'killed' / 'round-end'
     this.stats = this._freshStats()
@@ -48,7 +47,7 @@ export class BotManager {
     this.roundEndAt = this.params.roundSeconds > 0
       ? this.countdownUntil + this.params.roundSeconds
       : 0
-    this.hold = null // 惰性初始化：依赖 doubleGap 配置（单槽位 or A/B 双槽位）
+    this.hold = null // 惰性初始化：单缺口单槽位调度状态
     this.audio?.roundStart()
   }
 
@@ -103,13 +102,9 @@ export class BotManager {
   get _rampDelay() { return Math.max(0.45, Math.pow(0.93, this._rampKills)) }
   get _rampSpeed() { return Math.min(1.3, this.params.speedMult * Math.pow(1.02, this._rampKills)) }
 
-  // 架枪对枪调度：单缺口（随机 A/B）默认；双缺口压力模式下 A/B 各一个独立槽位，
-  // B 起始错开 1.5s——练交叉火力下的目标选择与转火
+  // 架枪对枪调度：单缺口单槽位——每波走完缩回/对枪失败后按延迟区间重新排程
   _initHold() {
-    if (this.params.doubleGap) {
-      return { slots: [0, 1].map(i => ({ gapIdx: i, nextAt: this.now() * 1000 + i * 1500, bot: null })) }
-    }
-    return { slots: [{ gapIdx: -1, nextAt: 0, bot: null }] } // gapIdx -1 = 每次随机缺口
+    return { slots: [{ nextAt: 0, bot: null }] }
   }
 
   _stepHold(dt, ctx) {
@@ -130,16 +125,12 @@ export class BotManager {
     }
 
     if (!activeBot && nowMs >= slot.nextAt) {
-      // 单缺口模式（gapIdx -1 哨兵）：出人瞬间才随机缺口——任何重排程路径
-      // （走完缩回/对枪失败）都先重置 -1，保证每波都是 A/B 重新随机
-      if (slot.gapIdx < 0) slot.gapIdx = Math.floor(Math.random() * this.map.gaps.length)
-      const gap = this.map.gaps[slot.gapIdx]
+      const gap = this.map.gaps[0]
       const b = this._bot()
       const fromLeft = Math.random() > 0.5
       const startX = fromLeft ? gap.x0 - 2.2 : gap.x1 + 2.2
       const endX = fromLeft ? gap.x1 + 2.2 : gap.x0 - 2.2
       b.place(startX, this.map.peekLineZ, 'peek')
-      b.gapName = gap.name
       b.slot = slot
       // 35% 概率"露头即缩"（jiggle peek）：拉出到中段后折返缩回墙后，
       // 逼玩家守住准星等第二拉，而不是追着扫
@@ -179,9 +170,6 @@ export class BotManager {
           activeBot.hide()
           slot.bot = null
           slot.nextAt = 0 // 重新排程（渐进难度系数在排程时生效）
-          // 单缺口模式：每次出人重新随机缺口。缺口只在排程时随机一次，
-          // 不重置的话整局锁死同一个缺口（撞上出生点被墙垛挡住的 A 缺口 = 整局看不到人）
-          if (!this.params.doubleGap) slot.gapIdx = -1
         }
       }
     }
@@ -227,18 +215,23 @@ export class BotManager {
 
   _loseDuel(bot) {
     this.stats.duelsLost++
-    // 敌方枪声从 Bot 位置响起（可听声辨位：输了也要知道子弹从哪个缺口来的），
-    // 随后一声受击闷响——只是"这波慢了"的音画反馈，玩家不掉血、继续架枪
+    // 敌方枪声从 Bot 位置响起（可听声辨位：输了也要知道子弹从哪个缺口来的）。
+    // 纯架枪训练无受伤设定：无受击音/红闪/方向弧，玩家不掉血、继续架枪
     this.audio.shot('rifle', { x: bot.pos.x, y: 1.3, z: bot.pos.z }, { pos: this.player.pos, yaw: this.player.yaw })
-    this.audio.hurt()
     this.onEvent?.('lost-duel', { bot })
     // Bot 开火视觉表现（枪口焰/曳光由 main 注入的 onBotFire 完成）→ 原地停留后缩回淡出
     this.onBotFire?.(bot)
     bot.startWon()
-    // 该槽位短暂停顿后重新排程（双缺口模式下只停自己的槽位）；单缺口重新随机缺口
-    if (bot.slot) {
-      bot.slot.nextAt = this.now() * 1000 + 1200
-      if (!this.params.doubleGap) bot.slot.gapIdx = -1
+    // 该槽位短暂停顿后重新排程
+    if (bot.slot) bot.slot.nextAt = this.now() * 1000 + 1200
+  }
+
+  // 地图重建（缺口左右切换）后：场上 Bot 的横移线还是旧缺口的，
+  // 就地回收并重排下一波——不走完旧线（会从已封死的墙段里穿出来）
+  onMapRebuilt() {
+    for (const slot of this.hold?.slots ?? []) { slot.bot = null; slot.nextAt = 0 }
+    for (const b of this.bots) {
+      if (b.active && b.mode === 'peek') b.hide()
     }
   }
 

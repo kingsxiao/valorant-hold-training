@@ -95,8 +95,9 @@ weapons.onHitBot = (bot, zone, dmg, killed, point) => {
 weapons.onAmmoChange = () => hud.setAmmo(weapons.weapon)
 // 枪口焰精灵/点光由 FX.muzzle 按 viewmodel 实测枪口世界坐标点亮（不再挂相机固定偏移）
 
-// 对枪失败时 Bot 的开火视觉表现：枪口焰 + 曳光射向玩家 + 轻微视角冲击
-// （敌方枪声在 BotManager._loseDuel 内从 Bot 位置空间化播放）
+// 对枪失败时 Bot 的开火视觉表现：枪口焰 + 曳光射向玩家
+// （敌方枪声在 BotManager._loseDuel 内从 Bot 位置空间化播放；
+//   纯架枪训练无受伤设定——无红闪/方向弧/受击音/视角冲击，玩家不掉血不中断）
 bots.onBotFire = (bot) => {
   const dx = player.pos.x - bot.pos.x, dz = player.pos.z - bot.pos.z
   const d = Math.max(0.001, Math.hypot(dx, dz))
@@ -104,21 +105,11 @@ bots.onBotFire = (bot) => {
   fx.muzzle(from)
   fx.tracer(new THREE.Vector3(from.x, from.y, from.z), engine.camera.position)
   audio.whiz()
-  player.addPunch(0.02, (Math.random() - 0.5) * 0.01)
 }
 
 bots.onEvent = (type, data) => {
   if (type === 'lost-duel') {
-    hud.hurtFlash()
-    hud.toastMsg(`对枪失败 —— 慢了（${data.bot.gapName ?? '?'} 缺口）`, 1400)
-    // 受击方向指示：弧形红圈指向来源 Bot
-    const b = data.bot
-    if (b) {
-      const dx = b.pos.x - player.pos.x, dz = b.pos.z - player.pos.z
-      const fx_ = -Math.sin(player.yaw), fz_ = -Math.cos(player.yaw) // 玩家前向
-      const rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw)    // 玩家右向
-      hud.showDamageDir(Math.atan2(dx * rx + dz * rz, dx * fx_ + dz * fz_))
-    }
+    hud.toastMsg('对枪失败 —— 慢了', 1400)
   } else if (type === 'round-end') {
     state.playing = false
     document.exitPointerLock?.()
@@ -211,7 +202,12 @@ menu.applyAll = () => {
   bots.params.aimTimeMs = cfg.aimTimeMs
   bots.params.roundSeconds = cfg.roundSeconds
   bots.params.rampUp = !!cfg.rampUp
-  bots.params.doubleGap = !!cfg.doubleGap
+  // 缺口左右切换：重建静态地图（PBR 纹理单例缓存，重排几何开销极小）。
+  // 场上 Bot 的横移线是旧缺口的，就地回收重排，避免从已封死的墙段穿出
+  if (map.side !== cfg.gapSide) {
+    map.rebuild(cfg.gapSide)
+    bots.onMapRebuilt()
+  }
   engine.autoRes = cfg.autoRes !== false
   engine.setResolutionScale(cfg.resScale ?? 1)
   engine.setShadows(!!cfg.shadows)
@@ -229,7 +225,7 @@ function startRound(cfg) {
   audio.setVolume(cfg.volume)
   killTimes.length = 0
 
-  // 出生点：架枪位正后，面向两个缺口
+  // 出生点：缺口正前方架枪位（applyAll 已按 gapSide 重建地图，spawn 随之切换）
   player.respawn(map.spawn.x, map.spawn.z, map.spawn.yaw)
 
   weapons.primaryId = cfg.primary
@@ -329,9 +325,7 @@ engine.renderFrame = (alpha, dtMs) => {
   const remainS = bots.params.roundSeconds > 0 && bots.running && bots.roundEndAt > 0
     ? Math.max(0, bots.roundEndAt - bots.now())
     : null
-  const dualTag = bots.params.doubleGap ? ' · 双缺口压力' : ''
-  hud.setMode(MODE_INFO.label,
-    remainS != null ? `${remainS.toFixed(1)}s${dualTag}` : MODE_INFO.desc + dualTag) // 游戏时钟：暂停时倒计时冻结
+  hud.setMode(MODE_INFO.label, remainS != null ? `${remainS.toFixed(1)}s` : MODE_INFO.desc) // 游戏时钟：暂停时倒计时冻结
   hud.setTimerUrgent(remainS != null && remainS <= 10 && state.playing) // 最后 10s 红色告急
   _hudAccum.stats += dtMs
   if (_hudAccum.stats > 200) { _hudAccum.stats = 0; hud.setStats(bots.stats, engine) }

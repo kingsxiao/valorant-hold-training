@@ -122,13 +122,6 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 #hud-mode .mode-sub.urgent { color: var(--accent); opacity: 1; font-weight: 700; animation: urgentblink 1s steps(2, jump-none) infinite; }
 @keyframes urgentblink { 0% { opacity: 1; } 50% { opacity: 0.45; } }
 
-/* 受击方向指示：以屏幕中心为圆心的红弧指向伤害来源 */
-#dmg-dir { position: absolute; left: 50%; top: 50%; width: 230px; height: 230px; margin: -115px 0 0 -115px; opacity: 0; pointer-events: none; }
-#dmg-dir .arc { position: absolute; inset: 0; border-radius: 50%; border: 4px solid transparent; border-top-color: rgba(255, 70, 85, 0.95); filter: drop-shadow(0 0 8px rgba(255, 70, 85, 0.8)); }
-#dmg-dir .arc::after { content: ''; position: absolute; left: 50%; top: -12px; transform: translateX(-50%); width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-bottom: 10px solid rgba(255, 70, 85, 0.95); }
-#dmg-dir.show { animation: ddfade 1.2s ease-out forwards; }
-@keyframes ddfade { 0% { opacity: 1; } 60% { opacity: 0.85; } 100% { opacity: 0; } }
-
 /* 实时数据（左下） */
 #hud-stats { left: 24px; bottom: 24px; font-variant-numeric: tabular-nums; min-width: 236px; }
 #hud-stats .row { display: flex; justify-content: space-between; gap: 16px; padding: 1px 0; }
@@ -210,9 +203,6 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 .kf .kf-ico { color: var(--accent); font-size: 12px; }
 .kf .kf-vic { color: #ff8a92; font-weight: 600; letter-spacing: 1px; font-family: var(--font-num); }
 .kf em { font-style: normal; font-size: 11.5px; opacity: 0.55; font-variant-numeric: tabular-nums; font-family: var(--font-num); font-weight: 600; }
-
-/* 对枪失败红闪（仅音画提示，无伤害） */
-#hurt-vignette { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse at center, transparent 42%, rgba(200, 20, 30, 0.55) 100%); transition: opacity 0.25s; }
 
 /* 伤害数字 */
 .dmg-num { position: absolute; left: 0; top: 0; font-family: var(--font-num); font-weight: 700; font-size: 20px; color: #fff; text-shadow: 0 1px 4px #000, 0 0 2px #000; will-change: transform, opacity; font-variant-numeric: tabular-nums; }

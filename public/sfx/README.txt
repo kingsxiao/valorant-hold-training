@@ -9,8 +9,6 @@
   headshot        爆头"叮"声
   hit             身体命中音
   kill            击杀确认音
-  death           你被击杀
-  hurt            受击
   footstep        脚步声（会随机变调播放）
   round_start     回合开始
 

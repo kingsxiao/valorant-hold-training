@@ -100,7 +100,7 @@ export class Menu {
       resScale: 1.0,
       autoRes: true,
       rampUp: false,
-      doubleGap: false,
+      gapSide: 'left',      // 缺口位置：左 / 右（切换即重建静态地图）
       crosshair: {},
       ...loadSettings(),
     }
@@ -131,7 +131,8 @@ export class Menu {
     const WEAPONS = Object.keys(CONFIG.weapons)
     if (!WEAPONS.includes(c.primary)) c.primary = 'vandal'
     if (!WEAPONS.includes(c.secondary)) c.secondary = 'classic'
-    for (const k of ['showFps', 'shadows', 'autoRes', 'rampUp', 'doubleGap']) c[k] = !!c[k]
+    for (const k of ['showFps', 'shadows', 'autoRes', 'rampUp']) c[k] = !!c[k]
+    c.gapSide = c.gapSide === 'right' ? 'right' : 'left' // 旧存档里的 doubleGap 一并失效忽略
     c.crosshair = (typeof c.crosshair === 'object' && c.crosshair !== null) ? c.crosshair : {}
   }
 
@@ -172,6 +173,8 @@ export class Menu {
         <div class="slider-row"><label>击杀时限</label><input type="range" data-key="aimTimeMs" min="250" max="1200" step="50"><span class="val"></span></div>
         <div class="slider-row"><label>音量</label><input type="range" data-key="volume" min="0" max="1" step="0.05"><span class="val"></span></div>
       </div>
+      <div class="opt-grid" data-group="gapSide"></div>
+      <div style="height:8px"></div>
       <div class="opt-grid" data-group="trainOpts"></div>
 
       <h2>画质</h2>
@@ -261,11 +264,21 @@ export class Menu {
       oBox.appendChild(b)
     }
 
-    // 训练开关（渐进难度 / 双缺口压力）
+    // 缺口位置（左/右二选一）：切换即重建地图——纯架枪场景只留一个口
+    const gsBox = p.querySelector('[data-group=gapSide]')
+    for (const [v, label] of [['left', '缺口 · 左侧'], ['right', '缺口 · 右侧']]) {
+      const b = document.createElement('button')
+      b.className = 'opt-btn'
+      b.textContent = label
+      b.dataset.value = v
+      b.onclick = () => { this.cfg.gapSide = v; this.syncButtons(); saveSettings({ gapSide: v }); this.applyAll?.() }
+      gsBox.appendChild(b)
+    }
+
+    // 训练开关（渐进难度）
     const tBox = p.querySelector('[data-group=trainOpts]')
     for (const [key, label] of [
       ['rampUp', '渐进难度（击杀后 Bot 越出越快/越快横移）'],
-      ['doubleGap', '双缺口压力（A/B 同时出人）'],
     ]) {
       const b = document.createElement('button')
       b.className = 'opt-btn'
@@ -377,6 +390,9 @@ export class Menu {
     }
     for (const b of this.panel.querySelectorAll('[data-group=chOpts] .opt-btn')) {
       b.classList.toggle('active', !!this.cfg.crosshair[b.dataset.value])
+    }
+    for (const b of this.panel.querySelectorAll('[data-group=gapSide] .opt-btn')) {
+      b.classList.toggle('active', b.dataset.value === this.cfg.gapSide)
     }
     for (const b of this.panel.querySelectorAll('[data-group=gfxOpts] .opt-btn, [data-group=trainOpts] .opt-btn')) {
       b.classList.toggle('active', !!this.cfg[b.dataset.value])

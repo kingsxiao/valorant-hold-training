@@ -107,7 +107,7 @@ export class AudioSys {
     if (this._loadStarted) return
     this._loadStarted = true
     const names = ['shot_rifle', 'shot_phantom', 'shot_pistol', 'shot_ghost', 'shot_handcannon', 'shot_knife',
-      'headshot', 'hit', 'kill', 'death', 'hurt', 'footstep', 'round_start']
+      'headshot', 'hit', 'kill', 'footstep', 'round_start']
     await Promise.all(names.map(async (name) => {
       for (const ext of ['mp3', 'wav', 'ogg']) {
         try {
@@ -297,25 +297,8 @@ export class AudioSys {
     this._metal(this.master, 2093 * pitch, 0.24, 0.18, delay + 0.055)
   }
 
-  death() { // 你被击杀
-    this.ensure()
-    if (!this.ctx) return
-    if (this.user.death) { this._playBuffer(this.user.death, this.bus); return }
-    this._osc(this.master, { type: 'triangle', freq: 130, freqEnd: 42, dur: 0.36, gain: 0.9 })
-    this._noiseBurst(this.master, { dur: 0.32, freq: 700, freqEnd: 110, q: 0.5, gain: 0.5 })
-    this._thump(this.master, { freq: 90, freqEnd: 30, dur: 0.3, gain: 0.5, delay: 0.02 })
-  }
-
-  hurt() {
-    this.ensure()
-    if (!this.ctx) return
-    if (this.user.hurt) { this._playBuffer(this.user.hurt, this.bus); return }
-    this._osc(this.master, { type: 'triangle', freq: 210, freqEnd: 80, dur: 0.12, gain: 0.6 })
-    this._noiseBurst(this.master, { dur: 0.05, freq: 2500, q: 0.7, gain: 0.25 })
-  }
-
   // 子弹掠过（对枪失败 Bot 朝你开火）：超音速爆裂"啪" + 下滑呼啸尾，
-  // 音量压在 hurt 之下——它只补方向感与威胁感，不盖过失败提示音
+  // 补方向感与"这波慢了"的威胁感——纯架枪训练无受伤设定，不盖过失败提示
   whiz() {
     this.ensure()
     if (!this.ctx) return

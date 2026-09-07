@@ -14,15 +14,14 @@ describe('damageFor 距离衰减', () => {
     }
   })
 
-  it('Phantom 分段衰减命中正确档位', () => {
-    expect(damageFor(P, 'head', 10)).toBe(P.falloff[0].damage.head)   // ≤15m
-    expect(damageFor(P, 'body', 20)).toBe(P.falloff[1].damage.body)   // ≤30m
-    expect(damageFor(P, 'leg', 50)).toBe(P.falloff[2].damage.leg)     // ∞
+  it('Phantom 分段衰减命中正确档位（v9.10：20m 起 ×0.897）', () => {
+    expect(damageFor(P, 'head', 10)).toBe(P.falloff[0].damage.head)   // ≤20m 原伤
+    expect(damageFor(P, 'leg', 50)).toBe(P.falloff[1].damage.leg)     // ∞ 衰减档
   })
 
-  it('档位边界（恰好 15m / 30m）取近档', () => {
-    expect(damageFor(P, 'head', 15)).toBe(P.falloff[0].damage.head)
-    expect(damageFor(P, 'head', 30)).toBe(P.falloff[1].damage.head)
+  it('档位边界（恰好 20m）取近档', () => {
+    expect(damageFor(P, 'head', 20)).toBe(P.falloff[0].damage.head)
+    expect(damageFor(P, 'head', 20.1)).toBe(P.falloff[1].damage.head)
   })
 
   it('未知部位回退 body 伤害', () => {
@@ -46,12 +45,25 @@ describe('spreadAt 移动散布', () => {
     expect(jump).toBe(V.spread.jump)
   })
 
-  it('连射追加散布且封顶 0.8°', () => {
+  it('连射追加散布且封顶在 max（持续射击最大散布，公开表值）', () => {
     const s0 = spreadAt(V, { speedRatio: 0, crouched: false, grounded: true, sprayIndex: 0 })
     const s10 = spreadAt(V, { speedRatio: 0, crouched: false, grounded: true, sprayIndex: 10 })
     const s999 = spreadAt(V, { speedRatio: 0, crouched: false, grounded: true, sprayIndex: 999 })
     expect(s10).toBeCloseTo(s0 + 0.5)
-    expect(s999).toBeCloseTo(s0 + 0.8)
+    expect(s999).toBeCloseTo(V.spread.max)
+  })
+
+  it('走路（50% 速）锚点精确命中 walk 值（分段曲线中间锚）', () => {
+    expect(spreadAt(V, { speedRatio: 0.5, crouched: false, grounded: true, sprayIndex: 0 })).toBeCloseTo(V.spread.walk)
+  })
+
+  it('蹲走叠加 crouchMove 惩罚：比蹲立大、比站走小', () => {
+    const crouchStill = spreadAt(V, { speedRatio: 0, crouched: true, grounded: true, sprayIndex: 0 })
+    const crouchMove = spreadAt(V, { speedRatio: 0.34, crouched: true, grounded: true, sprayIndex: 0 }) // 蹲姿满速
+    const walk = spreadAt(V, { speedRatio: 0.5, crouched: false, grounded: true, sprayIndex: 0 })
+    expect(crouchMove).toBeCloseTo(V.spread.stand * V.spread.crouchMult + V.spread.crouchMove)
+    expect(crouchMove).toBeGreaterThan(crouchStill)
+    expect(crouchMove).toBeLessThan(walk)
   })
 
   it('速度比率被钳制在 [0,1]，越界不外推', () => {

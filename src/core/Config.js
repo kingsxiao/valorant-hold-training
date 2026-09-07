@@ -35,15 +35,21 @@ export const CONFIG = {
     pitchLimit: 89,
   },
 
-  // ---- 武器（射速/伤害为公开资料值；散布与后坐力为调校近似）----
+  // ---- 武器（射速/伤害/散布为公开资料值，见 Fandom 维基数据挖掘表 2026-09 版；
+  // 后坐力结构对齐公开补丁机制，幅度为调校近似）----
   // 弹药无限（架枪训练不中断节奏；弹道表 30 发后钳在末段，长时间连喷不影响判定）
+  // spread 字段口径 = 维基 Spread values 表：stand/walk/run/jump 为总散布（度），
+  // max 为持续连射散布上限，crouchMult 蹲姿乘数，crouchMove 蹲走加算惩罚
+  // recoil.punchRecover = 视角上踢恢复速率（1/s，越重越慢）；protected = 水平
+  // 保护弹数（前 N 发无横偏，v10.0 公开机制）；swingTime = 水平换向节拍（0.6s）；
+  // runMult = 跑动垂直后坐乘数（v6.11: 1.5→1.8）
   weapons: {
     vandal: {
       name: 'Vandal', slot: 'primary', auto: true,
       fireRate: 9.75, magSize: Infinity, equipTime: 0.75,
       damage: { head: 160, body: 40, leg: 34 }, falloff: null,   // Vandal 全距离不变
-      spread: { stand: 0.2, run: 4.5, walk: 1.1, crouchMult: 0.85, jump: 7 },
-      recoil: { recoverTime: 0.4, viewPunch: 0.34 },             // 弹道后坐恢复
+      spread: { stand: 0.25, walk: 3.25, run: 6.25, jump: 10.25, crouchMult: 0.85, crouchMove: 0.8, max: 1.0 },
+      recoil: { recoverTime: 0.4, viewPunch: 0.34, punchRecover: 10, protected: 6, swingTime: 0.6, runMult: 1.8 },
       moveSpeedMult: 1.0,
       vmKick: 0.032,                                             // 开火冲量（持枪模型后坐手感）
       sound: 'rifle',
@@ -52,13 +58,12 @@ export const CONFIG = {
       name: 'Phantom', slot: 'primary', auto: true,
       fireRate: 11, magSize: Infinity, equipTime: 0.75,
       damage: { head: 156, body: 39, leg: 33 },
-      falloff: [                                                 // 距离衰减（Phantom 特性）
-        { maxDist: 15, damage: { head: 156, body: 39, leg: 33 } },
-        { maxDist: 30, damage: { head: 140, body: 35, leg: 30 } },
-        { maxDist: Infinity, damage: { head: 124, body: 31, leg: 26 } },
+      falloff: [                                                 // 距离衰减（v9.10：20m 起 ×0.897）
+        { maxDist: 20, damage: { head: 156, body: 39, leg: 33 } },
+        { maxDist: Infinity, damage: { head: 140, body: 35, leg: 30 } },
       ],
-      spread: { stand: 0.15, run: 4.0, walk: 0.9, crouchMult: 0.85, jump: 6.5 },
-      recoil: { recoverTime: 0.38, viewPunch: 0.3 },
+      spread: { stand: 0.2, walk: 3.2, run: 6.2, jump: 10.2, crouchMult: 0.85, crouchMove: 0.8, max: 0.9 },
+      recoil: { recoverTime: 0.38, viewPunch: 0.3, punchRecover: 11, protected: 8, swingTime: 0.6, runMult: 1.8 },
       moveSpeedMult: 1.0,
       vmKick: 0.028,                                             // 消音枪开火冲量更轻（音画一致）
       suppressed: true,                                          // 消音视觉：枪口焰/曳光/枪口烟同步收敛
@@ -68,8 +73,8 @@ export const CONFIG = {
       name: 'Sheriff', slot: 'primary', auto: false,
       fireRate: 4, magSize: Infinity, equipTime: 0.75,
       damage: { head: 159, body: 55, leg: 46 }, falloff: null,
-      spread: { stand: 0.25, run: 5.5, walk: 1.6, crouchMult: 0.85, jump: 8 },
-      recoil: { recoverTime: 0.6, viewPunch: 0.9 },
+      spread: { stand: 0.25, walk: 1.45, run: 3.25, jump: 7.25, crouchMult: 0.76, crouchMove: 0.5, max: 2.75 },
+      recoil: { recoverTime: 0.6, viewPunch: 0.9, punchRecover: 5.5, protected: 6, swingTime: 0.6 },
       moveSpeedMult: 1.0,
       vmKick: 0.05,                                              // 左轮重锤感
       sound: 'handcannon',
@@ -79,8 +84,8 @@ export const CONFIG = {
       burst: true,                                               // 右键三连发
       fireRate: 6.75, magSize: Infinity, equipTime: 0.75,
       damage: { head: 78, body: 26, leg: 22 }, falloff: null,
-      spread: { stand: 0.4, run: 4.0, walk: 1.4, crouchMult: 0.85, jump: 6 },
-      recoil: { recoverTime: 0.35, viewPunch: 0.45 },
+      spread: { stand: 0.4, walk: 1.5, run: 2.7, jump: 7.4, crouchMult: 0.75, crouchMove: 0.5, max: 1.8 },
+      recoil: { recoverTime: 0.35, viewPunch: 0.45, punchRecover: 8, protected: 6, swingTime: 0.6 },
       moveSpeedMult: 1.0,
       vmKick: 0.03,
       sound: 'pistol',
@@ -89,8 +94,8 @@ export const CONFIG = {
       name: 'Ghost', slot: 'secondary', auto: false,
       fireRate: 6.75, magSize: Infinity, equipTime: 0.75,
       damage: { head: 105, body: 30, leg: 26 }, falloff: null,
-      spread: { stand: 0.12, run: 3.5, walk: 1.0, crouchMult: 0.85, jump: 5 },
-      recoil: { recoverTime: 0.3, viewPunch: 0.35 },
+      spread: { stand: 0.3, walk: 1.4, run: 2.6, jump: 7.3, crouchMult: 0.77, crouchMove: 0.5, max: 1.65 },
+      recoil: { recoverTime: 0.3, viewPunch: 0.35, punchRecover: 8.5, protected: 6, swingTime: 0.6 },
       moveSpeedMult: 1.0,
       vmKick: 0.024,                                             // 消音手枪更轻
       suppressed: true,                                          // 消音视觉：枪口焰/曳光/枪口烟同步收敛
@@ -143,23 +148,23 @@ export const CONFIG = {
 }
 
 // ---- 后坐力弹道表（程序化生成的近似压枪轨迹）----
-// 每项为该发子弹相对准心的累计偏移（度）。原创近似，非游戏数据提取。
-// 形状对齐 Valorant：前 9 发垂直陡升 → 高位平台（垂直停住，压枪量不再增长）
-// → 中后段水平摆动。平台期不允许垂直回落——压枪过冲后还要反向上推的手感
-// 是错的，压到高点只管左右修。
-export function makeSprayPattern(n = 25) {
+// 每项为该发子弹相对准心的累计偏移（度）。幅度为原创近似（Riot 不公布角度值），
+// 结构对齐公开补丁机制：
+//  - prot：水平保护弹数——前 N 发纯垂直无横偏（v10.0 起公开机制：Vandal 6 / Phantom 8）
+//  - swing：一次水平换向持续的弹数（补丁"Yaw switch time 0.6s"× 射速，Vandal ≈5.85）
+// 垂直形状：前 9 发陡升 → 高位平台（垂直停住，压枪量不再增长）。平台期不允许
+// 垂直回落——压枪过冲后还要反向上推的手感是错的，压到高点只管左右修。
+export function makeSprayPattern(n = 25, { prot = 6, swing = 5.9 } = {}) {
   const pat = []
-  let p = 0, y = 0, phase = 0
+  let p = 0
   for (let i = 0; i < n; i++) {
     if (i < 3) p += 0.18
     else if (i < 9) p += 0.62 - (i - 3) * 0.05
     else if (i < 13) p += 0.08
     else p += 0.015 // 平台期微升：压枪量基本封顶，只留给水平摆动
-    if (i >= 8) {
-      phase += 1
-      y = Math.sin(phase * 0.9) * (0.5 + phase * 0.07)
-    }
-    pat.push({ p, y: i < 8 ? y : y * 0.9 })
+    const t = (i - prot) / swing // 换向节拍相位：每 swing 发完成半次摆动
+    const y = i < prot ? 0 : Math.sin(t * Math.PI) * (0.4 + Math.min(1.7, Math.max(0, t) * 0.16))
+    pat.push({ p, y })
   }
   return pat
 }

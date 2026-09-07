@@ -13,15 +13,26 @@ export function damageFor(w, zone, dist) {
   return base
 }
 
-// 当前散布（度）：静止精度高，移动/跳跃剧增，蹲下小幅加成，连射小幅追加。
+// 当前散布（度）。数值锚点对齐 Fandom 维基 Spread values 表（公开资料值）：
+//  - 站立首发 stand；走路（50% 速）walk；全速 run —— 分段幂 1.4 曲线精确过这三点
+//    （低速段惩罚平缓、高速段快速逼近跑动散布，贴近游戏体感）
+//  - 蹲姿限速 34%：独立支线 = stand×crouchMult + 蹲走惩罚 crouchMove（v9.10 起公开值）
+//  - 空中直接取 jump（跳跃大幅扩散）
+//  - 连射逐发 +0.05°，封顶在 max - stand（= 持续射击最大散布）
 // ctx = { speedRatio: 水平速度/该武器全速 (0..1), crouched, grounded, sprayIndex }
 export function spreadAt(w, ctx) {
   if (w.slot === 'melee') return 0
   const s = w.spread
-  // 幂 1.4：低速段惩罚平缓、高速段快速逼近跑动散布（贴近游戏体感）
-  let sp = s.stand + (s.run - s.stand) * Math.pow(Math.min(1, Math.max(0, ctx.speedRatio)), 1.4)
-  if (ctx.crouched) sp *= s.crouchMult
+  const r = Math.min(1, Math.max(0, ctx.speedRatio))
+  let sp
+  if (ctx.crouched) {
+    sp = s.stand * s.crouchMult + s.crouchMove * Math.pow(Math.min(1, r / 0.34), 1.4)
+  } else if (r <= 0.5) {
+    sp = s.stand + (s.walk - s.stand) * Math.pow(r / 0.5, 1.4)
+  } else {
+    sp = s.walk + (s.run - s.walk) * Math.pow((r - 0.5) / 0.5, 1.4)
+  }
   if (!ctx.grounded) sp = s.jump
-  sp += Math.min(ctx.sprayIndex * 0.05, 0.8) // 主要偏差由后坐力弹道表决定
+  sp += Math.min(ctx.sprayIndex * 0.05, Math.max(0, (s.max ?? s.stand + 0.8) - s.stand))
   return sp
 }

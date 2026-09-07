@@ -306,8 +306,14 @@ export class WeaponSystem {
     const w = this.weapon
     this.onShotFired?.()
 
-    // 弹道表（累计偏移）+ 散布锥
-    const pattern = this.pattern ??= makeSprayPattern(30)
+    // 弹道表（累计偏移）+ 散布锥。表按武器生成：水平保护弹数 / 换向节拍来自
+    // recoil.protected & swingTime×射速（公开补丁机制：Vandal 6 发 / Phantom 8 发、
+    // 水平换向 0.6s），切枪/武器不同各自缓存，sprayIndex 切枪时已清零
+    const patterns = this.patterns ?? (this.patterns = {})
+    const pattern = patterns[this.currentId] ?? (patterns[this.currentId] = makeSprayPattern(30, {
+      prot: w.recoil.protected ?? 6,
+      swing: (w.recoil.swingTime ?? 0.6) * w.fireRate,
+    }))
     const pi = Math.min(this.sprayIndex, pattern.length - 1)
     const pat = pattern[pi]
     this.sprayIndex++
@@ -315,10 +321,12 @@ export class WeaponSystem {
     const spreadDeg = this.currentSpread()
     const p = this.player
     _dir.set(0, 0, -1).applyEuler(_euler.set(p.pitch, p.yaw, 0))
-    // 弹道偏移
+    // 弹道偏移（跑动垂直后坐 ×runMult，v6.11 公开改动：1.5→1.8，按移速比例介入）
+    const sr = Math.min(1, Math.max(0, p.moveSpeed / (CONFIG.movement.runSpeed * (w.moveSpeedMult ?? 1))))
+    const rmul = 1 + ((w.recoil.runMult ?? 1) - 1) * Math.pow(sr, 1.4)
     _right.set(1, 0, 0).applyEuler(_euler)
     _dir.applyAxisAngle(UP, THREE.MathUtils.degToRad(pat.y))
-    _dir.applyAxisAngle(_right, THREE.MathUtils.degToRad(pat.p))
+    _dir.applyAxisAngle(_right, THREE.MathUtils.degToRad(pat.p * rmul))
     // 随机散布（圆盘均匀 → 锥面）
     if (spreadDeg > 0) {
       const r = Math.sqrt(Math.random()) * spreadDeg
@@ -328,8 +336,8 @@ export class WeaponSystem {
       _dir.applyAxisAngle(UP, THREE.MathUtils.degToRad(r * Math.sin(az)))
     }
 
-    // 视觉上踢（不影响弹道，弹道由表驱动 —— 与游戏一致）
-    p.addPunch(THREE.MathUtils.degToRad(pat.p) * w.recoil.viewPunch * 0.25 + 0.002, THREE.MathUtils.degToRad(pat.y) * w.recoil.viewPunch * 0.12)
+    // 视觉上踢（不影响弹道，弹道由表驱动 —— 与游戏一致；跑动乘数同样作用于上踢）
+    p.addPunch(THREE.MathUtils.degToRad(pat.p * rmul) * w.recoil.viewPunch * 0.25 + 0.002, THREE.MathUtils.degToRad(pat.y) * w.recoil.viewPunch * 0.12)
 
     // 命中判定：世界 vs 机器人取最近（射线原点用当前逻辑帧的玩家眼睛，
     // 而非渲染帧相机位置——后者在固定步长内最多滞后一帧）

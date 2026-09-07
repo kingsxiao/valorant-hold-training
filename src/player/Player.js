@@ -142,8 +142,9 @@ export class Player {
       if (this.stepDist > 1.15) { this.stepDist = 0; this._footstep() }
     } else this.stepDist = 0.6
 
-    // 视角后坐恢复（指数回落）
-    const rec = 1 - Math.exp(-dt * 9)
+    // 视角后坐恢复（指数回落）。恢复速率分武器（recoil.punchRecover）：步枪快回
+    // 保持准星可读，Sheriff 重枪慢沉 —— 每把枪打完"落回准心"的节奏不一样
+    const rec = 1 - Math.exp(-dt * (weapon?.recoil?.punchRecover ?? 9))
     this.punchPitch -= this.punchPitch * rec
     this.punchYaw -= this.punchYaw * rec
   }

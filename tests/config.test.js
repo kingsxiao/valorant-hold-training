@@ -16,6 +16,15 @@ describe('武器数值表完整性（CONFIG.weapons）', () => {
         expect(w.equipTime, id).toBeGreaterThan(0)
         expect(w.spread.stand, id).toBeLessThan(w.spread.run)
         expect(w.recoil.recoverTime, id).toBeGreaterThan(0)
+        // 视角上踢恢复速率（分武器恢复曲线）
+        expect(w.recoil.punchRecover, id).toBeGreaterThan(0)
+        expect(w.recoil.punchRecover, id).toBeLessThanOrEqual(30)
+        // 散布锚点单调：静止 < 走路 < 全速 < 跳跃；连射上限高于首发
+        expect(w.spread.stand, id).toBeLessThan(w.spread.walk)
+        expect(w.spread.walk, id).toBeLessThan(w.spread.run)
+        expect(w.spread.run, id).toBeLessThan(w.spread.jump)
+        expect(w.spread.max, id).toBeGreaterThan(w.spread.stand)
+        expect(w.spread.crouchMove, id).toBeGreaterThanOrEqual(0)
       }
     }
   })
@@ -80,6 +89,42 @@ describe('makeSprayPattern 后坐力弹道表', () => {
     const pat = makeSprayPattern(30)
     const hasSway = pat.slice(8).some(({ y }) => Math.abs(y) > 0.2)
     expect(hasSway).toBe(true)
+  })
+
+  it('水平保护窗：前 prot 发 y 恒为 0，窗后按换向节拍摆动（公开补丁机制）', () => {
+    const pat = makeSprayPattern(30, { prot: 6, swing: 5.85 })
+    for (let i = 0; i < 6; i++) expect(pat[i].y).toBe(0)
+    expect(Math.abs(pat[7].y)).toBeGreaterThan(0) // 保护窗后第一发即开始有横偏
+    expect(pat.slice(6).some(({ y }) => Math.abs(y) > 0.3)).toBe(true)
+  })
+
+  it('保护弹数按武器配置（Phantom 8 发比 Vandal 6 发更晚进入水平段）', () => {
+    const v = makeSprayPattern(30, { prot: CONFIG.weapons.vandal.recoil.protected, swing: 0.6 * CONFIG.weapons.vandal.fireRate })
+    const p = makeSprayPattern(30, { prot: CONFIG.weapons.phantom.recoil.protected, swing: 0.6 * CONFIG.weapons.phantom.fireRate })
+    for (let i = 6; i < 8; i++) expect(p[i].y).toBe(0)
+    expect(Math.abs(v[7].y)).toBeGreaterThan(0)
+  })
+
+  it('水平段先右后左（文档记载：Phantom rightward lean→pull left；Vandal 补偿左下=弹道右上漂）', () => {
+    const pat = makeSprayPattern(30, { prot: 6, swing: 5.85 })
+    expect(pat[7].y).toBeLessThan(0) // 保护窗后第一发向右漂（本表 y 负 = 向右）
+    expect(pat.slice(6, 12).some(({ y }) => y < -0.1)).toBe(true) // 前半摆向右
+    expect(pat.slice(12).some(({ y }) => y > 0.1)).toBe(true)     // 后半拉回左
+  })
+
+  it('垂直分量全程不下坠：爬升后进高位平台（压枪量封顶，不回落）', () => {
+    // 曾有后段逐发 -0.1° 的下坠：压枪过冲后要反向上推，与目标游戏的
+    // "前段爬升→平台→水平摆动"形状相悖 —— 此用例锁死回归
+    const pat = makeSprayPattern(30)
+    for (let i = 1; i < pat.length; i++) expect(pat[i].p).toBeGreaterThanOrEqual(pat[i - 1].p)
+  })
+
+  it('消音武器带 suppressed 标记（开火视觉收敛用），非消音不带', () => {
+    expect(CONFIG.weapons.phantom.suppressed).toBe(true)
+    expect(CONFIG.weapons.ghost.suppressed).toBe(true)
+    for (const id of ['vandal', 'sheriff', 'classic', 'knife']) {
+      expect(CONFIG.weapons[id].suppressed, id).toBeUndefined()
+    }
   })
 
   it('累计偏移量级受控（不至于打穿天）', () => {

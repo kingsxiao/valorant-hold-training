@@ -6,6 +6,7 @@ import { AudioSys } from './core/Audio.js'
 import { World } from './world/World.js'
 import { MapBuilder } from './world/MapBuilder.js'
 import { FX } from './world/FX.js'
+import { FlashSystem } from './world/FlashSystem.js'
 import { Player } from './player/Player.js'
 import { WeaponSystem } from './weapons/WeaponSystem.js'
 import { BotManager, MODE_INFO } from './entities/BotManager.js'
@@ -36,6 +37,10 @@ fx.onShellBounce = (k) => audio.shellTink(k)
 fx.onHelmetBounce = (k) => audio.helmetClank(k)
 const player = new Player(world, audio)
 const bots = new BotManager({ scene: engine.scene, world, map, audio, player })
+// 闪光干扰：敌方从墙后投掷（KAY/O 手雷/斯凯鹰/火男弧线球），致盲判定走 LOS+朝向+距离
+const flashes = new FlashSystem({ scene: engine.scene, world, map, audio, fx, player, hudRoot })
+// 闪拉配合：起爆后敌方随即拉出（无论是否闪中——游戏里敌人跟着自己的闪推进）
+flashes.onPopped = () => bots.urgeNextPeek(0.55 + Math.random() * 0.45)
 const hud = new HUD(hudRoot)
 const crosshair = new Crosshair(hudRoot)
 const menu = new Menu({ overlay, onReady: startRound, onContinue: resumeRound })
@@ -98,8 +103,9 @@ weapons.onHitBot = (bot, zone, dmg, killed, point) => {
 weapons.onAmmoChange = () => hud.setAmmo(weapons.weapon)
 // 枪口焰精灵/点光由 FX.muzzle 按 viewmodel 实测枪口世界坐标点亮（不再挂相机固定偏移）
 
-// 对枪失败时 Bot 的开火视觉表现：枪口焰 + 曳光射向玩家 + 轻微视角冲击
-// （敌方枪声在 BotManager._loseDuel 内从 Bot 位置空间化播放）
+// 对枪失败时 Bot 的开火视觉表现：枪口焰 + 曳光射向玩家
+// （敌方枪声在 BotManager._loseDuel 内从 Bot 位置空间化播放；
+//   纯架枪训练无受伤设定——无红闪/方向弧/受击音/视角冲击，玩家不掉血不中断）
 bots.onBotFire = (bot) => {
   const dx = player.pos.x - bot.pos.x, dz = player.pos.z - bot.pos.z
   const d = Math.max(0.001, Math.hypot(dx, dz))
@@ -107,24 +113,14 @@ bots.onBotFire = (bot) => {
   fx.muzzle(from)
   fx.tracer(new THREE.Vector3(from.x, from.y, from.z), engine.camera.position)
   audio.whiz()
-  player.addPunch(0.02, (Math.random() - 0.5) * 0.01)
 }
 
 bots.onEvent = (type, data) => {
-  if (type === 'lost-duel') {
-    hud.hurtFlash()
-    hud.toastMsg(`对枪失败 —— 慢了（${data.bot.gapName ?? '?'} 缺口）`, 1400)
-    // 受击方向指示：弧形红圈指向来源 Bot
-    const b = data.bot
-    if (b) {
-      const dx = b.pos.x - player.pos.x, dz = b.pos.z - player.pos.z
-      const fx_ = -Math.sin(player.yaw), fz_ = -Math.cos(player.yaw) // 玩家前向
-      const rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw)    // 玩家右向
-      hud.showDamageDir(Math.atan2(dx * rx + dz * rz, dx * fx_ + dz * fz_))
-    }
-  } else if (type === 'round-end') {
+  // 对枪判负不弹提示（用户要求）：Bot 反击后跑向对面掩体，判负只进统计面板
+  if (type === 'round-end') {
     state.playing = false
     document.exitPointerLock?.()
+    flashes.endRound() // 清在场投掷物并立即解除白屏（结算面板可读）
     audio.roundEnd() // 结束音与开局音呼应
     menu.hide()
     // 个人最佳落盘：破纪录时结算面板绿色高亮；分钟数供评级（得分/分钟）
@@ -175,6 +171,7 @@ function resumeRound() {
   menu.hide()
   input.lock()
   state.playing = true
+  audio.resume() // 音频时钟与游戏时钟一起恢复（暂停期间已排定的渐强/嗡鸣不漂移）
   lockGuardUntil = performance.now() + 600
 }
 
@@ -182,23 +179,28 @@ input.onLockChange = (locked) => {
   if (locked) {
     menu.hide()
     state.playing = true
+    audio.resume() // 点击画面重锁（保护窗回弹）同样恢复音频时钟
     return
   }
   if (state.playing && performance.now() < lockGuardUntil) return // 锁定回弹，非用户暂停
   if (state.playing) {
     state.playing = false
+    // 挂起音频时钟：飞行循环/引信嗡鸣与游戏一起冻结，恢复后从同一拍继续
+    // （回合结束走 endRound 清场 + 结算音，不走这里）
+    audio.suspend()
     // 暂停面板顶部带一条"本局进行中"战绩（回合已结束/未开局时无数据）。
     // 无限时长回合 roundEndAt=0，判定只看 running 即可，否则无限局 ESC 后没有"继续训练"
     const midRound = bots.running
-    menu.show(midRound
-      ? {
-          score: state.score, kills: bots.stats.kills, duelsLost: bots.stats.duelsLost,
-          maxStreak: bots.stats.maxStreak,
-          aimError: computeStats(bots.stats).aimSamples
-            ? computeStats(bots.stats).aimErrorDeg
-            : null,
-        }
-      : null)
+    if (midRound) {
+      const c = computeStats(bots.stats)
+      menu.show({
+        score: state.score, kills: bots.stats.kills, duelsLost: bots.stats.duelsLost,
+        maxStreak: bots.stats.maxStreak,
+        aimError: c.aimSamples ? c.aimErrorDeg : null,
+      })
+    } else {
+      menu.show(null)
+    }
   }
 }
 
@@ -214,7 +216,14 @@ menu.applyAll = () => {
   bots.params.aimTimeMs = cfg.aimTimeMs
   bots.params.roundSeconds = cfg.roundSeconds
   bots.params.rampUp = !!cfg.rampUp
-  bots.params.doubleGap = !!cfg.doubleGap
+  // 缺口左右切换：重建静态地图（PBR 纹理单例缓存，重排几何开销极小）。
+  // 场上 Bot 的横移线是旧缺口的，就地回收重排，避免从已封死的墙段穿出
+  if (map.side !== cfg.gapSide) {
+    map.rebuild(cfg.gapSide)
+    bots.onMapRebuilt()
+    flashes.onMapRebuilt() // 在途投掷物轨迹按旧缺口解算，一并清掉重排
+  }
+  flashes.setMode(cfg.flash)
   engine.autoRes = cfg.autoRes !== false
   engine.setResolutionScale(cfg.resScale ?? 1)
   engine.setShadows(!!cfg.shadows)
@@ -232,7 +241,7 @@ function startRound(cfg) {
   audio.setVolume(cfg.volume)
   killTimes.length = 0
 
-  // 出生点：架枪位正后，面向两个缺口
+  // 出生点：缺口正前方架枪位（applyAll 已按 gapSide 重建地图，spawn 随之切换）
   player.respawn(map.spawn.x, map.spawn.z, map.spawn.yaw)
 
   weapons.primaryId = cfg.primary
@@ -247,6 +256,7 @@ function startRound(cfg) {
   goShowUntil = 0
 
   bots.resetRound()
+  flashes.resetRound(3) // 与 Bot 倒计时对齐：GO 后才出现敌方闪光
   fx.clearAll() // 清上一局残留的弹孔/弹壳等特效，新回合干净靶场
   hud.setAmmo(weapons.weapon)
   hud.clearKillfeed() // 新回合干净的信息流
@@ -280,6 +290,7 @@ engine.simStep = (dt) => {
   player.step(dt, input, weapons.weapon)
   weapons.step(dt, input)
   bots.step(dt, 1)
+  flashes.step(dt)
 }
 
 const _hudAccum = { stats: 0, fpsText: 0 }
@@ -289,8 +300,9 @@ let goShowUntil = 0
 
 engine.renderFrame = (alpha, dtMs) => {
   const dt = dtMs / 1000
-    player.updateCamera(engine.camera, alpha)
+  player.updateCamera(engine.camera, alpha)
     bots.renderSync(alpha) // Bot 网格插值与相机同 alpha（掉帧时不相对视野抖动）
+    flashes.renderSync(alpha, dt) // 投掷物网格/白屏/拖尾（同 alpha 插值）
     // 相机矩阵即时刷新：HUD 伤害数字在渲染前 project，用的是 matrixWorldInverse，
     // 不手动更新会滞后一帧（快速甩视角时数字明显拖影）
     engine.camera.updateMatrixWorld()
@@ -300,11 +312,9 @@ engine.renderFrame = (alpha, dtMs) => {
   fx.update(dt)
   hud.updateDamage(dt)
 
-  // 动态准星：当前散布（度）→ 屏幕像素，实时可视化误差
-  crosshair.setSpread(
-    state.playing && weapons.weapon.slot !== 'melee' ? weapons.currentSpread() : 0,
-    engine.camera.fov, innerHeight,
-  )
+  // 动态准星：移动/开火两路误差（度）→ 屏幕像素，内外线按各自开关+倍率扩张
+  const parts = state.playing && weapons.weapon.slot !== 'melee' ? weapons.currentSpreadParts() : { move: 0, fire: 0 }
+  crosshair.update(parts, engine.camera.fov, innerHeight)
 
   // 开局倒计时：3 · 2 · 1 · GO（Bot 在 GO 前不出人，回合计时从 GO 起算）
   if (state.playing && bots.running) {
@@ -332,9 +342,7 @@ engine.renderFrame = (alpha, dtMs) => {
   const remainS = bots.params.roundSeconds > 0 && bots.running && bots.roundEndAt > 0
     ? Math.max(0, bots.roundEndAt - bots.now())
     : null
-  const dualTag = bots.params.doubleGap ? ' · 双缺口压力' : ''
-  hud.setMode(MODE_INFO.label,
-    remainS != null ? `${remainS.toFixed(1)}s${dualTag}` : MODE_INFO.desc + dualTag) // 游戏时钟：暂停时倒计时冻结
+  hud.setMode(MODE_INFO.label, remainS != null ? `${remainS.toFixed(1)}s` : MODE_INFO.desc) // 游戏时钟：暂停时倒计时冻结
   hud.setTimerUrgent(remainS != null && remainS <= 10 && state.playing) // 最后 10s 红色告急
   _hudAccum.stats += dtMs
   if (_hudAccum.stats > 200) { _hudAccum.stats = 0; hud.setStats(bots.stats, engine) }
@@ -358,7 +366,7 @@ engine.onContextLost = () => {
 
 // 调试句柄（自动化测试 / 控制台调参用）—— 仅开发构建暴露
 if (import.meta.env.DEV) {
-  window.__game = { engine, input, audio, world, map, player, weapons, bots, hud, menu, result, fx, state, CONFIG }
+  window.__game = { engine, input, audio, world, map, player, weapons, bots, flashes, hud, menu, result, fx, state, CONFIG }
 }
 
 // 用户/开源资产（可选）：public/models/ 下的 agent.glb、viewmodel-vandal/phantom.glb

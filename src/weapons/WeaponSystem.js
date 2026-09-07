@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { CONFIG, makeSprayPattern } from '../core/Config.js'
-import { damageFor, spreadAt } from './ballistics.js'
+import { damageFor, spreadAt, spreadParts } from './ballistics.js'
 import { buildWeaponModels, buildCustomArms } from './ViewmodelFactory.js'
 import { poseGloveHands, poseCustomHands } from './HandsRig.js'
 
@@ -281,6 +281,16 @@ export class WeaponSystem {
     })
   }
 
+  // 散布分量（移动超额/开火增长）：准星动态误差的两路独立信号
+  currentSpreadParts() {
+    return spreadParts(this.weapon, {
+      speedRatio: this.player.moveSpeed / (CONFIG.movement.runSpeed * (this.weapon.moveSpeedMult ?? 1)),
+      crouched: this.player.crouchAmt > 0.5,
+      grounded: this.player.grounded,
+      sprayIndex: this.sprayIndex,
+    })
+  }
+
   // ---- 开火（弹药无限：无弹匣/换弹分支）----
   tryFire(triggerEdge, triggerHeld, altEdge) {
     const w = this.weapon
@@ -317,8 +327,14 @@ export class WeaponSystem {
     const w = this.weapon
     this.onShotFired?.()
 
-    // 弹道表（累计偏移）+ 散布锥
-    const pattern = this.pattern ??= makeSprayPattern(30)
+    // 弹道表（累计偏移）+ 散布锥。表按武器生成：水平保护弹数 / 换向节拍来自
+    // recoil.protected & swingTime×射速（公开补丁机制：Vandal 6 发 / Phantom 8 发、
+    // 水平换向 0.6s），切枪/武器不同各自缓存，sprayIndex 切枪时已清零
+    const patterns = this.patterns ?? (this.patterns = {})
+    const pattern = patterns[this.currentId] ?? (patterns[this.currentId] = makeSprayPattern(30, {
+      prot: w.recoil.protected ?? 6,
+      swing: (w.recoil.swingTime ?? 0.6) * w.fireRate,
+    }))
     const pi = Math.min(this.sprayIndex, pattern.length - 1)
     const pat = pattern[pi]
     this.sprayIndex++
@@ -326,10 +342,12 @@ export class WeaponSystem {
     const spreadDeg = this.currentSpread()
     const p = this.player
     _dir.set(0, 0, -1).applyEuler(_euler.set(p.pitch, p.yaw, 0))
-    // 弹道偏移
+    // 弹道偏移（跑动垂直后坐 ×runMult，v6.11 公开改动：1.5→1.8，按移速比例介入）
+    const sr = Math.min(1, Math.max(0, p.moveSpeed / (CONFIG.movement.runSpeed * (w.moveSpeedMult ?? 1))))
+    const rmul = 1 + ((w.recoil.runMult ?? 1) - 1) * Math.pow(sr, 1.4)
     _right.set(1, 0, 0).applyEuler(_euler)
     _dir.applyAxisAngle(UP, THREE.MathUtils.degToRad(pat.y))
-    _dir.applyAxisAngle(_right, THREE.MathUtils.degToRad(pat.p))
+    _dir.applyAxisAngle(_right, THREE.MathUtils.degToRad(pat.p * rmul))
     // 随机散布（圆盘均匀 → 锥面）
     if (spreadDeg > 0) {
       const r = Math.sqrt(Math.random()) * spreadDeg
@@ -339,8 +357,8 @@ export class WeaponSystem {
       _dir.applyAxisAngle(UP, THREE.MathUtils.degToRad(r * Math.sin(az)))
     }
 
-    // 视觉上踢（不影响弹道，弹道由表驱动 —— 与游戏一致）
-    p.addPunch(THREE.MathUtils.degToRad(pat.p) * w.recoil.viewPunch * 0.25 + 0.002, THREE.MathUtils.degToRad(pat.y) * w.recoil.viewPunch * 0.12)
+    // 视觉上踢（不影响弹道，弹道由表驱动 —— 与游戏一致；跑动乘数同样作用于上踢）
+    p.addPunch(THREE.MathUtils.degToRad(pat.p * rmul) * w.recoil.viewPunch * 0.25 + 0.002, THREE.MathUtils.degToRad(pat.y) * w.recoil.viewPunch * 0.12)
 
     // 命中判定：世界 vs 机器人取最近（射线原点用当前逻辑帧的玩家眼睛，
     // 而非渲染帧相机位置——后者在固定步长内最多滞后一帧）
@@ -351,7 +369,9 @@ export class WeaponSystem {
 
     // 枪口焰（含动态点光）+ 枪口烟（连射越久越浓）+ 抛壳 + 曳光。
     // userData 点位是枪组本地系 → 经枪自身世界矩阵变换（含持枪偏移/缩放/内偏旋转）；
-    // vmScene 世界系 == 相机本地系，再过主相机矩阵落进世界（FX 都在世界场景）
+    // vmScene 世界系 == 相机本地系，再过主相机矩阵落进世界（FX 都在世界场景）。
+    // 消音武器（suppressed）视觉同步收敛：焰更小更暗、曳光更淡更细、烟更轻 ——
+    // 枪声层与持枪冲量早已分枪更轻，这轮把"看得见的安静"补齐
     const vm = this.activeCustomVm() ?? this.viewmodels[this.currentId]
     // 相机位姿即时刷新：simStep 里 matrixWorld 还是上一渲染帧的（本帧鼠标在
     // preFrame 已改 yaw/pitch，但 updateMatrixWorld 在 renderFrame 才跑）。
@@ -361,16 +381,16 @@ export class WeaponSystem {
     this.camera.updateMatrixWorld()
     _muzzle.copy(this.muzzleOffset)
     _muzzle.applyMatrix4(vm.matrixWorld).applyMatrix4(this.camera.matrixWorld)
-    // 枪口风格随武器：消音枪小火苗+弱点光+暗曳光+淡烟（音画一致的"闷"），
+    // 枪口风格随武器：消音枪小火苗+弱光+暗曳光+淡烟（音画一致的"闷"），
     // 大口径（Sheriff）更大更亮的火球与更硬的照明
-    const sup = w.sound.endsWith('_suppressed')
+    const sup = w.suppressed ?? w.sound.endsWith('_suppressed')
     const muzzleStyle = sup
-      ? { scale: 0.45, lightPeak: 4, lightDur: 0.045 }
+      ? SUPPRESSOR_FX.muzzle
       : w.sound === 'handcannon'
         ? { scale: 1.3, lightPeak: 22, lightDur: 0.075, flashColor: 0xfff2dc }
         : {}
     this.fx.muzzle(_muzzle, muzzleStyle)
-    this.fx.muzzleSmoke(_muzzle, _dir, this.heat * (sup ? 0.45 : 1))
+    this.fx.muzzleSmoke(_muzzle, _dir, this.heat * (sup ? SUPPRESSOR_FX.smoke : 1))
     if (vm.userData.eject) {
       _eject.copy(vm.userData.eject)
       _eject.applyMatrix4(vm.matrixWorld).applyMatrix4(this.camera.matrixWorld)
@@ -381,7 +401,7 @@ export class WeaponSystem {
     if (botHit) end.multiplyScalar(botHit.t).add(eye)
     else if (wallHit) end.set(wallHit.x, wallHit.y, wallHit.z)
     else end.multiplyScalar(maxDist).add(eye)
-    this.fx.tracer(_muzzle, end, sup ? 0.5 : 0.85)
+    this.fx.tracer(_muzzle, end, sup ? SUPPRESSOR_FX.tracer : {})
 
     // 声音（heat=连射热量 → 音色随持续射击渐变）
     this.audio.shot(w.sound, null, { pos: eye, yaw: p.yaw }, this.heat)
@@ -461,6 +481,8 @@ export class WeaponSystem {
 
   updateViewmodel(dt, mouseDx, mouseDy) {
     const p = this.player
+    // 摆动/侧倾的移速基准分武器化（副武器 5.73 满速时 bob/roll 与步枪各自归一）
+    const baseSpeed = CONFIG.movement.runSpeed * (this.weapon.moveSpeedMult ?? 1)
     // ---- 弹簧组步进（后坐/随机微抖/落地颠簸/手部滞后）----
     this.sKick.step(dt); this.sYaw.step(dt); this.sRoll.step(dt)
     this.sDip.step(dt); this.sFlinch.step(dt)
@@ -474,7 +496,7 @@ export class WeaponSystem {
     this.swayX += (-mouseDx * 0.00012 - this.swayX) * Math.min(1, dt * 12)
     this.swayY += (-mouseDy * 0.00012 - this.swayY) * Math.min(1, dt * 12)
     // 移动起伏
-    const speedRatio = Math.min(1, p.moveSpeed / CONFIG.movement.runSpeed)
+    const speedRatio = Math.min(1, p.moveSpeed / baseSpeed)
     this.bobT += dt * (6 + speedRatio * 6)
     const bob = p.grounded ? Math.sin(this.bobT) * 0.006 * speedRatio : 0
     const bobX = p.grounded ? Math.cos(this.bobT * 0.5) * 0.004 * speedRatio : 0
@@ -511,9 +533,9 @@ export class WeaponSystem {
     }
     // 侧移手感对：枪身轻微反向倾 + 平移滞后拖尾（急停时摆回）
     const strafe = p.vel.x * Math.cos(p.yaw) - p.vel.z * Math.sin(p.yaw)
-    const rollT = -strafe / CONFIG.movement.runSpeed * 0.045
+    const rollT = -strafe / baseSpeed * 0.045
     this.strafeRoll += (rollT - this.strafeRoll) * Math.min(1, dt * 9)
-    this.strafeLag += (-strafe / CONFIG.movement.runSpeed * 0.014 - this.strafeLag) * Math.min(1, dt * 8)
+    this.strafeLag += (-strafe / baseSpeed * 0.014 - this.strafeLag) * Math.min(1, dt * 8)
     this.vmHolder.position.set(
       this.vmBase.x + this.swayX + bobX + breatheX + this.strafeLag,
       this.vmBase.y + this.swayY + bob - lower - crouchDrop + breatheY - this.sDip.x - this.airK * 0.016,
@@ -544,8 +566,8 @@ export class WeaponSystem {
     const trigRate = trigTarget > this.trig ? 26 : 10
     this.trig += (trigTarget - this.trig) * Math.min(1, dt * trigRate)
     this.grip = Math.max(0, this.grip - dt * 7)
-    // 待机微动强度：静止满幅、移动收敛（与呼吸摆动同一因子逻辑）
-    const idleFactor = 1 - Math.min(1, this.player.moveSpeed / CONFIG.movement.runSpeed)
+    // 待机微动强度：静止满幅、移动收敛（与呼吸摆动同一因子逻辑，移速基准分武器化）
+    const idleFactor = 1 - Math.min(1, this.player.moveSpeed / (CONFIG.movement.runSpeed * (this.weapon.moveSpeedMult ?? 1)))
     for (const side of ['right', 'left']) {
       const h = ha[side]
       if (!h) continue
@@ -621,3 +643,13 @@ const UP = new THREE.Vector3(0, 1, 0)
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ')
 const _rx = new THREE.Vector3()
 const _eye = new THREE.Vector3()
+
+// 消音武器的开火视觉（FX.muzzle/FX.tracer style 参数，本地与 origin/main 两套
+// 风格表的合流值）：焰缩 50%、基准亮度压至 0.55、点光峰值 5（步枪的 ~1/3）、
+// 曳光更淡更细更低饱和、烟量减半 —— 远处看你的枪线更隐蔽，近处自己的反馈
+// 也不喧宾夺主（消音的意义）；音、焰、烟、曳光四线一致地"闷"
+const SUPPRESSOR_FX = {
+  muzzle: { scale: 0.5, opacity: 0.55, lightPeak: 5, lightDur: 0.05, color: 0xffd2a0 },
+  tracer: { opacity: 0.45, sat: 0.45, width: 0.7 },
+  smoke: 0.5,
+}

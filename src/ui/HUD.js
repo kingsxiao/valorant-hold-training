@@ -16,12 +16,10 @@ export class HUD {
     this.center = el(`<div id="hud-center"></div>`)
     this.toast = el(`<div id="hud-toast"></div>`)
     this.fpsBox = el(`<div id="hud-fps" class="hud-block"><span>-- fps</span><canvas width="150" height="36"></canvas></div>`)
-    this.hurt = el(`<div id="hurt-vignette"></div>`)
-    this.dmgDir = el(`<div id="dmg-dir"><div class="arc"></div></div>`)
     this.hitmarker = el(`<div id="hitmarker"><div class="hm" style="transform:translate(6px,6px) rotate(45deg)"></div><div class="hm" style="transform:translate(-14px,6px) rotate(-45deg)"></div><div class="hm" style="transform:translate(6px,-7px) rotate(-45deg)"></div><div class="hm" style="transform:translate(-14px,-7px) rotate(45deg)"></div></div>`)
     this.killfeed = el(`<div id="killfeed"></div>`)
     this.killBanner = el(`<div id="kill-banner"></div>`)
-    for (const e of [this.ammo, this.mode, this.stats, this.score, this.scoreFloat, this.speed, this.center, this.toast, this.fpsBox, this.hurt, this.dmgDir, this.hitmarker, this.killfeed, this.killBanner]) root.appendChild(e)
+    for (const e of [this.ammo, this.mode, this.stats, this.score, this.scoreFloat, this.speed, this.center, this.toast, this.fpsBox, this.hitmarker, this.killfeed, this.killBanner]) root.appendChild(e)
 
     this.fpsCanvas = this.fpsBox.querySelector('canvas')
     // 高分屏清晰：曲线 canvas 逻辑分辨率 ×DPR（CSS 宽高固定 150×36，绘制以
@@ -118,14 +116,6 @@ export class HUD {
     this.mode.querySelector('.mode-sub').classList.toggle('urgent', on)
   }
 
-  // 受击方向指示：弧形红圈指向伤害来源（angleRad 为相对玩家视角的世界方位角）
-  showDamageDir(angleRad) {
-    this.dmgDir.style.transform = `rotate(${angleRad * 180 / Math.PI}deg)`
-    this.dmgDir.classList.remove('show')
-    void this.dmgDir.offsetWidth
-    this.dmgDir.classList.add('show')
-  }
-
   setCenter(html) {
     if (this._cache.center !== html) { this._cache.center = html; this.center.innerHTML = html }
   }
@@ -172,12 +162,6 @@ export class HUD {
     while (this.killfeed.children.length > 5) this.killfeed.lastChild.remove()
     clearTimeout(e._t)
     e._t = setTimeout(() => { e.classList.add('out'); setTimeout(() => e.remove(), 400) }, 3800)
-  }
-
-  hurtFlash() {
-    this.hurt.style.opacity = '1'
-    clearTimeout(this._hurtTimer)
-    this._hurtTimer = setTimeout(() => { this.hurt.style.opacity = '0' }, 220)
   }
 
   // 清空击杀信息流（新回合开始时）

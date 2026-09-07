@@ -321,25 +321,8 @@ export class AudioSys {
     this._metal(this.master, 2093 * pitch, 0.24, 0.18, delay + 0.055)
   }
 
-  death() { // 你被击杀
-    this.ensure()
-    if (!this.ctx) return
-    if (this.user.death) { this._playBuffer(this.user.death, this.bus); return }
-    this._osc(this.master, { type: 'triangle', freq: 130, freqEnd: 42, dur: 0.36, gain: 0.9 })
-    this._noiseBurst(this.master, { dur: 0.32, freq: 700, freqEnd: 110, q: 0.5, gain: 0.5 })
-    this._thump(this.master, { freq: 90, freqEnd: 30, dur: 0.3, gain: 0.5, delay: 0.02 })
-  }
-
-  hurt() {
-    this.ensure()
-    if (!this.ctx) return
-    if (this.user.hurt) { this._playBuffer(this.user.hurt, this.bus); return }
-    this._osc(this.master, { type: 'triangle', freq: 210, freqEnd: 80, dur: 0.12, gain: 0.6 })
-    this._noiseBurst(this.master, { dur: 0.05, freq: 2500, q: 0.7, gain: 0.25 })
-  }
-
   // 子弹掠过（对枪失败 Bot 朝你开火）：超音速爆裂"啪" + 下滑呼啸尾，
-  // 音量压在 hurt 之下——它只补方向感与威胁感，不盖过失败提示音
+  // 补方向感与"这波慢了"的威胁感——纯架枪训练无受伤设定，不盖过失败提示
   whiz() {
     this.ensure()
     if (!this.ctx) return
@@ -452,4 +435,262 @@ export class AudioSys {
     this._noiseBurst(this.master, { dur: 0.025, freq: 3600 * j, q: 2.2, gain: 0.28, delay: 0.09 })
     this._osc(this.master, { type: 'square', freq: 480 * j, dur: 0.02, gain: 0.1, delay: 0.1 })
   }
+
+  // ---- 闪光道具（敌方干扰；音色按各道具特征还原，全部合成）----
+  // 飞行中的移动声源（斯凯鹰振翅 / 火男火球灼烧）：与 _spatial 的一次性 3s
+  // 自动拆链不同，这里返回句柄由 FlashSystem 每帧更新位置、消亡时显式 stop
+  _movingVoice(listener) {
+    this.ensure()
+    if (!this.ctx) return null
+    const p = this.ctx.createPanner()
+    p.panningModel = 'HRTF'
+    p.distanceModel = 'inverse'
+    p.refDistance = 4
+    p.rolloffFactor = 1.0
+    const lp = this.ctx.createBiquadFilter()
+    lp.type = 'lowpass'; lp.frequency.value = 15000; lp.Q.value = 0.3
+    const g = this.ctx.createGain()
+    p.connect(lp).connect(g).connect(this.bus)
+    const rev = this.ctx.createGain(); rev.gain.value = 0.3
+    g.connect(rev).connect(this.reverb)
+    return {
+      input: g,
+      setPos(x, y, z) {
+        if (!listener?.pos) return
+        const { x: lx, z: lz } = worldToListener(x - listener.pos.x, z - listener.pos.z, listener.yaw ?? 0)
+        if (p.positionX) { p.positionX.value = lx; p.positionY.value = y; p.positionZ.value = lz }
+        else p.setPosition(lx, y, lz)
+      },
+      stop() { try { rev.disconnect(); g.disconnect(); lp.disconnect(); p.disconnect() } catch { /* 已断 */ } },
+    }
+  }
+
+  // 出手声（投掷/放鹰/点火），空间化在投掷起点（墙后敌人位置）
+  flashCast(kind, pos, listener) {
+    this.ensure()
+    if (!this.ctx) return
+    const out = this._spatial(pos, listener)
+    if (kind === 'kayo') { // 抛掷破空 + 机关展开轻响（飞行途中无声——v3.06 已移除飞行音）
+      this._noiseBurst(out, { dur: 0.16, freq: 700, freqEnd: 1600, q: 1, gain: 0.3 })
+      this._osc(out, { type: 'square', freq: 620, freqEnd: 380, dur: 0.045, gain: 0.06, delay: 0.02 })
+    } else if (kind === 'skye') { // 鹰离手：气流上升 + 两下振翅 + 鹰啸（标志性叫声）
+      this._noiseBurst(out, { dur: 0.28, freq: 900, freqEnd: 2100, q: 1.4, gain: 0.32 })
+      this._noiseBurst(out, { dur: 0.05, freq: 1100, q: 2, gain: 0.16, delay: 0.16 })
+      this._noiseBurst(out, { dur: 0.05, freq: 1000, q: 2, gain: 0.14, delay: 0.3 })
+      this._hawkCry(out, 0.05, 1850, 0.26, 0.11)
+      this._hawkCry(out, 0.36, 1600, 0.18, 0.07)
+    } else { // 火男点火出手：低频起燃 + 高频嘶响
+      this._noiseBurst(out, { dur: 0.3, freq: 350, freqEnd: 1300, q: 1, gain: 0.3 })
+      this._noiseBurst(out, { dur: 0.22, freq: 2600, q: 1.6, gain: 0.12, delay: 0.05 })
+    }
+  }
+
+  // 鹰啸：下滑锯波 + 27Hz 颤音 + 带通收窄（猛禽嘶鸣的合成近似）
+  _hawkCry(dest, delay, baseFreq, dur, gain) {
+    const t = this.ctx.currentTime + delay
+    const o = this.ctx.createOscillator()
+    o.type = 'sawtooth'
+    o.frequency.setValueAtTime(baseFreq, t)
+    o.frequency.exponentialRampToValueAtTime(baseFreq * 0.62, t + dur)
+    const vib = this.ctx.createOscillator()
+    vib.frequency.value = 27
+    const vibG = this.ctx.createGain(); vibG.gain.value = baseFreq * 0.022
+    vib.connect(vibG).connect(o.frequency)
+    const f = this.ctx.createBiquadFilter()
+    f.type = 'bandpass'; f.frequency.value = baseFreq; f.Q.value = 1.6
+    const g = this.ctx.createGain()
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.03)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+    o.connect(f).connect(g).connect(dest)
+    o.start(t); o.stop(t + dur + 0.02)
+    vib.start(t); vib.stop(t + dur + 0.02)
+  }
+
+  // KAY/O 手雷落地/撞墙弹跳：硬物"咔嗒"
+  flashBounce(pos, listener) {
+    this.ensure()
+    if (!this.ctx) return
+    const out = this._spatial(pos, listener)
+    this._noiseBurst(out, { dur: 0.03, freq: 2100, q: 3, gain: 0.4 })
+    this._thump(out, { freq: 160, freqEnd: 80, dur: 0.05, gain: 0.22 })
+  }
+
+  // KAY/O 弹跳后的引信嗡鸣（v10.06 起的 unique audio）：双失谐锯 + 方波八度的
+  // 电子充能声，音高/亮度随引信倒数爬升——dur 传"剩余引信"，结束沿恰好压在起爆上
+  flashHum(dur, pos, listener) {
+    this.ensure()
+    if (!this.ctx || dur <= 0.05) return
+    const out = this._spatial(pos, listener)
+    const t = this.ctx.currentTime
+    const g = this.ctx.createGain()
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.exponentialRampToValueAtTime(0.13, t + Math.min(0.12, dur * 0.4))
+    g.gain.setValueAtTime(0.13, t + dur * 0.88)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+    g.connect(out)
+    const f = this.ctx.createBiquadFilter()
+    f.type = 'lowpass'
+    f.frequency.setValueAtTime(700, t)
+    f.frequency.exponentialRampToValueAtTime(3600, t + dur)
+    f.Q.value = 0.8
+    f.connect(g)
+    for (const [type, mul, gain] of [['sawtooth', 1, 0.5], ['sawtooth', 1.008, 0.5], ['square', 2, 0.22]]) {
+      const o = this.ctx.createOscillator()
+      o.type = type
+      o.frequency.setValueAtTime(170 * mul, t)
+      o.frequency.exponentialRampToValueAtTime(840 * mul, t + dur)
+      const og = this.ctx.createGain(); og.gain.value = gain
+      o.connect(og).connect(f)
+      o.start(t); o.stop(t + dur + 0.02)
+    }
+    // 机器质感的快速颤动（13Hz 幅度脉动）
+    const lfo = this.ctx.createOscillator(); lfo.frequency.value = 13
+    const lfoG = this.ctx.createGain(); lfoG.gain.value = 0.035
+    lfo.connect(lfoG).connect(g.gain)
+    lfo.start(t); lfo.stop(t + dur + 0.02)
+  }
+
+  // 斯凯鹰充能完成提示（维基：到最大致盲时长时橙光 + 专属音频提示）
+  flashCharge(pos, listener) {
+    this.ensure()
+    if (!this.ctx) return
+    const out = this._spatial(pos, listener)
+    this._osc(out, { type: 'sine', freq: 1750, freqEnd: 2350, dur: 0.07, gain: 0.15 })
+    this._osc(out, { type: 'sine', freq: 2350, freqEnd: 2900, dur: 0.07, gain: 0.13, delay: 0.09 })
+  }
+
+  // 激活起爆预备（斯凯鹰 0.3s 起爆预备）：上扬闪亮
+  flashArm(pos, listener) {
+    this.ensure()
+    if (!this.ctx) return
+    const out = this._spatial(pos, listener)
+    this._osc(out, { type: 'sine', freq: 900, freqEnd: 2600, dur: 0.27, gain: 0.17 })
+    this._noiseBurst(out, { dur: 0.28, freq: 1600, freqEnd: 4200, q: 1.6, gain: 0.11 })
+  }
+
+  // 起爆"爆闪"：炸裂脆响 + 腔体爆音 + 深低频 + 金属余音，按道具加特征层。
+  // intensity：闪中玩家时按致盲比例加响（贴脸爆闪比远处墙后爆更炸）
+  flashPop(kind, pos, listener, intensity = 1) {
+    this.ensure()
+    if (!this.ctx) return
+    const out = this._spatial(pos, listener)
+    const v = intensity
+    this._noiseBurst(out, { dur: 0.011, freq: 6200, q: 0.5, gain: 1.3 * v, type: 'highpass' })
+    this._noiseBurst(out, { dur: 0.26, freq: 850, freqEnd: 140, q: 0.7, gain: 1.12 * v })
+    this._thump(out, { freq: 130, freqEnd: 36, dur: 0.16, gain: 0.85 * v })
+    this._metal(out, 3600, 0.34, 0.24 * v)
+    if (kind === 'phoenix') { // 火光炸开：炽烈灼烧嘶响 + 高频碎焰，收尾最亮
+      this._noiseBurst(out, { dur: 0.42, freq: 2400, freqEnd: 420, q: 1.8, gain: 0.4 * v, delay: 0.015 })
+      this._noiseBurst(out, { dur: 0.12, freq: 7500, q: 0.8, gain: 0.3 * v, type: 'highpass' })
+    } else if (kind === 'skye') { // 自然光爆：高频闪亮 + 高音铃尾 + 轻羽散落簌簌
+      this._osc(out, { type: 'sine', freq: 5400, freqEnd: 3200, dur: 0.16, gain: 0.15 * v, delay: 0.01 })
+      this._metal(out, 4800, 0.18, 0.1 * v, 0.03)
+      this._noiseBurst(out, { dur: 0.07, freq: 2400, q: 1.2, gain: 0.08 * v, delay: 0.09 })
+      this._noiseBurst(out, { dur: 0.07, freq: 2100, q: 1.2, gain: 0.06 * v, delay: 0.19 })
+    } else { // KAY/O：电子脆响叠加（机器道具的"咔-嗡"收束）
+      this._osc(out, { type: 'square', freq: 1400, freqEnd: 300, dur: 0.05, gain: 0.22 * v, delay: 0.004 })
+      this._noiseBurst(out, { dur: 0.03, freq: 3100, q: 4, gain: 0.3 * v, delay: 0.005 })
+    }
+  }
+
+  // 飞行物撞墙熄灭（弧线球/鹰被地形阻挡）：短促泄气"嘶"
+  flashFizzle(pos, listener) {
+    this.ensure()
+    if (!this.ctx) return
+    const out = this._spatial(pos, listener)
+    this._noiseBurst(out, { dur: 0.22, freq: 1900, freqEnd: 420, q: 1.6, gain: 0.16 })
+  }
+
+  // 斯凯鹰飞行循环：底层气流 + 8.5Hz 振翅（下击带通/上击高频，相位错半拍）。
+  // 振翅频率与翅膀动画同源（8.5Hz、同锚定出手时刻）——看到的翅膀与听到的
+  // 扑翼是同一拍；0.35Hz 轻微拍频漂移避免机械感
+  hawkFlight(listener, flapHz = 8.5) {
+    const v = this._movingVoice(listener)
+    if (!v) return null
+    const t = this.ctx.currentTime
+    // 气流底噪
+    const air = this.ctx.createBufferSource()
+    air.buffer = this._noise; air.loop = true
+    const airF = this.ctx.createBiquadFilter(); airF.type = 'bandpass'; airF.frequency.value = 600; airF.Q.value = 0.6
+    const airG = this.ctx.createGain(); airG.gain.value = 0.15
+    air.connect(airF).connect(airG).connect(v.input)
+    // 振翅下击（低频拍打）
+    const dn = this.ctx.createBufferSource()
+    dn.buffer = this._noise; dn.loop = true
+    const dnF = this.ctx.createBiquadFilter(); dnF.type = 'bandpass'; dnF.frequency.value = 850; dnF.Q.value = 1.5
+    const dnG = this.ctx.createGain(); dnG.gain.value = 0.42
+    dn.connect(dnF).connect(dnG).connect(v.input)
+    // 振翅上击（翅尖切风，滞后半拍）
+    const up = this.ctx.createBufferSource()
+    up.buffer = this._noise; up.loop = true; up.playbackRate.value = 1.2
+    const upF = this.ctx.createBiquadFilter(); upF.type = 'highpass'; upF.frequency.value = 2600
+    const upG = this.ctx.createGain(); upG.gain.value = 0.1
+    up.connect(upF).connect(upG).connect(v.input)
+    const lfo = this.ctx.createOscillator(); lfo.frequency.value = flapHz
+    const lfoG = this.ctx.createGain(); lfoG.gain.value = 0.4
+    lfo.connect(lfoG).connect(dnG.gain)
+    const half = this.ctx.createDelay(0.13); half.delayTime.value = 0.5 / flapHz
+    const upLfoG = this.ctx.createGain(); upLfoG.gain.value = 0.09
+    lfo.connect(half).connect(upLfoG).connect(upG.gain)
+    // 拍频轻微漂移（活物感）
+    const drift = this.ctx.createOscillator(); drift.frequency.value = 0.35
+    const driftG = this.ctx.createGain(); driftG.gain.value = 0.5
+    drift.connect(driftG).connect(lfo.frequency)
+    air.start(t); dn.start(t); up.start(t); lfo.start(t); drift.start(t)
+    return {
+      setPos: v.setPos,
+      flapHz,
+      stop: () => {
+        try { air.stop(); dn.stop(); up.stop(); lfo.stop(); drift.stop(); v.stop() } catch { /* 已停 */ }
+      },
+    }
+  }
+
+  // 火男弧线球飞行循环：火焰灼烧底噪随 0.6s 引信指数渐强 + 上升"哨音"音调
+  // （v1.06：音频明确提示何时该背身）——渐强终点=起爆时刻，音画同拍
+  orbFlight(listener, dur = 0.6) {
+    const v = this._movingVoice(listener)
+    if (!v) return null
+    const t = this.ctx.currentTime
+    const src = this.ctx.createBufferSource()
+    src.buffer = this._noise; src.loop = true; src.playbackRate.value = 0.9
+    const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.8
+    bp.frequency.setValueAtTime(700, t)
+    bp.frequency.exponentialRampToValueAtTime(1500, t + dur) // 越烧越亮
+    const amp = this.ctx.createGain()
+    amp.gain.setValueAtTime(0.1, t)
+    amp.gain.exponentialRampToValueAtTime(0.32, t + dur)
+    const src2 = this.ctx.createBufferSource()
+    src2.buffer = this._noise; src2.loop = true; src2.playbackRate.value = 1.2
+    const hp = this.ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 3200
+    const amp2 = this.ctx.createGain()
+    amp2.gain.setValueAtTime(0.025, t)
+    amp2.gain.exponentialRampToValueAtTime(0.1, t + dur)
+    // 上升哨音：临爆前的音调警告
+    const tone = this.ctx.createOscillator()
+    tone.type = 'sine'
+    tone.frequency.setValueAtTime(320, t)
+    tone.frequency.exponentialRampToValueAtTime(1050, t + dur)
+    const toneG = this.ctx.createGain()
+    toneG.gain.setValueAtTime(0.0001, t)
+    toneG.gain.exponentialRampToValueAtTime(0.06, t + dur * 0.8)
+    toneG.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+    src.connect(bp).connect(amp).connect(v.input)
+    src2.connect(hp).connect(amp2).connect(v.input)
+    tone.connect(toneG).connect(v.input)
+    src.start(t); src2.start(t); tone.start(t); tone.stop(t + dur + 0.02)
+    return {
+      setPos: v.setPos,
+      stop: () => {
+        try { src.stop(); src2.stop(); tone.stop(); v.stop() } catch { /* 已停 */ }
+      },
+    }
+  }
+
+  // 暂停/恢复：挂起整个 AudioContext（音频时钟随游戏时钟一起冻结——长循环音
+  // 与动画在 ESC 暂停后不漂移；恢复时 currentTime 连续，已排定的渐强/嗡鸣
+  // 收尾仍与引信对齐）
+  suspend() { this.ctx?.suspend?.().catch?.(() => {}) }
+  resume() { this.ctx?.resume?.().catch?.(() => {}) }
 }

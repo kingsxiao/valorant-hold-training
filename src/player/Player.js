@@ -1,9 +1,11 @@
 import * as THREE from 'three'
 import { CONFIG } from '../core/Config.js'
+import { groundStep, accelFor } from '../core/GroundMotion.js'
 
-// 玩家控制器：Valorant 移动手感
-// - 全速 5.4 m/s（主武器）/ 6.75（刀），Shift=50% 无声，蹲≈34%
-// - 急促加速/急停（counter-strafe 反向键更快刹住）
+// 玩家控制器：Valorant 移动手感（数值口径见 CONFIG.movement）
+// - 分武器跑速：步枪 5.4 / 副武器 5.73 / 刀 6.75 m/s；Shift 静步 ≈62.8%（3.39 m/s，无声）；蹲 ≈34%
+// - 启停 = 摩擦模型（加速 18.75 m/s²@步枪；减速 28.6+3.3v，急停 ≈0.15s 与游戏一致；
+//   反向键无额外减速加成 —— Valorant 摩擦恒大于加速，counter-strafe 不是 CS 机制）
 // - 鼠标灵敏度：0.07°/count × 灵敏度（与游戏同换算）
 const V = { // 复用向量，避免每帧分配（性能）
   wish: new THREE.Vector3(), fwd: new THREE.Vector3(), right: new THREE.Vector3(),
@@ -96,19 +98,25 @@ export class Player {
     // 地面/空中加速模型
     if (this.grounded) {
       const cur = _tmp.set(this.vel.x, 0, this.vel.z)
-      const speed = cur.length()
       if (wishDir.lengthSq() > 0) {
-        // 加速到目标方向；反向输入 = counter-strafe 急停
-        const align = cur.lengthSq() > EPS ? cur.dot(wishDir) / (speed * wishDir.length() + EPS) : 1
-        const decelBoost = align < -0.3 ? M.counterStrafeMult : 1
-        cur.addScaledVector(wishDir, M.groundAccel * dt)
-        // 限制在目标速度球内（保留反向减速空间）
-        const ns = cur.length()
-        const cap = Math.max(maxSpeed, speed - M.groundDecel * decelBoost * dt)
-        if (ns > cap) cur.multiplyScalar(cap / ns)
-      } else if (speed > EPS) {
-        // 松键滑行减速
-        const drop = Math.min(speed, M.groundDecel * dt)
+        // 摩擦模型（core/GroundMotion.js）：沿输入方向的 1D 速度走 groundStep，
+        // 正交残余（换向漂移）按摩擦衰减 —— 反向输入不享受额外减速（与游戏一致）
+        const accel = accelFor(maxSpeed, M.groundAccel, M.runSpeed)
+        const k = { accel, decelFlat: M.groundDecelFlat, decelDrag: M.groundDecelDrag }
+        const along = cur.dot(wishDir)
+        const ortho = _tmp2.copy(cur).addScaledVector(wishDir, -along)
+        const oMag = ortho.length()
+        let oScale = 1
+        if (oMag > EPS) {
+          const oDrop = (M.groundDecelFlat + M.groundDecelDrag * oMag) * dt
+          oScale = Math.max(0, (oMag - oDrop) / oMag)
+        }
+        cur.copy(wishDir).multiplyScalar(groundStep(along, maxSpeed, k, dt))
+        cur.addScaledVector(ortho, oScale)
+      } else if (cur.lengthSq() > EPS) {
+        // 松键滑行：全速度摩擦衰减
+        const speed = cur.length()
+        const drop = Math.min(speed, (M.groundDecelFlat + M.groundDecelDrag * speed) * dt)
         cur.multiplyScalar((speed - drop) / speed)
       }
       this.vel.x = cur.x; this.vel.z = cur.z
@@ -142,8 +150,9 @@ export class Player {
       if (this.stepDist > 1.15) { this.stepDist = 0; this._footstep() }
     } else this.stepDist = 0.6
 
-    // 视角后坐恢复（指数回落）
-    const rec = 1 - Math.exp(-dt * 9)
+    // 视角后坐恢复（指数回落）。恢复速率分武器（recoil.punchRecover）：步枪快回
+    // 保持准星可读，Sheriff 重枪慢沉 —— 每把枪打完"落回准心"的节奏不一样
+    const rec = 1 - Math.exp(-dt * (weapon?.recoil?.punchRecover ?? 9))
     this.punchPitch -= this.punchPitch * rec
     this.punchYaw -= this.punchYaw * rec
   }
@@ -178,4 +187,5 @@ export class Player {
 
 const UP = new THREE.Vector3(0, 1, 0)
 const _tmp = new THREE.Vector3()
+const _tmp2 = new THREE.Vector3()
 const _cpos = new THREE.Vector3()

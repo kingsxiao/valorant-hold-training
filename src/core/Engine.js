@@ -124,6 +124,7 @@ export class Engine {
     this.camera.updateProjectionMatrix()
     this.vmCamera.aspect = w / h
     this.vmCamera.updateProjectionMatrix()
+    this._applyScale() // 跨屏拖动时 devicePixelRatio 变化，重设像素比防糊
   }
 
   // 天空穹顶：程序化渐变贴图 + 太阳精灵（跟随相机，永不触及雾）

@@ -56,18 +56,12 @@ function buildRifleAK(M) {
   cyl(g, M.dark, 0.014, 0.055, 0, 0.012, -0.645)                  // 消焰器
   box(g, M.wood, 0.046, 0.042, 0.15, 0, -0.002, -0.31)            // 上护木
   box(g, M.wood, 0.04, 0.018, 0.15, 0, -0.032, -0.31)             // 下护木
-  // 弹匣（独立组 + 克隆材质：换弹时下落/回插/淡出，不影响其它深色件）
-  const mag = new THREE.Group()
-  const magMat = M.dark.clone()
-  magMat.transparent = true
-  const magSeg = (y, z, rx) => box(mag, magMat, 0.034, 0.052, 0.05, 0, y, z, rx) // 四段弧形弹匣
+  // 弹匣四段弧形（弹药无限无换弹动画，直接并入枪身静态几何）
+  const magSeg = (y, z, rx) => box(g, M.dark, 0.034, 0.052, 0.05, 0, y, z, rx)
   magSeg(-0.058, -0.025, 0.08)
   magSeg(-0.104, -0.008, 0.24)
   magSeg(-0.146, 0.018, 0.42)
   magSeg(-0.182, 0.052, 0.6)
-  g.add(mag)
-  g.userData.mag = mag
-  g.userData.magMats = [magMat]
   box(g, M.dark, 0.028, 0.005, 0.06, 0, -0.035, 0.03)             // 扳机护圈
   box(g, M.dark, 0.006, 0.018, 0.008, 0, -0.028, 0.018)           // 扳机
   box(g, M.wood, 0.034, 0.085, 0.045, 0, -0.06, 0.085, 0.3)       // 握把
@@ -105,14 +99,8 @@ function buildRifleSuppressed(M) {
   box(g, M.poly, 0.044, 0.05, 0.16, 0, -0.004, -0.26)             // 护木
   box(g, M.dark, 0.03, 0.024, 0.02, 0, 0.03, -0.2)                // 前准星
   box(g, M.dark, 0.032, 0.022, 0.025, 0, 0.056, 0.06)             // 后照门
-  // 弹匣（独立组 + 克隆材质，换弹动画用）
-  const mag = new THREE.Group()
-  const magMat = M.poly.clone()
-  magMat.transparent = true
-  box(mag, magMat, 0.032, 0.11, 0.05, 0, -0.075, -0.02, 0.08)     // 直弹匣
-  g.add(mag)
-  g.userData.mag = mag
-  g.userData.magMats = [magMat]
+  // 直弹匣（弹药无限无换弹动画，直接并入枪身静态几何）
+  box(g, M.poly, 0.032, 0.11, 0.05, 0, -0.075, -0.02, 0.08)
   // 枪机组件：后置拉机柄，击发后坐
   const bolt = new THREE.Group()
   box(bolt, M.dark, 0.022, 0.012, 0.032, -0.02, 0.046, 0.075)     // 拉机柄（左后上）
@@ -169,7 +157,7 @@ function buildRevolver(M) {
 }
 
 // 手枪（Classic / Ghost）：套筒 + 握把，（Ghost）加消音管
-// 套筒（含准星/防滑纹）为独立组：击发后坐回位；弹匣底板换弹时下落/回插
+// 套筒（含准星/防滑纹）为独立组：击发后坐回位
 function buildPistol(M, suppressed) {
   const g = new THREE.Group()
   const { box, cyl } = vmHelpers(M)
@@ -185,13 +173,7 @@ function buildPistol(M, suppressed) {
   g.userData.bolt = bolt
   box(g, M.poly, 0.026, 0.03, 0.15, 0, -0.008, -0.04)             // 下机匣
   box(g, M.poly, 0.03, 0.082, 0.044, 0, -0.05, 0.04, 0.28)        // 握把
-  const mag = new THREE.Group()
-  const magMat = M.dark.clone()
-  magMat.transparent = true
-  box(mag, magMat, 0.027, 0.016, 0.038, 0, -0.094, 0.052, 0.28)   // 弹匣底板（握把底微露）
-  g.add(mag)
-  g.userData.mag = mag
-  g.userData.magMats = [magMat]
+  box(g, M.dark, 0.027, 0.016, 0.038, 0, -0.094, 0.052, 0.28)     // 弹匣底板（握把底微露）
   box(g, M.dark, 0.022, 0.005, 0.05, 0, -0.026, -0.015)           // 护圈
   box(g, M.dark, 0.005, 0.014, 0.007, 0, -0.018, -0.02)           // 扳机
   if (suppressed) {

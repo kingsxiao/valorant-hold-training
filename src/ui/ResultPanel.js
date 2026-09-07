@@ -50,7 +50,6 @@ export class ResultPanel {
     // 像素会发虚）。绘制代码全部以 canvas.width/height 为基准，等比放大无需改动
     for (const c of [this.hist, this.trend]) {
       const d = Math.min(2, devicePixelRatio || 1)
-      c.dataset.w = c.width; c.dataset.h = c.height
       c.width = c.width * d; c.height = c.height * d
     }
     p.querySelector('.btn-start').onclick = () => this.onRestart?.()

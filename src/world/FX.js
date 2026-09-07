@@ -149,7 +149,13 @@ export class FX {
       m.visible = false
       m.matrixAutoUpdate = false
       scene.add(m)
-      this.tracers.push({ mesh: m, life: 0 })
+      // 飞行曳光段状态：from/to（钳制后起终点）、dist/dur（全程距离/时间）、
+      // t（飞行进度 0..1）、seg（段长 m）——update 里沿弹道推短光段
+      this.tracers.push({
+        mesh: m, life: 0, baseOp: 0.85,
+        from: new THREE.Vector3(), to: new THREE.Vector3(),
+        dist: 1, dur: 0.07, seg: 5,
+      })
     }
     this.tracerIdx = 0
 
@@ -173,6 +179,7 @@ export class FX {
     this.flash.visible = false
     scene.add(this.flash)
     this.flashLife = 0
+    this.flashBase = 0.9 // 当前焰基准不透明度（消音武器压低；update 按比例衰减）
     this.flashLight = new THREE.PointLight(0xffbe7a, 0, 11, 2)
     this.flashLight.castShadow = false
     scene.add(this.flashLight)
@@ -227,7 +234,8 @@ export class FX {
     this.puffs.setViewportScale(height, fovDeg)
   }
 
-  tracer(from, to, opacity = 0.85) {
+  // style：曳光视觉参数（消音武器传更淡/更细/低饱和 —— 与更轻的枪声一致）
+  tracer(from, to, { opacity = 0.85, sat = 0.92, light = 0.72, width = 1 } = {}) {
     // 近场钳制：端点离相机 <2m 时，盒体近端顶点的投影角尺寸爆炸，
     // 会把整条曳光拉成横穿屏幕的光柱（Bot 还击的束终点曾是相机位置，
     // 每次对枪失败都有一条戳脸光束）。贴脸端沿束方向推到 2m 外；
@@ -242,16 +250,20 @@ export class FX {
     const t = this.tracers[this.tracerIdx]
     this.tracerIdx = (this.tracerIdx + 1) % MAX_TRACERS
     const m = t.mesh
-    m.position.copy(a)
-    m.lookAt(b)
-    const dist = a.distanceTo(b)
-    m.scale.set(1, 1, Math.max(dist, 0.1))
+    t.from.copy(a)
+    t.to.copy(b)
+    t.dist = a.distanceTo(b)
+    // 飞行曳光：短光段以 ~240m/s 掠过弹道（近距快到只见一闪、远距一段亮线
+    // 飞向命中点），段长 5m——不是整条全亮的光束（起点即终点会一眼假）
+    const SPEED = 240
+    t.dur = Math.max(0.028, t.dist / SPEED)
+    t.seg = Math.min(5, t.dist)
+    t.width = width
+    t.baseOp = opacity
+    t.life = t.dur
     m.visible = true
-    m.updateMatrix()
-    m.material.opacity = opacity
-    m.material.color.setHSL(0.11 + vary() * 0.02, 0.92, 0.72) // 暖黄微扰动
-    t.life = 0.07
-    t.baseOpacity = opacity
+    m.material.color.setHSL(0.11 + vary() * 0.02, sat, light) // 暖黄微扰动
+    // 初始矩阵由 update() 铺设（段头此刻就在枪口）
   }
 
   decal(x, y, z, nx, ny, nz) {
@@ -270,18 +282,16 @@ export class FX {
   }
 
   // 枪口焰按武器风格参数化（默认=步枪）：
-  //  suppressed：贴消音器的暗小火苗 + 极弱点光（消音枪不该有照明弹般的火球）
+  //  suppressed：贴消音器的暗小火苗 + 弱光（消音枪不该有照明弹般的火球）
   //  heavy：大口径（Sheriff）更大更亮的火球与更硬的照明
-  muzzle(worldPos, style = {}) {
-    const scale = style.scale ?? 1
-    const lightPeak = style.lightPeak ?? 16
-    const lightDur = style.lightDur ?? 0.06
-    const color = style.color ?? 0xffbe7a
+  //  opacity=焰基准不透明度（update 按其比例衰减）；lightPeak/lightDur=照明
+  muzzle(worldPos, { scale = 1, opacity = 0.9, lightPeak = 16, lightDur = 0.06, color = 0xffbe7a, flashColor } = {}) {
     if (worldPos) this.flash.position.copy(worldPos)
     this.flash.visible = true
-    this.flash.material.opacity = 0.9
+    this.flashBase = opacity
+    this.flash.material.opacity = opacity
     this.flash.material.rotation = vary() * Math.PI * 2
-    this.flash.material.color.setHex(style.flashColor ?? 0xffffff)
+    this.flash.material.color.setHex(flashColor ?? 0xffffff)
     const s = (0.26 + vary() * 0.14) * scale
     this.flash.scale.set(s, s, 1)
     // +半帧：update 在本帧渲染前先扣整帧 dt（见 update 注释），补回平均损失
@@ -441,7 +451,7 @@ export class FX {
     for (const t of this.tracers) {
       if (t.life <= 0) continue
       t.life -= dt
-      t.mesh.material.opacity = Math.max(0, t.life / 0.07) * (t.baseOpacity ?? 0.85)
+      t.mesh.material.opacity = Math.max(0, t.life / 0.07) * t.baseOp
       if (t.life <= 0) t.mesh.visible = false
     }
     for (const d of this.decals) {
@@ -454,8 +464,8 @@ export class FX {
       this.flashLife -= dt
       // 出生帧补偿：火苗在 simStep 生成，本帧 renderFrame 的 update 先扣掉整帧
       // dt 才首次上屏 → 实际可见寿命 29-45ms 随出生相位抖动（亮度忽明忽暗）。
-      // muzzle() 里已 +半帧（0.008s），这里 clamp 到 1 保证峰值不超 0.9
-      this.flash.material.opacity = Math.min(1, Math.max(0, this.flashLife / 0.045)) * 0.9
+      // muzzle() 里已 +半帧（0.008s），这里 clamp 到 1 保证峰值不超基准
+      this.flash.material.opacity = Math.min(1, Math.max(0, this.flashLife / 0.045)) * this.flashBase
       if (this.flashLife <= 0) this.flash.visible = false
     }
     // 动态光衰减（主场景灯 + vmScene 灯同步）

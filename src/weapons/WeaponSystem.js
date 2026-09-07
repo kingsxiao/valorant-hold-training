@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { CONFIG, makeSprayPattern } from '../core/Config.js'
-import { damageFor, spreadAt } from './ballistics.js'
+import { damageFor, spreadAt, spreadParts } from './ballistics.js'
 import { buildWeaponModels, buildCustomArms } from './ViewmodelFactory.js'
 import { poseGloveHands, poseCustomHands } from './HandsRig.js'
 
@@ -263,6 +263,16 @@ export class WeaponSystem {
   // ---- 散布（度）----
   currentSpread() {
     return spreadAt(this.weapon, {
+      speedRatio: this.player.moveSpeed / (CONFIG.movement.runSpeed * (this.weapon.moveSpeedMult ?? 1)),
+      crouched: this.player.crouchAmt > 0.5,
+      grounded: this.player.grounded,
+      sprayIndex: this.sprayIndex,
+    })
+  }
+
+  // 散布分量（移动超额/开火增长）：准星动态误差的两路独立信号
+  currentSpreadParts() {
+    return spreadParts(this.weapon, {
       speedRatio: this.player.moveSpeed / (CONFIG.movement.runSpeed * (this.weapon.moveSpeedMult ?? 1)),
       crouched: this.player.crouchAmt > 0.5,
       grounded: this.player.grounded,

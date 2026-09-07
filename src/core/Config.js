@@ -72,7 +72,11 @@ export const CONFIG = {
     sheriff: {
       name: 'Sheriff', slot: 'primary', auto: false,
       fireRate: 4, magSize: Infinity, equipTime: 0.75,
-      damage: { head: 159, body: 55, leg: 46 }, falloff: null,
+      damage: { head: 159, body: 55, leg: 46 },
+      falloff: [                                                 // 30m 起 ×0.909（维基分距离表）
+        { maxDist: 30, damage: { head: 159, body: 55, leg: 46 } },
+        { maxDist: Infinity, damage: { head: 145, body: 50, leg: 42 } },
+      ],
       spread: { stand: 0.25, walk: 1.45, run: 3.25, jump: 7.25, crouchMult: 0.76, crouchMove: 0.5, max: 2.75 },
       recoil: { recoverTime: 0.6, viewPunch: 0.9, punchRecover: 5.5, protected: 6, swingTime: 0.6 },
       moveSpeedMult: 1.0,
@@ -83,7 +87,11 @@ export const CONFIG = {
       name: 'Classic', slot: 'secondary', auto: false,
       burst: true,                                               // 右键三连发
       fireRate: 6.75, magSize: Infinity, equipTime: 0.75,
-      damage: { head: 78, body: 26, leg: 22 }, falloff: null,
+      damage: { head: 78, body: 26, leg: 22 },
+      falloff: [                                                 // 30m 起 ×0.846（维基分距离表）
+        { maxDist: 30, damage: { head: 78, body: 26, leg: 22 } },
+        { maxDist: Infinity, damage: { head: 66, body: 22, leg: 18 } },
+      ],
       spread: { stand: 0.4, walk: 1.5, run: 2.7, jump: 7.4, crouchMult: 0.75, crouchMove: 0.5, max: 1.8 },
       recoil: { recoverTime: 0.35, viewPunch: 0.45, punchRecover: 8, protected: 6, swingTime: 0.6 },
       moveSpeedMult: 1.0,
@@ -93,7 +101,11 @@ export const CONFIG = {
     ghost: {
       name: 'Ghost', slot: 'secondary', auto: false,
       fireRate: 6.75, magSize: Infinity, equipTime: 0.75,
-      damage: { head: 105, body: 30, leg: 26 }, falloff: null,
+      damage: { head: 105, body: 30, leg: 25 },
+      falloff: [                                                 // 30m 起衰减（维基分距离表）
+        { maxDist: 30, damage: { head: 105, body: 30, leg: 25 } },
+        { maxDist: Infinity, damage: { head: 87, body: 25, leg: 21 } },
+      ],
       spread: { stand: 0.3, walk: 1.4, run: 2.6, jump: 7.3, crouchMult: 0.77, crouchMove: 0.5, max: 1.65 },
       recoil: { recoverTime: 0.3, viewPunch: 0.35, punchRecover: 8.5, protected: 6, swingTime: 0.6 },
       moveSpeedMult: 1.0,
@@ -148,7 +160,9 @@ export const CONFIG = {
 }
 
 // ---- 后坐力弹道表（程序化生成的近似压枪轨迹）----
-// 每项为该发子弹相对准心的累计偏移（度）。幅度为原创近似（Riot 不公布角度值），
+// 每项为该发子弹相对准心的累计偏移（度）。幅度为原创近似：多源核验（Riot 官方
+// Data Drop / Fandom 维基 / bo3.gg / 中文社区）均无公开角度值，无后坐作弊脚本
+// 的像素表不予采用 —— 幅度锚定社区共识（明显小于 CS AK 的 ~11°，约其 1/3）。
 // 结构对齐公开补丁机制：
 //  - prot：水平保护弹数——前 N 发纯垂直无横偏（v10.0 起公开机制：Vandal 6 / Phantom 8）
 //  - swing：一次水平换向持续的弹数（补丁"Yaw switch time 0.6s"× 射速，Vandal ≈5.85）
@@ -163,7 +177,10 @@ export function makeSprayPattern(n = 25, { prot = 6, swing = 5.9 } = {}) {
     else if (i < 13) p += 0.08
     else p += 0.015 // 平台期微升：压枪量基本封顶，只留给水平摆动
     const t = (i - prot) / swing // 换向节拍相位：每 swing 发完成半次摆动
-    const y = i < prot ? 0 : Math.sin(t * Math.PI) * (0.4 + Math.min(1.7, Math.max(0, t) * 0.16))
+    // 方向：先向右漂再拉左 —— bo3.gg 记载 Phantom"vertical start with a rightward
+    // lean, then horizontal pull left"，VALTRAIN 记载 Vandal 压枪"pull down then
+    // micro-adjust down-left"（补偿左下 = 弹道右上漂）。y 正值 = 向左偏
+    const y = i < prot ? 0 : -Math.sin(t * Math.PI) * (0.4 + Math.min(1.7, Math.max(0, t) * 0.16))
     pat.push({ p, y })
   }
   return pat

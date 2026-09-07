@@ -21,7 +21,16 @@ export function damageFor(w, zone, dist) {
 //  - 连射逐发 +0.05°，封顶在 max - stand（= 持续射击最大散布）
 // ctx = { speedRatio: 水平速度/该武器全速 (0..1), crouched, grounded, sprayIndex }
 export function spreadAt(w, ctx) {
-  if (w.slot === 'melee') return 0
+  return spreadParts(w, ctx).total
+}
+
+// spreadAt 的分量拆分：准星动态误差需要"移动误差/开火误差"两路独立信号
+// （对应游戏准星设置里内外线各自的移动/开火误差开关与倍率）：
+//  - move：移动/跳跃超出当前姿态静止基准的超额部分（站定 = 0，游戏里站定即无移动误差）
+//  - fire：连射逐发增长（sprayIndex × 0.05°，封顶同上）
+//  - total：两者之和（= 旧 spreadAt，弹道采样口径不变）
+export function spreadParts(w, ctx) {
+  if (w.slot === 'melee') return { move: 0, fire: 0, total: 0 }
   const s = w.spread
   const r = Math.min(1, Math.max(0, ctx.speedRatio))
   let sp
@@ -32,7 +41,10 @@ export function spreadAt(w, ctx) {
   } else {
     sp = s.walk + (s.run - s.walk) * Math.pow((r - 0.5) / 0.5, 1.4)
   }
+  // 静止基准随姿态走：蹲姿基准 = 蹲立散布（蹲得越低基准越低）；空中无基准，
+  // 跳跃散布全额计入移动误差（游戏中跳跃即最大移动误差）
+  const rest = ctx.grounded ? (ctx.crouched ? s.stand * s.crouchMult : s.stand) : 0
   if (!ctx.grounded) sp = s.jump
-  sp += Math.min(ctx.sprayIndex * 0.05, Math.max(0, (s.max ?? s.stand + 0.8) - s.stand))
-  return sp
+  const fire = Math.min(ctx.sprayIndex * 0.05, Math.max(0, (s.max ?? s.stand + 0.8) - s.stand))
+  return { move: Math.max(0, sp - rest), fire, total: sp + fire }
 }

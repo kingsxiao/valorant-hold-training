@@ -24,6 +24,17 @@ describe('damageFor 距离衰减', () => {
     expect(damageFor(P, 'head', 20.1)).toBe(P.falloff[1].damage.head)
   })
 
+  it('Sheriff/Classic/Ghost 30m 起衰减档位（维基分距离伤害表）', () => {
+    const S = CONFIG.weapons.sheriff, C = CONFIG.weapons.classic, G = CONFIG.weapons.ghost
+    expect(damageFor(S, 'head', 29)).toBe(159)
+    expect(damageFor(S, 'head', 31)).toBe(145)   // ×0.909
+    expect(damageFor(S, 'body', 50)).toBe(50)
+    expect(damageFor(C, 'body', 31)).toBe(22)    // ×0.846
+    expect(damageFor(C, 'head', 29)).toBe(78)
+    expect(damageFor(G, 'leg', 31)).toBe(21)
+    expect(damageFor(G, 'leg', 29)).toBe(25)
+  })
+
   it('未知部位回退 body 伤害', () => {
     expect(damageFor(V, 'tail', 5)).toBe(V.damage.body)
   })

@@ -292,11 +292,9 @@ engine.renderFrame = (alpha, dtMs) => {
   fx.update(dt)
   hud.updateDamage(dt)
 
-  // 动态准星：当前散布（度）→ 屏幕像素，实时可视化误差
-  crosshair.setSpread(
-    state.playing && weapons.weapon.slot !== 'melee' ? weapons.currentSpread() : 0,
-    engine.camera.fov, innerHeight,
-  )
+  // 动态准星：移动/开火两路误差（度）→ 屏幕像素，内外线按各自开关+倍率扩张
+  const parts = state.playing && weapons.weapon.slot !== 'melee' ? weapons.currentSpreadParts() : { move: 0, fire: 0 }
+  crosshair.update(parts, engine.camera.fov, innerHeight)
 
   // 开局倒计时：3 · 2 · 1 · GO（Bot 在 GO 前不出人，回合计时从 GO 起算）
   if (state.playing && bots.running) {

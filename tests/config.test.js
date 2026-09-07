@@ -105,6 +105,13 @@ describe('makeSprayPattern 后坐力弹道表', () => {
     expect(Math.abs(v[7].y)).toBeGreaterThan(0)
   })
 
+  it('水平段先右后左（文档记载：Phantom rightward lean→pull left；Vandal 补偿左下=弹道右上漂）', () => {
+    const pat = makeSprayPattern(30, { prot: 6, swing: 5.85 })
+    expect(pat[7].y).toBeLessThan(0) // 保护窗后第一发向右漂（本表 y 负 = 向右）
+    expect(pat.slice(6, 12).some(({ y }) => y < -0.1)).toBe(true) // 前半摆向右
+    expect(pat.slice(12).some(({ y }) => y > 0.1)).toBe(true)     // 后半拉回左
+  })
+
   it('垂直分量全程不下坠：爬升后进高位平台（压枪量封顶，不回落）', () => {
     // 曾有后段逐发 -0.1° 的下坠：压枪过冲后要反向上推，与目标游戏的
     // "前段爬升→平台→水平摆动"形状相悖 —— 此用例锁死回归

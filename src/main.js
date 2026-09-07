@@ -111,6 +111,7 @@ bots.onBotFire = (bot) => {
   const d = Math.max(0.001, Math.hypot(dx, dz))
   const from = { x: bot.pos.x + dx / d * 0.55, y: 1.31, z: bot.pos.z + dz / d * 0.55 }
   fx.muzzle(from)
+  fx.muzzleSmoke(from, { x: dx / d, y: 0.05, z: dz / d }, 0.25)
   fx.tracer(new THREE.Vector3(from.x, from.y, from.z), engine.camera.position)
   audio.whiz()
 }

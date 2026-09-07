@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { worldToListener } from '../src/core/Audio.js'
+import { worldToListener, AudioSys } from '../src/core/Audio.js'
 
 // 基准真值：three.js 相机（rotation.order 'YXZ'，rotation.y = yaw）的
 // 世界→本地变换 —— 玩家 yaw 即来自该相机模型，听者坐标必须与其一致。
@@ -59,5 +59,46 @@ describe('worldToListener（HRTF 听者方位换算）', () => {
     const old = oldImpl(0, -5, yaw) // 正前方声源
     const want = threeGroundTruth(0, -5, yaw)
     expect(old.z).not.toBeCloseTo(want.z, 6) // 旧实现把前方声源放到身后
+  })
+})
+
+// 声画同步提前量：声音到扬声器还需 outputLatency，画面下个 vsync（~半帧 8ms）
+// 就出现 → 全部调度点提前 (延迟 − 8ms)，下限 0。数值锚定 2026-09-07 浏览器
+// 实测（Chrome outputLatency 8ms→0 / 模拟 30ms→22ms）。
+describe('_syncLead（WebAudio 输出延迟补偿）', () => {
+  const makeSys = (latency, t = 1) => {
+    const a = new AudioSys()
+    // 只注入 _syncLead 依赖的最小 ctx（不发真音频）
+    a.ctx = { currentTime: t, outputLatency: latency }
+    return a
+  }
+
+  it('30ms 输出延迟 → 提前 22ms（延迟 − 半帧）', () => {
+    expect(makeSys(0.03)._syncLead()).toBeCloseTo(0.022, 6)
+  })
+
+  it('低延迟设备（≤8ms）不抢拍：提前量取 0', () => {
+    expect(makeSys(0.008)._syncLead()).toBe(0)
+    expect(makeSys(0)._syncLead()).toBe(0)
+  })
+
+  it('异常大的延迟值钳制在 80ms', () => {
+    expect(makeSys(0.5)._syncLead()).toBeCloseTo(0.08, 6)
+  })
+
+  it('缓存：1s 内不重算，之后随缓冲变化刷新', () => {
+    const a = makeSys(0.03, 1)
+    expect(a._syncLead()).toBeCloseTo(0.022, 6)
+    a.ctx.outputLatency = 0.012
+    a.ctx.currentTime = 1.5 // 不足 1s：沿用缓存
+    expect(a._syncLead()).toBeCloseTo(0.022, 6)
+    a.ctx.currentTime = 2.1 // 超过 1s：重算
+    expect(a._syncLead()).toBeCloseTo(0.004, 6)
+  })
+
+  it('无 outputLatency 时回退 baseLatency', () => {
+    const a = new AudioSys()
+    a.ctx = { currentTime: 1, baseLatency: 0.02 }
+    expect(a._syncLead()).toBeCloseTo(0.012, 6)
   })
 })

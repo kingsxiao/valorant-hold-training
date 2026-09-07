@@ -150,9 +150,9 @@ export class FX {
       m.matrixAutoUpdate = false
       scene.add(m)
       // 飞行曳光段状态：from/to（钳制后起终点）、dist/dur（全程距离/时间）、
-      // t（飞行进度 0..1）、seg（段长 m）——update 里沿弹道推短光段
+      // seg（段长 m）、width（束径倍率）——update 里沿弹道推短光段
       this.tracers.push({
-        mesh: m, life: 0, baseOp: 0.85,
+        mesh: m, life: 0, baseOp: 0.85, width: 1,
         from: new THREE.Vector3(), to: new THREE.Vector3(),
         dist: 1, dur: 0.07, seg: 5,
       })
@@ -451,8 +451,19 @@ export class FX {
     for (const t of this.tracers) {
       if (t.life <= 0) continue
       t.life -= dt
-      t.mesh.material.opacity = Math.max(0, t.life / 0.07) * t.baseOp
-      if (t.life <= 0) t.mesh.visible = false
+      if (t.life <= 0) { t.mesh.visible = false; continue }
+      // 飞行进度：段头从枪口冲向命中点，段尾落后 seg 米（钳在弹道内）
+      const p = 1 - t.life / t.dur
+      const head = p * t.dist
+      const tail = Math.max(0, head - t.seg)
+      const m = t.mesh
+      _v.subVectors(t.to, t.from).normalize()
+      m.position.copy(t.from).addScaledVector(_v, tail)
+      m.lookAt(t.to)
+      m.scale.set(t.width, t.width, Math.max(head - tail, 0.1))
+      m.updateMatrix()
+      // 末段 30% 渐隐（撞点前光段自然熄灭）
+      m.material.opacity = Math.min(1, t.life / (t.dur * 0.3)) * t.baseOp
     }
     for (const d of this.decals) {
       if (d.life <= 0) continue

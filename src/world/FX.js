@@ -148,7 +148,7 @@ export class FX {
       m.visible = false
       m.matrixAutoUpdate = false
       scene.add(m)
-      this.tracers.push({ mesh: m, life: 0 })
+      this.tracers.push({ mesh: m, life: 0, baseOp: 0.85 })
     }
     this.tracerIdx = 0
 
@@ -172,6 +172,7 @@ export class FX {
     this.flash.visible = false
     scene.add(this.flash)
     this.flashLife = 0
+    this.flashBase = 0.9 // 当前焰基准不透明度（消音武器压低；update 按比例衰减）
     this.flashLight = new THREE.PointLight(0xffbe7a, 0, 11, 2)
     this.flashLight.castShadow = false
     scene.add(this.flashLight)
@@ -226,7 +227,8 @@ export class FX {
     this.puffs.setViewportScale(height, fovDeg)
   }
 
-  tracer(from, to) {
+  // style：曳光视觉参数（消音武器传更淡/更细/低饱和 —— 与更轻的枪声一致）
+  tracer(from, to, { opacity = 0.85, sat = 0.92, light = 0.72, width = 1 } = {}) {
     // 近场钳制：端点离相机 <2m 时，盒体近端顶点的投影角尺寸爆炸，
     // 会把整条曳光拉成横穿屏幕的光柱（Bot 还击的束终点曾是相机位置，
     // 每次对枪失败都有一条戳脸光束）。贴脸端沿束方向推到 2m 外；
@@ -244,11 +246,12 @@ export class FX {
     m.position.copy(a)
     m.lookAt(b)
     const dist = a.distanceTo(b)
-    m.scale.set(1, 1, Math.max(dist, 0.1))
+    m.scale.set(width, width, Math.max(dist, 0.1))
     m.visible = true
     m.updateMatrix()
-    m.material.opacity = 0.85
-    m.material.color.setHSL(0.11 + vary() * 0.02, 0.92, 0.72) // 暖黄微扰动
+    t.baseOp = opacity
+    m.material.opacity = opacity
+    m.material.color.setHSL(0.11 + vary() * 0.02, sat, light) // 暖黄微扰动
     t.life = 0.07
   }
 
@@ -267,18 +270,19 @@ export class FX {
     d.life = 14
   }
 
-  muzzle(worldPos) {
+  muzzle(worldPos, { scale = 1, opacity = 0.9, light = 1, color = 0xffbe7a } = {}) {
     if (worldPos) this.flash.position.copy(worldPos)
     this.flash.visible = true
-    this.flash.material.opacity = 0.9
+    this.flashBase = opacity
+    this.flash.material.opacity = opacity
     this.flash.material.rotation = vary() * Math.PI * 2
-    const s = 0.26 + vary() * 0.14
+    const s = (0.26 + vary() * 0.14) * scale
     this.flash.scale.set(s, s, 1)
     this.flashLife = 0.045
     if (worldPos) {
       this.flashLight.position.copy(worldPos)
-      this.flashLight.color.setHex(0xffbe7a)
-      this.lightPeak = 16
+      this.flashLight.color.setHex(color)
+      this.lightPeak = 16 * light
       this.lightDur = 0.06
       this.lightLife = this.lightDur
     }
@@ -415,7 +419,7 @@ export class FX {
     for (const t of this.tracers) {
       if (t.life <= 0) continue
       t.life -= dt
-      t.mesh.material.opacity = Math.max(0, t.life / 0.07) * 0.85
+      t.mesh.material.opacity = Math.max(0, t.life / 0.07) * t.baseOp
       if (t.life <= 0) t.mesh.visible = false
     }
     for (const d of this.decals) {
@@ -426,7 +430,7 @@ export class FX {
     }
     if (this.flashLife > 0) {
       this.flashLife -= dt
-      this.flash.material.opacity = Math.max(0, this.flashLife / 0.045) * 0.9
+      this.flash.material.opacity = Math.max(0, this.flashLife / 0.045) * this.flashBase
       if (this.flashLife <= 0) this.flash.visible = false
     }
     // 动态光衰减

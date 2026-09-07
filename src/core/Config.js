@@ -61,6 +61,7 @@ export const CONFIG = {
       recoil: { recoverTime: 0.38, viewPunch: 0.3 },
       moveSpeedMult: 1.0,
       vmKick: 0.028,                                             // 消音枪开火冲量更轻（音画一致）
+      suppressed: true,                                          // 消音视觉：枪口焰/曳光/枪口烟同步收敛
       sound: 'rifle_suppressed',
     },
     sheriff: {
@@ -92,6 +93,7 @@ export const CONFIG = {
       recoil: { recoverTime: 0.3, viewPunch: 0.35 },
       moveSpeedMult: 1.0,
       vmKick: 0.024,                                             // 消音手枪更轻
+      suppressed: true,                                          // 消音视觉：枪口焰/曳光/枪口烟同步收敛
       sound: 'pistol_suppressed',
     },
     knife: {
@@ -140,8 +142,11 @@ export const CONFIG = {
   },
 }
 
-// ---- 后坐力弹道表（程序化生成的近似压枪轨迹：前段垂直上抬，中后段水平摆动）----
+// ---- 后坐力弹道表（程序化生成的近似压枪轨迹）----
 // 每项为该发子弹相对准心的累计偏移（度）。原创近似，非游戏数据提取。
+// 形状对齐 Valorant：前 9 发垂直陡升 → 高位平台（垂直停住，压枪量不再增长）
+// → 中后段水平摆动。平台期不允许垂直回落——压枪过冲后还要反向上推的手感
+// 是错的，压到高点只管左右修。
 export function makeSprayPattern(n = 25) {
   const pat = []
   let p = 0, y = 0, phase = 0
@@ -149,7 +154,7 @@ export function makeSprayPattern(n = 25) {
     if (i < 3) p += 0.18
     else if (i < 9) p += 0.62 - (i - 3) * 0.05
     else if (i < 13) p += 0.08
-    else p -= 0.1
+    else p += 0.015 // 平台期微升：压枪量基本封顶，只留给水平摆动
     if (i >= 8) {
       phase += 1
       y = Math.sin(phase * 0.9) * (0.5 + phase * 0.07)

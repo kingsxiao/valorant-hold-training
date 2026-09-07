@@ -340,13 +340,16 @@ export class WeaponSystem {
 
     // 枪口焰（含动态点光）+ 枪口烟（连射越久越浓）+ 抛壳 + 曳光。
     // userData 点位是枪组本地系 → 经枪自身世界矩阵变换（含持枪偏移/缩放/内偏旋转）；
-    // vmScene 世界系 == 相机本地系，再过主相机矩阵落进世界（FX 都在世界场景）
+    // vmScene 世界系 == 相机本地系，再过主相机矩阵落进世界（FX 都在世界场景）。
+    // 消音武器（suppressed）视觉同步收敛：焰更小更暗、曳光更淡更细、烟更轻 ——
+    // 枪声层与持枪冲量早已分枪更轻，这轮把"看得见的安静"补齐
     const vm = this.activeCustomVm() ?? this.viewmodels[this.currentId]
+    const sup = w.suppressed ? SUPPRESSOR_FX : null
     this.camera.updateMatrixWorld()
     _muzzle.copy(this.muzzleOffset)
     _muzzle.applyMatrix4(vm.matrixWorld).applyMatrix4(this.camera.matrixWorld)
-    this.fx.muzzle(_muzzle)
-    this.fx.muzzleSmoke(_muzzle, _dir, this.heat)
+    this.fx.muzzle(_muzzle, sup?.muzzle)
+    this.fx.muzzleSmoke(_muzzle, _dir, this.heat * (sup ? 0.6 : 1))
     if (vm.userData.eject) {
       _eject.copy(vm.userData.eject)
       _eject.applyMatrix4(vm.matrixWorld).applyMatrix4(this.camera.matrixWorld)
@@ -357,7 +360,7 @@ export class WeaponSystem {
     if (botHit) end.multiplyScalar(botHit.t).add(eye)
     else if (wallHit) end.set(wallHit.x, wallHit.y, wallHit.z)
     else end.multiplyScalar(maxDist).add(eye)
-    this.fx.tracer(_muzzle, end)
+    this.fx.tracer(_muzzle, end, sup?.tracer)
 
     // 声音
     this.audio.shot(w.sound, null, { pos: eye, yaw: p.yaw })
@@ -579,3 +582,11 @@ const UP = new THREE.Vector3(0, 1, 0)
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ')
 const _rx = new THREE.Vector3()
 const _eye = new THREE.Vector3()
+
+// 消音武器的开火视觉（FX.muzzle / FX.tracer 的 style 参数）：焰缩 55%、亮度压半、
+// 点光减半；曳光不透明度 ×0.47、饱和度减半、束径 70% —— 远处看你的枪线更隐蔽，
+// 近处自己的反馈也不喧宾夺主（消音的意义）
+const SUPPRESSOR_FX = {
+  muzzle: { scale: 0.55, opacity: 0.5, light: 0.45, color: 0xffd2a0 },
+  tracer: { opacity: 0.4, sat: 0.45, width: 0.7 },
+}

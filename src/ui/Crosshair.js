@@ -20,6 +20,8 @@ export class Crosshair {
     }
     this.spreadPx = 0
     this._appliedPx = -1
+    this._smPx = 0   // 平滑后的显示散布（扩张瞬时、收束缓动）
+    this._lastT = 0
     this.render()
   }
 
@@ -60,11 +62,20 @@ export class Crosshair {
     this._applySpread(true)
   }
 
-  // 当前散布换算成屏幕像素（main 每帧调用；spreadDeg 为锥形散布半角）
+  // 当前散布换算成屏幕像素（main 每帧调用；spreadDeg 为锥形散布半角）。
+  // 扩张瞬时可见（一开打/一动就亮"打不准"，信号不能迟滞）；收束缓 ~0.15s
+  // 归位 —— 停火重置的瞬间四线"啪"地合拢读作卡顿，缓动才读作精度恢复
   setSpread(spreadDeg, fovVDeg, viewH) {
-    this.spreadPx = (spreadDeg > 0 && this.settings.error)
+    const target = (spreadDeg > 0 && this.settings.error)
       ? Math.tan(spreadDeg * Math.PI / 360) / Math.max(1e-6, Math.tan(fovVDeg * Math.PI / 360)) * viewH * 0.5
       : 0
+    const now = performance.now()
+    const dt = Math.min(0.05, Math.max(0, (now - this._lastT) / 1000))
+    this._lastT = now
+    this._smPx = target >= this._smPx
+      ? target
+      : this._smPx + (target - this._smPx) * Math.min(1, dt * 18)
+    this.spreadPx = this._smPx
     this._applySpread()
   }
 

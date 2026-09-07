@@ -82,6 +82,21 @@ describe('makeSprayPattern 后坐力弹道表', () => {
     expect(hasSway).toBe(true)
   })
 
+  it('垂直分量全程不下坠：爬升后进高位平台（压枪量封顶，不回落）', () => {
+    // 曾有后段逐发 -0.1° 的下坠：压枪过冲后要反向上推，与目标游戏的
+    // "前段爬升→平台→水平摆动"形状相悖 —— 此用例锁死回归
+    const pat = makeSprayPattern(30)
+    for (let i = 1; i < pat.length; i++) expect(pat[i].p).toBeGreaterThanOrEqual(pat[i - 1].p)
+  })
+
+  it('消音武器带 suppressed 标记（开火视觉收敛用），非消音不带', () => {
+    expect(CONFIG.weapons.phantom.suppressed).toBe(true)
+    expect(CONFIG.weapons.ghost.suppressed).toBe(true)
+    for (const id of ['vandal', 'sheriff', 'classic', 'knife']) {
+      expect(CONFIG.weapons[id].suppressed, id).toBeUndefined()
+    }
+  })
+
   it('累计偏移量级受控（不至于打穿天）', () => {
     const pat = makeSprayPattern(30)
     for (const { p, y } of pat) {

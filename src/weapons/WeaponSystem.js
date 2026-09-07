@@ -267,7 +267,9 @@ export class WeaponSystem {
     } else {
       this._pendingVmSwap = { id, at: this.now + CONFIG.weapons[id].equipTime * 0.35 }
     }
-    if (!instant && this.audio?.ctx) this.audio.equip() // 切枪机械声（开局静默，避免未解锁的 AudioContext）
+    if (!instant && this.audio?.ctx) {
+      this.audio.equip(CONFIG.weapons[id].equipTime) // 切枪机械声（开局静默；上膛响随该枪 equipTime 校相位）
+    }
     this.onAmmoChange?.(this)
   }
 
@@ -401,7 +403,8 @@ export class WeaponSystem {
     if (botHit) end.multiplyScalar(botHit.t).add(eye)
     else if (wallHit) end.set(wallHit.x, wallHit.y, wallHit.z)
     else end.multiplyScalar(maxDist).add(eye)
-    this.fx.tracer(_muzzle, end, sup ? SUPPRESSOR_FX.tracer : {})
+    // 曳光接触闪光按命中物着色：机器人=蓝白电火花 / 墙=暖色碎屑 / 脱靶不闪
+    this.fx.tracer(_muzzle, end, sup ? SUPPRESSOR_FX.tracer : {}, botHit ? 'bot' : wallHit ? 'wall' : false)
 
     // 声音（heat=连射热量 → 音色随持续射击渐变）
     this.audio.shot(w.sound, null, { pos: eye, yaw: p.yaw }, this.heat)
@@ -413,7 +416,10 @@ export class WeaponSystem {
     } else if (wallHit) {
       this.fx.decal(wallHit.x, wallHit.y, wallHit.z, wallHit.nx, wallHit.ny, wallHit.nz)
       this.fx.impact(wallHit.x, wallHit.y, wallHit.z, wallHit.nx, wallHit.ny, wallHit.nz)
-      this.audio.surfaceHit({ x: wallHit.x, y: wallHit.y, z: wallHit.z }, { pos: p.pos, yaw: p.yaw }, wallHit.ny)
+      // 落点音量分层：消音枪压 0.8（打墙不比开枪响），Sheriff 大口径加至
+      // 1.25（.44 打墙就是更狠的一记）
+      this.audio.surfaceHit({ x: wallHit.x, y: wallHit.y, z: wallHit.z },
+        { pos: p.pos, yaw: p.yaw }, wallHit.ny, sup ? 0.8 : w.sound === 'handcannon' ? 1.25 : 1)
     }
 
     // 持枪模型后坐（弹簧冲量：快起峰 + 弹性回稳，连射自然堆叠）+ 每发随机
@@ -432,9 +438,12 @@ export class WeaponSystem {
     this.lastFireTime = this.now
   }
 
-  // 转轮击发后分度 60°（下一发弹巢对准枪管）
+  // 转轮击发后分度 60°（下一发弹巢对准枪管）。
+  // 平滑分度：目标角累加、_updateVmParts 里临界阻尼追踪（~95% 用时 170ms，
+  // 4/s 射速下赶得上下一发；比瞬跳多出"机械在动"的可读性）
   _indexCylinder() {
-    this.viewmodels.sheriff.userData.cylPivot.rotation.z += Math.PI / 3
+    const ud = this.viewmodels.sheriff.userData
+    ud.cylTarget = (ud.cylTarget ?? ud.cylPivot.rotation.z) + Math.PI / 3
   }
 
   _meleeSwing() {
@@ -492,6 +501,16 @@ export class WeaponSystem {
     this.airK += ((p.grounded ? 0 : 1) - this.airK) * Math.min(1, dt * 7)
     // 枪口热度衰减（停火 ~1.8s 冷却）
     this.heat = Math.max(0, this.heat - dt * 0.55)
+    // 热浪扭曲喂料：枪口世界位投影到屏幕 UV + 当前热量 → Engine shimmer pass
+    if (this.onShimmer) {
+      const vmS = this.activeCustomVm() ?? this.viewmodels[this.currentVmId]
+      if (vmS) {
+        _muzzle.copy(this.muzzleOffset)
+        _muzzle.applyMatrix4(vmS.matrixWorld).applyMatrix4(this.camera.matrixWorld)
+        _muzzle.project(this.camera)
+        this.onShimmer(_muzzle.x * 0.5 + 0.5, _muzzle.y * 0.5 + 0.5, this.heat)
+      }
+    }
     // 视角摆动（惯性延迟）
     this.swayX += (-mouseDx * 0.00012 - this.swayX) * Math.min(1, dt * 12)
     this.swayY += (-mouseDy * 0.00012 - this.swayY) * Math.min(1, dt * 12)
@@ -636,6 +655,19 @@ export class WeaponSystem {
     }
     const hammer = vm.userData.hammer
     if (hammer) hammer.rotation.x = 0.12 + (1 - this.vmBolt) * 0.62 // 击发瞬间前倒，随后回待击
+    // Sheriff 转轮分度：欠阻尼弹簧追目标角（ω≈41rad/s、ζ≈0.5）——一次 ~16%
+    // 过冲（60° 分度甩过 ~10° 再咬回），机械分度的"咔哒"手感；195ms 内稳住，
+    // 4/s 射速下一发前必然到位
+    const cyl = vm.userData.cylPivot
+    if (cyl && vm.userData.cylTarget !== undefined) {
+      const err = vm.userData.cylTarget - cyl.rotation.z
+      vm.userData.cylVel = (vm.userData.cylVel ?? 0) + (err * 1700 - vm.userData.cylVel * 41) * dt
+      cyl.rotation.z += vm.userData.cylVel * dt
+      if (Math.abs(err) < 0.002 && Math.abs(vm.userData.cylVel) < 0.02) {
+        cyl.rotation.z = vm.userData.cylTarget
+        vm.userData.cylVel = 0
+      }
+    }
   }
 }
 

@@ -147,7 +147,7 @@ export class Player {
     this.moveSpeed = hSpeed
     if (this.grounded && this.running) {
       this.stepDist += hSpeed * dt
-      if (this.stepDist > 1.15) { this.stepDist = 0; this._footstep() }
+      if (this.stepDist > 1.15) { this.stepDist = 0; this._footstep(hSpeed) }
     } else this.stepDist = 0.6
 
     // 视角后坐恢复（指数回落）。恢复速率分武器（recoil.punchRecover）：步枪快回
@@ -157,7 +157,8 @@ export class Player {
     this.punchYaw -= this.punchYaw * rec
   }
 
-  _footstep() { this.audio.footstep(null, { pos: this.pos, yaw: this.yaw }, true) }
+  // 传实际速度：持刀跑（6.75m/s）脚步更重、蹲移慢跑更轻——连续分层
+  _footstep(hSpeed) { this.audio.footstep(null, { pos: this.pos, yaw: this.yaw }, true, hSpeed) }
 
   _moveAxis(axis, delta) {
     if (delta === 0) return

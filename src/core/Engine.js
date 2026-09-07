@@ -51,6 +51,53 @@ export class Engine {
     // 世界系）跟随枪口，强度由 FX 与主场景灯同步衰减
     this.vmFlashLight = new THREE.PointLight(0xffbe7a, 0, 0.7, 2)
     this.vmScene.add(this.vmFlashLight)
+
+    // ---- 热浪扭曲 pass（可行性原型）----
+    // 主场景渲到 RT → 全屏 quad 采样，在枪口屏幕区域施加程序化 UV 扰动
+    // （强度∝连射热量，WeaponSystem 每帧喂 this.shimmer）→ 清深度画持枪层
+    // （枪/手套不被扰动，保持锐利）。无纹理依赖：三层正弦流动噪声
+    this.shimmer = { x: 0.5, y: 0.5, heat: 0 }
+    this.heatShimmer = CONFIG.graphics.heatShimmer !== false // 菜单画质开关（main.applyAll 写入）
+    this._rt = new THREE.WebGLRenderTarget(2, 2)
+    this._postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+    this._postScene = new THREE.Scene()
+    this._postScene.add(new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShaderMaterial({
+        uniforms: {
+          tDiffuse: { value: this._rt.texture },
+          uMuzzle: { value: new THREE.Vector2(0.5, 0.5) },
+          uHeat: { value: 0 },
+          uTime: { value: 0 },
+          uAspect: { value: 1 },
+        },
+        vertexShader: /* glsl */`
+          varying vec2 vUv;
+          void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+        fragmentShader: /* glsl */`
+          uniform sampler2D tDiffuse;
+          uniform vec2 uMuzzle;
+          uniform float uHeat, uTime, uAspect;
+          varying vec2 vUv;
+          // 廉价流动噪声：三层不同频率/速度的正弦叠加（无纹理依赖）
+          float wob(vec2 p) {
+            return sin(p.y * 43.0 + uTime * 9.0) * 0.5
+                 + sin(p.x * 61.0 - p.y * 29.0 + uTime * 13.0) * 0.35
+                 + sin((p.x + p.y) * 83.0 + uTime * 21.0) * 0.15;
+          }
+          void main() {
+            vec2 d = vUv - uMuzzle;
+            d.x *= uAspect;
+            // 枪口热气区：径向高斯衰减 × 向上偏置的椭圆（热气往上走）
+            float mask = exp(-dot(d, d) * 34.0) * smoothstep(-0.06, 0.12, d.y);
+            float amp = uHeat * 0.0045 * mask;
+            vec2 off = vec2(wob(vUv * 7.0 + uTime * 0.7), wob(vUv.yx * 6.0 - uTime * 0.5) * 0.6) * amp;
+            gl_FragColor = texture2D(tDiffuse, vUv + off);
+            #include <colorspace_fragment>
+          }`,
+        depthTest: false, depthWrite: false,
+      }),
+    ))
     // 注：vmScene 三盏灯均不投影、不随菜单"阴影"开关变化 → 第一人称深灰手套
     // 材质在各图形档位（阴影开/关、分辨率缩放）下渲染恒一致（2026-09-07 核验：
     // 开关阴影仅主场景地面阴影变化，vmScene 输出不受影响；resScale 只改像素比）
@@ -105,8 +152,8 @@ export class Engine {
     })
     canvas.addEventListener('webglcontextrestored', () => {
       // 双 pass 场景都要标记：vmScene（第一人称枪/手套）漏标会导致恢复后
-      // 材质不重编译、渲染异常（2026-09-08 补）
-      for (const sc of [this.scene, this.vmScene]) {
+      // 材质不重编译、渲染异常（2026-09-08 补）；热浪 pass 的全屏 quad 同理
+      for (const sc of [this.scene, this.vmScene, this._postScene]) {
         sc.traverse(o => { if (o.material) o.material.needsUpdate = true })
       }
       this.start()
@@ -222,10 +269,27 @@ export class Engine {
       if (steps === CONFIG.sim.maxStepsPerFrame) this.accumulator = 0 // 过载保护
 
       this.renderFrame?.(this.accumulator / this.fixedDt, dtMs)
-      // 双 pass：主场景 → 清深度 → 持枪视角（永远画在世界之上、不穿墙）
       this.renderer.autoClear = false
-      this.renderer.clear()
-      this.renderer.render(this.scene, this.camera)
+      // 热浪 pass 的成本门控：仅开火后的热量窗（~1.8s）内走 RT+扰动三段路径，
+      // 平时（架枪/瞄准的绝大多数帧）旁路回直渲双 pass——零成本持有该特效。
+      // 两条路径色彩管线等价（各自恰好一次 sRGB 编码），切换无视觉跳变
+      if (this.heatShimmer !== false && this.shimmer.heat > 0.005) {
+        const sh = this.shimmer
+        const u = this._postScene.children[0].material.uniforms
+        u.uMuzzle.value.set(sh.x, sh.y)
+        u.uHeat.value = sh.heat
+        u.uAspect.value = this.camera.aspect
+        u.uTime.value = now / 1000
+        this.renderer.setRenderTarget(this._rt)
+        this.renderer.clear()
+        this.renderer.render(this.scene, this.camera)
+        this.renderer.setRenderTarget(null)
+        this.renderer.render(this._postScene, this._postCam)
+      } else {
+        // 双 pass：主场景 → 清深度 → 持枪视角（永远画在世界之上、不穿墙）
+        this.renderer.clear()
+        this.renderer.render(this.scene, this.camera)
+      }
       this.renderer.clearDepth()
       this.renderer.render(this.vmScene, this.vmCamera)
     }
@@ -278,6 +342,12 @@ export class Engine {
 
   _applyScale() {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, CONFIG.graphics.maxPixelRatio) * (this.userScale ?? 1) * (this.autoScale ?? 1))
+    // 热浪 pass 的 RT 跟随绘制缓冲尺寸（像素比/分辨率缩放变化后同步）
+    if (this._rt) {
+      const s = new THREE.Vector2()
+      this.renderer.getDrawingBufferSize(s)
+      this._rt.setSize(s.x, s.y)
+    }
   }
 
   // 自适应分辨率：帧率持续偏低时按 10% 步长降低渲染分辨率（最低 60%），

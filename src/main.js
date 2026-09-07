@@ -32,9 +32,10 @@ const audio = new AudioSys()
 const world = new World()
 const map = new MapBuilder(world, engine.scene)
 const fx = new FX(engine.scene, engine.camera, engine)
-// 抛壳落地"叮" / 头盔落地"哐"（强度=落地速度归一，AudioSys 内部再随机音高/响度）
+// 抛壳落地"叮" / 头盔落地"哐"（强度=落地速度归一，AudioSys 内部再随机音高/响度；
+// 头盔带落点坐标做 HRTF 空间化——头盔弹在哪个缺口一听便知）
 fx.onShellBounce = (k) => audio.shellTink(k)
-fx.onHelmetBounce = (k) => audio.helmetClank(k)
+fx.onHelmetBounce = (k, x, y, z) => audio.helmetClank(k, { x, y, z }, { pos: player.pos, yaw: player.yaw })
 const player = new Player(world, audio)
 const bots = new BotManager({ scene: engine.scene, world, map, audio, player })
 // 闪光干扰：敌方从墙后投掷（KAY/O 手雷/斯凯鹰/火男弧线球），致盲判定走 LOS+朝向+距离
@@ -64,20 +65,27 @@ const weapons = new WeaponSystem({
   camera: engine.camera, vmCamera: engine.vmCamera, world, bots, fx, audio, player,
 })
 weapons.onShotFired = () => bots.registerShot()
+// 热浪扭曲喂料：WeaponSystem 每渲染帧报枪口屏幕位+热量，Engine 的 shimmer pass 消费
+weapons.onShimmer = (x, y, heat) => {
+  engine.shimmer.x = x
+  engine.shimmer.y = y
+  engine.shimmer.heat = heat
+}
 
 // 击杀反馈主链路：命中标记 / 伤害数字 / 粒子爆发 / 击杀横幅 / 击杀信息流 / 得分
-// （命中"叮"声在 BotManager.damage 内；击杀确认音在这里播 —— 只有这里知道连杀数）
+// （未击杀命中的"叮"在 BotManager.damage 内；击杀的叮+确认音在这里播——
+//   只有这里知道连杀数，两者共用同一连杀升调阶梯）
 weapons.onHitBot = (bot, zone, dmg, killed, point) => {
   const head = zone === 'head'
   hud.showHitmarker(head, killed)
   if (point) {
     hud.spawnDamage(point.x, point.y + 0.15, point.z, dmg, head, engine.camera, killed)
-    if (killed) {
-      fx.killBurst(point, head)
-      if (head) fx.helmetPop(point) // 爆头击杀：头盔飞出
-    } else {
-      fx.hitBurst(point, head)
-    }
+    // 弹道方向（玩家→命中点）：非致命 hitBurst 的火花反弹半球约束
+    _hm.set(point.x - engine.camera.position.x, point.y - engine.camera.position.y, point.z - engine.camera.position.z).normalize()
+    // 非致命命中：伤害力度联动火花密度/初速（与踉跄幅度同因子）
+    if (!killed) fx.hitBurst(point, head, _hm, Math.min(1.4, Math.max(0.4, dmg / 55)))
+    // 爆头击杀：头盔顺弹道方向被掀飞（与击杀辉光同帧的力度感）
+    if (killed && head) fx.helmetPop(point, _hm)
   }
   if (killed) {
     const r = bots.stats.lastReaction
@@ -85,9 +93,14 @@ weapons.onHitBot = (bot, zone, dmg, killed, point) => {
     killTimes.push(nowS)
     if (killTimes.length > 32) killTimes.shift()
     let streak = 1
-    for (let i = killTimes.length - 2; i >= 0 && nowS - killTimes[i] <= 4.5; i--) streak++
-    // 击杀确认音：爆头保持"先叮后确认"层次；连杀每级升半音（上限 +4）
-    audio.kill(head ? 0.06 : 0, Math.pow(2, Math.min(streak - 1, 4) / 12))
+    for (let i = killTimes.length - 2; i >= 0 && nowS - killTimes[i] <= 4.5; i++) streak++
+    // heavy：Sheriff 大口径击杀光脉冲更深更久；_hm 在上文已算好
+    if (point) fx.killBurst(point, head, streak, _hm, weapons.weapon.sound === 'handcannon')
+    const pitch = Math.pow(2, Math.min(streak - 1, 4) / 12)
+    // 爆头击杀：叮先落且与确认音同连杀阶梯（连杀中的"叮"越叮越高），
+    // 确认音延后到 0.1s 且高频让位；普通击杀只播确认音
+    if (head) audio.hitMark(true, 0, pitch)
+    audio.kill(head ? 0.1 : 0, pitch, head)
     crosshair.flashKill()
     hud.showKill({ streak, reaction: r, head })
     hud.addKillFeed(`BOT-${String(bot.id % 100).padStart(2, '0')}`, head, r)
@@ -112,8 +125,21 @@ bots.onBotFire = (bot) => {
   const from = { x: bot.pos.x + dx / d * 0.55, y: 1.31, z: bot.pos.z + dz / d * 0.55 }
   fx.muzzle(from)
   fx.muzzleSmoke(from, { x: dx / d, y: 0.05, z: dz / d }, 0.25)
-  fx.tracer(new THREE.Vector3(from.x, from.y, from.z), engine.camera.position)
+  // 敌方曳光红调（玩家曳光暖黄）：对枪瞬间一眼分清哪条弹道是谁的
+  fx.tracer(new THREE.Vector3(from.x, from.y, from.z), engine.camera.position,
+    { hue: 0.02, sat: 0.95, light: 0.6 }, false)
   audio.whiz()
+  // 子弹没停下：穿过玩家位置继续飞，打在身后墙上——弹孔/碎屑/落点音按
+  // 飞行时间延迟（240m/s），形成"枪声→掠过啸→身后嗒"的完整时序
+  const wh = world.raycast(from.x, from.y, from.z, dx / d, 0, dz / d, 60)
+  if (wh && wh.t > d) {
+    const ms = Math.round((wh.t / 240) * 1000)
+    setTimeout(() => {
+      fx.decal(wh.x, wh.y, wh.z, wh.nx, wh.ny, wh.nz)
+      fx.impact(wh.x, wh.y, wh.z, wh.nx, wh.ny, wh.nz)
+      audio.surfaceHit({ x: wh.x, y: wh.y, z: wh.z }, { pos: player.pos, yaw: player.yaw }, wh.ny, 0.75)
+    }, ms)
+  }
 }
 
 bots.onEvent = (type, data) => {
@@ -217,6 +243,9 @@ menu.applyAll = () => {
   bots.params.aimTimeMs = cfg.aimTimeMs
   bots.params.roundSeconds = cfg.roundSeconds
   bots.params.rampUp = !!cfg.rampUp
+  // Bot 出场侧：left/right 固定一侧（同向预瞄训练）/ random 两侧随机（读局）。
+  // 只影响之后排程的波次——本波在场的 Bot 不瞬移，跑完这一条横移线
+  bots.params.peekSide = ['left', 'right', 'random'].includes(cfg.peekSide) ? cfg.peekSide : 'random'
   // 缺口左右切换：重建静态地图（PBR 纹理单例缓存，重排几何开销极小）。
   // 场上 Bot 的横移线是旧缺口的，就地回收重排，避免从已封死的墙段穿出
   if (map.side !== cfg.gapSide) {
@@ -228,6 +257,7 @@ menu.applyAll = () => {
   engine.autoRes = cfg.autoRes !== false
   engine.setResolutionScale(cfg.resScale ?? 1)
   engine.setShadows(!!cfg.shadows)
+  engine.heatShimmer = cfg.heatShimmer !== false // 关掉即回退直渲双 pass（低配后路）
   Bot.realShadows = !!cfg.shadows // 真实阴影下隐藏 Bot 的 blob 接触阴影（防双重投影）
   for (const b of bots.bots) b.blob.visible = b.active && !Bot.realShadows
   hud.fpsBox.style.display = cfg.showFps === false ? 'none' : ''
@@ -295,6 +325,7 @@ engine.simStep = (dt) => {
 }
 
 const _hudAccum = { stats: 0, fpsText: 0 }
+const _hm = new THREE.Vector3() // 爆头头盔掀飞方向的临时向量
 // 倒计时显示状态（渲染帧维护；tick 音在秒变化沿触发）
 let countLast = null
 let goShowUntil = 0
@@ -401,3 +432,7 @@ if (splash) {
   splash.classList.add('done')
   setTimeout(() => splash.remove(), 400)
 }
+
+// DEV 调试钩子：控制台实测音频链路（AnalyserNode 接 master 量峰值/响度复测）。
+// 仅开发构建暴露；生产 bundle 不含
+if (import.meta.env.DEV) window.__vht = { audio, fx, weapons, player, bots, flashes, engine }

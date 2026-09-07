@@ -145,6 +145,7 @@ export const CONFIG = {
     roundSeconds: 60,       // 30 / 60 / 120 / 0=无限
     peekDelayMinMs: 600,    // 架枪模式：Bot 出现前的随机等待
     peekDelayMaxMs: 2600,
+    peekSide: 'left',       // Bot 出场侧：left / right 固定一侧练同向预瞄，random 保留两侧随机
     peekStopChance: 0.35,   // 横移中急停一瞬的概率（模拟真人 swing 抖动）
     crossChance: 0.5,       // 每波风格：侧面跑过（贯穿缺口顺跑向）vs 横向拉出（肩peek 拉出对枪）
     pullJiggleChance: 0.3,  // 拉出波里"露头即缩"jiggle-peek 的概率（拉到中段折返）
@@ -181,6 +182,7 @@ export const CONFIG = {
   graphics: {
     maxPixelRatio: 2,
     shadows: true,          // 默认开：静态几何已合并，阴影 pass 仅 ~10 draw call（实测无帧率损失）
+    heatShimmer: true,      // 枪口热浪扭曲 pass（热量门控：仅开火后 ~1.8s 走 RT 路径，其余帧零成本；菜单画质可关）
     fovH: 103,              // Valorant 水平 FOV 103°（垂直随窗口比例换算）
     viewmodelFov: 55,       // 持枪视角独立垂直 FOV（CS/Valorant 同做法：与主 FOV 解耦，
                             // 枪/手臂比例不随主视野拉伸，且单独一趟渲染不穿墙）

@@ -284,7 +284,10 @@ export class FlashSystem {
           p.vel.z = tvz * 0.72 - vn * hit.nz * K.restitution
           if (p.vel.x * p.vel.x + p.vel.y * p.vel.y + p.vel.z * p.vel.z < 0.09) p.vel.x = p.vel.y = p.vel.z = 0
         }
-        this.audio.flashBounce(p.pos, this._listener)
+        // 弹跳序号：音高逐次微升、音量按恢复系数递减（能量损失）——连跳几声
+        // 就能听出"罐子在滚远/滚停"，不用看也知道手雷落在哪
+        p.bounceN = (p.bounceN ?? 0) + 1
+        this.audio.flashBounce(p.pos, this._listener, p.bounceN)
         // v10.06：首次弹跳后改为 0.8s 引信（不延长剩余时间）+ 专属爬升嗡鸣
         if (!p.bounced) {
           p.bounced = true
@@ -426,7 +429,10 @@ export class FlashSystem {
       intensity = 1 + Math.min(0.25, (dur / maxBlind) * 0.25) // 贴脸爆闪更炸
     }
     this._popVisual(p.type, pos)
-    this.audio.flashPop(p.type, pos, this._listener, intensity)
+    // 渐褪尾段的残像色（白屏退到一半时切类型色余晖）
+    this._tint = { kayo: '#bfeaff', skye: '#d8ffe6', phoenix: '#ffd9a8' }[p.type] ?? ''
+    // blinded=dur>0 传给音效：躲过（背对/无视线）时高频层压暗——"背身成功"听得出来
+    this.audio.flashPop(p.type, pos, this._listener, intensity, dur > 0)
     this._despawn()
     this.onPopped?.(dur > 0)
   }
@@ -440,8 +446,10 @@ export class FlashSystem {
       skye: { light: 0xd8ffe6, ring: 0x66ffb2, ringMax: 2.4, s1: [0.55, 1, 0.72], s2: [1, 0.88, 0.5] },
       phoenix: { light: 0xffd9a8, ring: 0xff9a3c, ringMax: 2.6, s1: [1, 0.55, 0.16], s2: [1, 0.85, 0.45] },
     }[type]
-    fx.muzzle(pos, { scale: 7, opacity: 1, light: 3, color: C.light })
-    fx.lightLife = fx.lightDur = 0.26 // 爆闪照明驻留一瞬（比枪口焰长）
+    // 爆闪照明：主场景灯在真实爆点（峰值 3× 步枪枪口焰、驻留 0.26s），
+    // 第一人称通道由 vmPopGlow 以类型色点亮枪身+手套
+    fx.muzzle(pos, { scale: 7, opacity: 1, light: 3, lightDur: 0.26, color: C.light })
+    fx.vmPopGlow(C.light)
     // 冲击环：一圈类型色的扩散光波
     const r = fx.rings[fx.ringIdx]
     fx.ringIdx = (fx.ringIdx + 1) % fx.rings.length
@@ -482,15 +490,20 @@ export class FlashSystem {
   // ---- 渲染帧：白屏透明度 / 网格插值 / 模型动画 / 拖尾 / 移动声源 ----
   renderSync(alpha, dt = 0.016) {
     // 白屏：起爆后 0.06s 快速拉满（游戏同款的瞬时白），致盲期内不透明，
-    // 到期后 1 秒线性渐褪（维基确认值）；径向渐变让边缘先透出一点视野
+    // 到期后 1 秒线性渐褪（维基确认值）；径向渐变让边缘先透出一点视野。
+    // 渐褪后半段（k>0.5）白底切道具类型色——视网膜残像式的余晖，也提示
+    // 刚才那颗是什么道具
     let o = 0
+    let tail = false
     if (this.blindUntil >= 0) {
       const k = (this.t - this.blindUntil) / CONFIG.flash.fadeTime
       if (k < 0) o = Math.min(1, (this.t - this._blindAt) / 0.06)
       else if (k >= 1) this.blindUntil = -1
-      else o = 1 - k
+      else { o = 1 - k; tail = k > 0.5 }
     }
     this.overlayEl.style.opacity = o.toFixed(3)
+    const bg = tail && this._tint ? this._tint : ''
+    if (this.overlayEl.style.background !== bg) this.overlayEl.style.background = bg
 
     const p = this.proj
     if (!p) return

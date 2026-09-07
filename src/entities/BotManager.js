@@ -21,6 +21,7 @@ export class BotManager {
       aimTimeMs: CONFIG.bot.aimTimeMs,
       roundSeconds: CONFIG.training.roundSeconds,
       rampUp: false, // 渐进难度：随击杀数缩短延迟/提升横移速度
+      peekSide: CONFIG.training.peekSide, // Bot 出场侧：left/right 固定一侧，random 两侧随机
     }
     this.onEvent = null // (type, data) → HUD 提示：'killed' / 'round-end'
     this.stats = this._freshStats()
@@ -55,7 +56,18 @@ export class BotManager {
 
   _bot() {
     let b = this.bots.find(x => !x.active && x.mode !== 'dying') // 复用已播完死亡动画的 Bot（隐藏后 mode 已归位 idle）
-    if (!b) { b = new Bot(this.scene, this.world); b.manager = this; this.bots.push(b) }
+    if (!b) {
+      b = new Bot(this.scene, this.world); b.manager = this; this.bots.push(b)
+      // Bot 脚步声（空间化 HRTF）：墙后 Bot 拉出/跑过的方位信息——与步态
+      // 落脚帧同拍触发（walkPhase 跨 π 检测），传连续速度（加速中脚步渐强）。
+      // 倒地触地闷响：击杀的重量句点（ease-out 0.63 处的拍地帧触发）
+      b.onFootstep = (speed) => {
+        this.audio?.footstep(b.pos, { pos: this.player.pos, yaw: this.player.yaw }, speed >= 3.2, speed)
+      }
+      b.onDeathLand = () => {
+        this.audio?.bodyDrop(b.pos, { pos: this.player.pos, yaw: this.player.yaw })
+      }
+    }
     else { b.peek = null } // 清上一条命的管理器状态
     return b
   }
@@ -129,7 +141,10 @@ export class BotManager {
     if (!activeBot && nowMs >= slot.nextAt) {
       const gap = this.map.gaps[0]
       const b = this._bot()
-      const fromLeft = Math.random() > 0.5
+      // 出场侧可设置：固定左/右练同向预瞄，random 保留两侧随机的读局训练
+      const fromLeft = this.params.peekSide === 'random'
+        ? Math.random() > 0.5
+        : this.params.peekSide === 'left'
       // 每波二选一（训练两种读局情景）：
       //  cross 侧面跑过 —— 从墙后贯穿缺口跑到另一侧，身体顺跑向（旋转跑，侧身入镜）
       //  pull  横向拉出 —— 从墙后肩peek 拉出，面向玩家横移到窗口内急停对枪，之后缩回
@@ -232,15 +247,16 @@ export class BotManager {
       bot.reactRecorded = true
     }
     bot.hp -= dmg
-    bot.flashHit(zone === 'head')
+    // 伤害力度归一（55 伤=1）：踉跄幅度/命中火花密度共用的力度因子
+    const power = Math.min(1.4, Math.max(0.4, dmg / 55))
+    bot.flashHit(zone === 'head', power)
     this.stats.hits++
     if (zone === 'head') this.stats.headshots++
     if (bot.hp <= 0) {
       this.stats.kills++
       bot.startDeath()
-      // 爆头击杀先"叮"（与游戏一致，爆头永远叮）；击杀确认音由 main 播放
-      // （那里才知道连杀数 → 按连杀升调，层次不变）
-      if (zone === 'head') this.audio.hitMark(true)
+      // 击杀时的爆头"叮"由 main 播（那里才知道连杀数 → 按连杀升调，与击杀
+      // 确认音同一 pitch 阶梯）；未击杀命中的叮仍在下方（基础音高）
       this.onEvent?.('killed', { bot, zone })
       return true
     }

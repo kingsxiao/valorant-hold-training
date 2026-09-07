@@ -105,10 +105,12 @@ export class Menu {
       volume: 0.7,
       showFps: true,
       shadows: CONFIG.graphics.shadows,
+      heatShimmer: CONFIG.graphics.heatShimmer,
       resScale: 1.0,
       autoRes: true,
       rampUp: false,
       gapSide: 'left',      // 缺口位置：左 / 右（切换即重建静态地图）
+      peekSide: CONFIG.training.peekSide, // Bot 出场侧：left / right 固定一侧 / random 两侧随机
       flash: 'off',         // 闪光干扰：off / kayo / skye / phoenix / mix（敌方道具按维基数值 1:1）
       // 出厂默认 = 游戏默认形态 + 青色（接近游戏新号默认观感）；已有存档由
       // _sanitizeCfg 迁移/清洗后覆盖
@@ -142,8 +144,9 @@ export class Menu {
     const WEAPONS = Object.keys(CONFIG.weapons)
     if (!WEAPONS.includes(c.primary)) c.primary = 'vandal'
     if (!WEAPONS.includes(c.secondary)) c.secondary = 'classic'
-    for (const k of ['showFps', 'shadows', 'autoRes', 'rampUp']) c[k] = !!c[k]
+    for (const k of ['showFps', 'shadows', 'autoRes', 'rampUp', 'heatShimmer']) c[k] = !!c[k]
     c.gapSide = c.gapSide === 'right' ? 'right' : 'left' // 旧存档里的 doubleGap 一并失效忽略
+    c.peekSide = ['left', 'right', 'random'].includes(c.peekSide) ? c.peekSide : CONFIG.training.peekSide
     c.flash = ['kayo', 'skye', 'phoenix', 'mix'].includes(c.flash) ? c.flash : 'off'
     // 旧版简化准星模型（length/gap/tShape）→ 游戏同款模型；再全量清洗防手改
     if (isLegacyCrosshair(c.crosshair)) c.crosshair = migrateLegacyCrosshair(c.crosshair)
@@ -153,25 +156,39 @@ export class Menu {
   build() {
     const p = document.createElement('div')
     p.className = 'panel'
-    // 结构：设置区（panel-scroll，超高时内部滚动）+ 底部固定操作条（panel-foot）。
-    // 操作条不参与滚动——任何窗口高度下"开始训练/继续训练"都完整可见可点，
-    // 不会被 max-height 裁剪到点不到（按钮中心落在 overlay 上 = 点击无反应）
+    // 结构：固定头部（panel-head）+ 板块 tab 条（panel-tabs，训练/准星/画质/说明分页）+
+    // 设置区（panel-scroll，仅当前板块超高时内部滚动）+ 底部固定操作条（panel-foot）。
+    // tab 分页：准星编辑器独占一页，调准星不用再从设置顶部一路滚到底；长操作说明挪进
+    // "说明"页，操作条只剩一行——常用设置一屏放得下；头部/tab/操作条都不参与滚动——
+    // 任何窗口高度下"开始训练/继续训练"都完整可见可点，不会被 max-height 裁剪到
+    // 点不到（按钮中心落在 overlay 上 = 点击无反应）
+    const head = document.createElement('header')
+    head.className = 'panel-head'
+    head.innerHTML = `
+      <div>
+        <h1>架枪训练 <em>HOLD ANGLE TRAINER</em></h1>
+        <div class="tagline">WebGL 第一人称训练器 · 移速/射速/后坐力按 Valorant 公开参数调校 · 原创程序化建模</div>
+      </div>
+      <div class="menu-best" hidden></div>
+      <div class="head-badge">VHT // 01<small>AIM · HOLD · WIN</small></div>
+    `
+    const tabs = document.createElement('nav')
+    tabs.className = 'panel-tabs'
+    tabs.setAttribute('role', 'tablist')
+    tabs.innerHTML = `
+      <button class="tab-btn active" role="tab" aria-selected="true" data-tab="train">训练</button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="crosshair">准星</button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="gfx">画质</button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="help">说明</button>
+    `
     const scroll = document.createElement('div')
     scroll.className = 'panel-scroll'
     scroll.innerHTML = `
-      <header class="panel-head">
-        <div>
-          <h1>架枪训练 <em>HOLD ANGLE TRAINER</em></h1>
-          <div class="tagline">WebGL 第一人称训练器 · 移速/射速/后坐力按 Valorant 公开参数调校 · 原创程序化建模</div>
-        </div>
-        <div class="menu-best" hidden></div>
-        <div class="head-badge">VHT // 01<small>AIM · HOLD · WIN</small></div>
-      </header>
-
       <div class="menu-live" hidden></div>
 
       <div class="mobile-warn" hidden>⚠ 检测到触屏设备：本训练器需要键盘 + 鼠标（指针锁定），请在桌面浏览器打开。</div>
 
+      <div class="tab-page" data-page="train">
       <h2>武器</h2>
       <div class="opt-grid" data-group="primary"></div>
       <div style="height:8px"></div>
@@ -189,16 +206,14 @@ export class Menu {
       </div>
       <div class="opt-grid" data-group="gapSide"></div>
       <div style="height:8px"></div>
+      <div class="opt-grid" data-group="peekSide"></div>
+      <div style="height:8px"></div>
       <div class="opt-grid" data-group="flashMode"></div>
       <div style="height:8px"></div>
       <div class="opt-grid" data-group="trainOpts"></div>
-
-      <h2>画质</h2>
-      <div class="slider-grid">
-        <div class="slider-row"><label>分辨率缩放</label><input type="range" data-key="resScale" min="0.5" max="2" step="0.05"><span class="val"></span></div>
       </div>
-      <div class="opt-grid" data-group="gfxOpts"></div>
 
+      <div class="tab-page" data-page="crosshair" hidden>
       <h2>准星 <small class="h2-sub">与游戏设置 1:1 · 支持导入游戏准星代码</small></h2>
       <div class="ch-wrap">
         <div class="ch-preview"><canvas></canvas></div>
@@ -257,18 +272,19 @@ export class Menu {
           </div>
         </div>
       </div>
-    `
-    const foot = document.createElement('div')
-    foot.className = 'panel-foot'
-    foot.innerHTML = `
-      <div class="actions">
-        <button class="btn-continue btn-start" hidden>继续训练</button>
-        <button class="btn-start">开始训练</button>
-        <button class="btn-ghost btn-clear-records">清除纪录</button>
-        <span class="hint" style="margin:0">点击后锁定鼠标 · ESC 暂停（可继续当前回合）</span>
       </div>
 
-      <div class="hint">
+      <div class="tab-page" data-page="gfx" hidden>
+      <h2>画质</h2>
+      <div class="slider-grid">
+        <div class="slider-row"><label>分辨率缩放</label><input type="range" data-key="resScale" min="0.5" max="2" step="0.05"><span class="val"></span></div>
+      </div>
+      <div class="opt-grid" data-group="gfxOpts"></div>
+      </div>
+
+      <div class="tab-page" data-page="help" hidden>
+      <h2>操作说明</h2>
+      <div class="hint" style="margin-top:0">
         操作：<span class="kbd">W A S D</span> 移动（全速 5.4m/s）· <span class="kbd">Shift</span> 静步（50%，无声）·
         <span class="kbd">Ctrl/C</span> 蹲 · <span class="kbd">Space</span> 跳 ·
         <span class="kbd">1</span> 主武器 · <span class="kbd">2</span> 副武器 · <span class="kbd">3</span> 刀（6.75m/s）·
@@ -280,11 +296,28 @@ export class Menu {
         闪光干扰（可选）：敌方从墙后投掷 KAY/O 手雷 / 斯凯追踪鹰 / 火男弧线球（数值按游戏还原）——
         看到或听到就背身！直视起爆点满时长白屏（KAY/O 2.25s / 斯凯最高 2.25s / 火男 1.5s），背对只短暂致盲，起爆后敌人随即拉出
       </div>
+      </div>
     `
-    p.append(scroll, foot)
+    const foot = document.createElement('div')
+    foot.className = 'panel-foot'
+    foot.innerHTML = `
+      <div class="actions">
+        <button class="btn-continue btn-start" hidden>继续训练</button>
+        <button class="btn-start">开始训练</button>
+        <button class="btn-ghost btn-clear-records">清除纪录</button>
+        <span class="hint" style="margin:0">点击后锁定鼠标 · ESC 暂停（可继续当前回合）· 完整操作见「说明」页</span>
+      </div>
+    `
+    p.append(head, tabs, scroll, foot)
     this.overlay.appendChild(p)
     this.panel = p
     this.scrollBox = scroll
+    // 板块 tab：训练 / 准星 / 画质 / 说明。切换即显示对应页并复位滚动；记忆在内存——
+    // 暂停呼出再回来还停在上次调的板块（如反复微调准星），刷新后回默认"训练"
+    this._tab = 'train'
+    for (const b of tabs.querySelectorAll('[data-tab]')) {
+      b.onclick = () => this._switchTab(b.dataset.tab)
+    }
     // 触屏设备提示：纯 coarse 指针（无精细指针）= 手机/平板 → 训练器不可玩，
     // 提前告知而不是让用户对着无效菜单点半天（带鼠标的二合一设备不受影响）
     if (matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches) {
@@ -325,6 +358,22 @@ export class Menu {
       gsBox.appendChild(b)
     }
 
+    // Bot 出场侧：固定左/右（练同向预瞄），或保留两侧随机（读局训练）；
+    // 实时生效——只影响之后排程的波次，本波在场的不动
+    const psBox = p.querySelector('[data-group=peekSide]')
+    for (const [v, label] of [
+      ['left', 'Bot 出场 · 固定左侧'],
+      ['right', 'Bot 出场 · 固定右侧'],
+      ['random', 'Bot 出场 · 随机两侧'],
+    ]) {
+      const b = document.createElement('button')
+      b.className = 'opt-btn'
+      b.textContent = label
+      b.dataset.value = v
+      b.onclick = () => { this.cfg.peekSide = v; this.syncButtons(); saveSettings({ peekSide: v }); this.applyAll?.() }
+      psBox.appendChild(b)
+    }
+
     // 闪光干扰（敌方道具 1:1）：关闭 / 三选一 / 三种混合随机。
     // 投掷物从墙后袭来——听声辨位、背身躲闪是核心训练点（直视满时长致盲）
     const fBox = p.querySelector('[data-group=flashMode]')
@@ -358,7 +407,7 @@ export class Menu {
 
     // 画质开关（自适应分辨率 / 阴影 / FPS 显示）
     const gBox = p.querySelector('[data-group=gfxOpts]')
-    for (const [key, label] of [['autoRes', '自适应分辨率（掉帧自动降）'], ['shadows', '阴影'], ['showFps', 'FPS 面板']]) {
+    for (const [key, label] of [['autoRes', '自适应分辨率（掉帧自动降）'], ['shadows', '阴影'], ['heatShimmer', '热浪扭曲（枪口折射）'], ['showFps', 'FPS 面板']]) {
       const b = document.createElement('button')
       b.className = 'opt-btn'
       b.textContent = label
@@ -428,6 +477,20 @@ export class Menu {
       }, 3100)
     }
     this.syncButtons()
+  }
+
+  // 切换板块页：tab 高亮 + 对应页显示（其余 hidden）+ 滚动复位到该页顶部
+  _switchTab(tab) {
+    this._tab = tab
+    for (const b of this.panel.querySelectorAll('.panel-tabs [data-tab]')) {
+      const on = b.dataset.tab === tab
+      b.classList.toggle('active', on)
+      b.setAttribute('aria-selected', String(on))
+    }
+    for (const pg of this.panel.querySelectorAll('.tab-page')) {
+      pg.hidden = pg.dataset.page !== tab
+    }
+    this.scrollBox.scrollTop = 0
   }
 
   // ---- 准星编辑器 ----
@@ -538,11 +601,11 @@ export class Menu {
       this.refreshChUI()
     }
 
-    // 预览画布（双倍 backing 保锐利；暗底渐变近似游戏预览的地图背景）
+    // 预览画布（backing 双倍保锐利；显示尺寸交给 CSS——预览列收窄到 222px 时
+    // 内联 240px 会撑破列宽产生横向溢出；暗底渐变近似游戏预览的地图背景）
     const cv = p.querySelector('.ch-preview canvas')
     const PW = 240, PH = 140
     cv.width = PW * 2; cv.height = PH * 2
-    cv.style.width = PW + 'px'; cv.style.height = PH + 'px'
     const ctx = cv.getContext('2d')
     ctx.scale(2, 2)
     this._chPrev = { ctx, PW, PH }
@@ -612,6 +675,9 @@ export class Menu {
     for (const b of this.panel.querySelectorAll('[data-group=gapSide] .opt-btn')) {
       b.classList.toggle('active', b.dataset.value === this.cfg.gapSide)
     }
+    for (const b of this.panel.querySelectorAll('[data-group=peekSide] .opt-btn')) {
+      b.classList.toggle('active', b.dataset.value === this.cfg.peekSide)
+    }
     for (const b of this.panel.querySelectorAll('[data-group=flashMode] .opt-btn')) {
       b.classList.toggle('active', b.dataset.value === this.cfg.flash)
     }
@@ -661,7 +727,7 @@ export class Menu {
     this.refreshSliders()
     this.syncButtons()
     this.refreshChUI()
-    this.scrollBox.scrollTop = 0 // 每次呼出回到设置顶部（操作条固定在底部始终可见）
+    this._switchTab(this._tab) // 呼出回到上次所在板块并复位滚动（首屏=训练；操作条固定底部始终可见）
   }
 
   hide() {

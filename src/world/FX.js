@@ -139,20 +139,71 @@ export class FX {
     this.camera = camera
     this.vmFlash = engine?.vmFlashLight ?? null // vmScene 枪口焰点光（见 Engine）
 
-    // 曳光：细长加法混合的拉伸盒（几何体沿 +Z 延伸，配合 lookAt 使 +Z 指向目标）
+    // 曳光：细长拉伸盒 + 自定义着色器（几何沿 +Z，lookAt 后 +Z 指向目标）。
+    // 着色器做两件 MeshBasicMaterial 做不到的事：
+    //  1) 沿长度渐变：段头白热、段尾渐暗（真实曳光是拖尾衰减的光带，不是均匀亮棒）
+    //  2) 锥形收尾：顶点按 z 收窄束径（尾 40% → 头 100%），头粗尾细
+    // 几何 z∈[0,1]（translate 后），z=1 为段头
     const tGeo = new THREE.BoxGeometry(0.014, 0.014, 1)
     tGeo.translate(0, 0, 0.5)
-    const tMat = new THREE.MeshBasicMaterial({ color: 0xffdf9e, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })
+    const tMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uAlpha: { value: 0.85 },
+        uHead: { value: new THREE.Color(0xfff6d8) },
+        uTail: { value: new THREE.Color(0xd98a2b) },
+        uRush: { value: 0 },
+      },
+      vertexShader: /* glsl */`
+        varying float vZ;
+        void main() {
+          vZ = position.z;
+          vec3 p = position;
+          p.x *= mix(0.4, 1.0, position.z); // 锥形：尾细头粗
+          p.y *= mix(0.4, 1.0, position.z);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+        }`,
+      fragmentShader: /* glsl */`
+        uniform float uAlpha;
+        uniform vec3 uHead;
+        uniform vec3 uTail;
+        uniform float uRush;
+        varying float vZ;
+        void main() {
+          // 头部权重：z^1.5——前 30% 长度承载主要亮度，尾部拖一条渐熄余辉。
+          // uRush（末段冲刺 0..1）：头色向白热偏移——拉伸+白化+渐隐三效合一
+          float h = pow(vZ, 1.5);
+          vec3 head = mix(uHead, vec3(1.0), uRush * 0.5);
+          vec3 c = mix(uTail, head, h);
+          float a = uAlpha * (0.15 + 0.85 * h);
+          gl_FragColor = vec4(c * a, a);
+        }`,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
     this.tracers = []
+    // 段头飞行光珠 = 内核亮珠 + 外层 halo（双层才有"辉光"读法：亮芯 + 泛光，
+    // 阳光直射的亮场景里单层小精灵会被环境光"洗掉"，halo 保住存在感）
+    const glowMat = new THREE.SpriteMaterial({ map: Tex.spark(), color: 0xffedb8, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false })
+    const haloMat = new THREE.SpriteMaterial({ map: Tex.spark(), color: 0xffc97a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false })
     for (let i = 0; i < MAX_TRACERS; i++) {
       const m = new THREE.Mesh(tGeo, tMat.clone())
       m.visible = false
       m.matrixAutoUpdate = false
+      m.frustumCulled = false
       scene.add(m)
+      const glow = new THREE.Sprite(glowMat.clone())
+      glow.visible = false
+      glow.scale.setScalar(0.075)
+      scene.add(glow)
+      const halo = new THREE.Sprite(haloMat.clone())
+      halo.visible = false
+      halo.scale.setScalar(0.22)
+      scene.add(halo)
       // 飞行曳光段状态：from/to（钳制后起终点）、dist/dur（全程距离/时间）、
       // seg（段长 m）、width（束径倍率）——update 里沿弹道推短光段
       this.tracers.push({
-        mesh: m, life: 0, baseOp: 0.85, width: 1,
+        mesh: m, glow, halo, life: 0, baseOp: 0.85, width: 1,
         from: new THREE.Vector3(), to: new THREE.Vector3(),
         dist: 1, dur: 0.07, seg: 5,
       })
@@ -232,10 +283,21 @@ export class FX {
   calibrate(width, height, fovDeg) {
     this.sparks.setViewportScale(height, fovDeg)
     this.puffs.setViewportScale(height, fovDeg)
+    // 曳光束径随垂直 FOV 补偿：水平 FOV 固定 103°，宽屏/超宽屏的 vfov 更小，
+    // 世界系束径投影到屏幕会更细——按 tan 半角比把束径拉回 16:9(vfov≈70.5°)
+    // 基准的观感（限幅防极端长宽比）
+    const ref = Math.tan(THREE.MathUtils.degToRad(70.5 / 2))
+    this.tracerWScale = THREE.MathUtils.clamp(ref / Math.tan(THREE.MathUtils.degToRad(fovDeg / 2)), 0.75, 2)
   }
 
-  // style：曳光视觉参数（消音武器传更淡/更细/低饱和 —— 与更轻的枪声一致）
-  tracer(from, to, { opacity = 0.85, sat = 0.92, light = 0.72, width = 1 } = {}) {
+  // style：曳光视觉参数。hue 默认 0.11（暖黄，玩家曳光）；敌方还击传红调
+  // （hue ~0.02）——对枪瞬间一眼分清"哪条弹道是谁的"；消音武器传更淡/更细/
+  // 低饱和（与更轻的枪声一致）。
+  // impact：命中物类型——'wall'（暖色碎屑闪光）/ 'bot'（蓝白电火花：机器人
+  // 装甲导电）→ 光段到达时按材质着色迸接触闪光；false = 擦身而过不闪
+  // （Bot 曳光终点是相机近场钳制点，没有可打的表面）；true 兼容旧调用=暖色
+  tracer(from, to, style = {}, impact = 'wall') {
+    const { opacity = 0.85, sat = 0.92, light = 0.72, width = 1, hue: hueBase = 0.11 } = style
     // 近场钳制：端点离相机 <2m 时，盒体近端顶点的投影角尺寸爆炸，
     // 会把整条曳光拉成横穿屏幕的光柱（Bot 还击的束终点曾是相机位置，
     // 每次对枪失败都有一条戳脸光束）。贴脸端沿束方向推到 2m 外；
@@ -253,16 +315,37 @@ export class FX {
     t.from.copy(a)
     t.to.copy(b)
     t.dist = a.distanceTo(b)
-    // 飞行曳光：短光段以 ~240m/s 掠过弹道（近距快到只见一闪、远距一段亮线
-    // 飞向命中点），段长 5m——不是整条全亮的光束（起点即终点会一眼假）
+    // 飞行曳光：短光段以 ~240m/s 掠过弹道（远距一段亮线飞向命中点）。
+    // 近距（<8m，本训练器的典型交战距）切"闪现"模式：整条快闪 50ms——
+    // 飞行段在短弹道上只是一次位置抖动，观感不如一道即逝的光痕
     const SPEED = 240
-    t.dur = Math.max(0.028, t.dist / SPEED)
-    t.seg = Math.min(5, t.dist)
-    t.width = width
+    if (t.dist < 8) {
+      t.dur = 0.05
+      t.seg = t.dist
+    } else {
+      t.dur = Math.max(0.028, t.dist / SPEED)
+      t.seg = Math.min(5, t.dist)
+    }
+    t.width = width * (this.tracerWScale ?? 1)
     t.baseOp = opacity
-    t.life = t.dur
+    t.impact = impact
+    // 出生帧补偿（与枪口焰同法，第一百二十三轮）：曳光在 simStep 生成，
+    // 本帧 renderFrame 的 update 先扣整帧 dt 才首次上屏 → 实际可见寿命随
+    // 出生相位折损一帧。+半帧（8ms）补回平均损失；update 里 fade 按
+    // life/dur 计算，超额寿命会让首帧 fade 轻微 >1，无害（加法混合封顶）
+    t.life = t.dur + 0.008
     m.visible = true
-    m.material.color.setHSL(0.11 + vary() * 0.02, sat, light) // 暖黄微扰动
+    // 着色器双色调：段头白热偏亮（亮度上探）、段尾同色系压暗压灰。
+    // sat/light 来自 style（消音武器更淡更低饱和），hue 每发微扰动
+    const hue = hueBase + vary() * 0.02
+    const u = m.material.uniforms
+    u.uHead.value.setHSL(hue, Math.min(1, sat), Math.min(1, light + 0.26))
+    u.uTail.value.setHSL(hue, Math.min(1, sat * 0.85), light * 0.5)
+    u.uAlpha.value = opacity
+    // 每发亮度微抖动（±15%）：与色相抖动互补——连发曳光不是复制粘贴的光线
+    t.bright = 0.85 + vary() * 0.3
+    t.glow.material.color.setHSL(hue, Math.min(1, sat), Math.min(1, light + 0.2))
+    t.halo.material.color.setHSL(hue, Math.min(1, sat * 0.9), Math.min(1, light + 0.1))
     // 初始矩阵由 update() 铺设（段头此刻就在枪口）
   }
 
@@ -284,8 +367,10 @@ export class FX {
   // 枪口焰按武器风格参数化（默认=步枪）：
   //  suppressed：贴消音器的暗小火苗 + 弱光（消音枪不该有照明弹般的火球）
   //  heavy：大口径（Sheriff）更大更亮的火球与更硬的照明
-  //  opacity=焰基准不透明度（update 按其比例衰减）；lightPeak/lightDur=照明
-  muzzle(worldPos, { scale = 1, opacity = 0.9, lightPeak = 16, lightDur = 0.06, color = 0xffbe7a, flashColor } = {}) {
+  // opacity=焰基准不透明度（update 按其比例衰减）；
+  // lightPeak=照明峰值（绝对值）或 light=峰值倍率（×16，二者取先传者）
+  muzzle(worldPos, { scale = 1, opacity = 0.9, lightPeak = null, light = 1, lightDur = 0.06, color = 0xffbe7a, flashColor } = {}) {
+    const peak = lightPeak ?? 16 * light
     if (worldPos) this.flash.position.copy(worldPos)
     this.flash.visible = true
     this.flashBase = opacity
@@ -299,7 +384,7 @@ export class FX {
     if (worldPos) {
       this.flashLight.position.copy(worldPos)
       this.flashLight.color.setHex(color)
-      this.lightPeak = lightPeak
+      this.lightPeak = peak
       this.lightDur = lightDur
       this.lightLife = lightDur + 0.008
       // vmScene 通道同款闪光：枪口世界位换算到相机本地系（vmScene 世界系）。
@@ -309,9 +394,20 @@ export class FX {
       if (this.vmFlash && worldPos.isVector3) {
         this.vmFlash.position.copy(this.camera.worldToLocal(worldPos.clone()))
         this.vmFlash.color.setHex(color)
-        this.vmPeak = 1.2 * (lightPeak / 16)
+        this.vmPeak = 1.2 * (peak / 16)
       }
     }
+  }
+
+  // 爆闪照明点亮第一人称通道：爆点在数米外、且传普通坐标对象——muzzle 的
+  // vmFlash 映射分支不会触发；这里把 vmFlash 放到枪口正前方 0.45m（vmFlashLight
+  // 有效距离 0.7m 内），以道具类型色照亮枪身+手套（强度随 muzzle 设的
+  // lightLife/lightDur 同步衰减）
+  vmPopGlow(colorHex, peak = 2.5) {
+    if (!this.vmFlash) return
+    this.vmFlash.position.set(0, 0, -0.45)
+    this.vmFlash.color.setHex(colorHex)
+    this.vmPeak = peak
   }
 
   // 墙面/硬表面命中：碎屑火花 + 尘雾。地面（ny>0.7）火花减半、尘雾翻倍——
@@ -335,13 +431,20 @@ export class FX {
     }
   }
 
-  // 命中机器人：火花迸溅（爆头更密 + 泛红 + 白闪芯）
-  hitBurst(point, head) {
+  // 命中机器人（非致命）：火花迸溅（爆头更密 + 泛红 + 白闪芯）。
+  // dir=弹道方向（玩家→命中点）：反弹半球约束——火星朝玩家侧崩射。
+  // power=伤害力度（0.4-1.4）：火花密度/初速与踉跄幅度同因子联动——
+  // Sheriff 一记 55 伤火星又密又急，Classic 轻点稀稀拉拉
+  hitBurst(point, head, dir = null, power = 1) {
     const p = point ?? { x: 0, y: 1.3, z: 0 }
-    const n = head ? 18 : 11
+    const k = 0.7 + 0.5 * power
+    const n = Math.round((head ? 18 : 11) * k)
+    const spd = 0.8 + 0.3 * power
+    if (dir) _kd.set(dir.x, dir.y, dir.z).normalize().negate()
     for (let i = 0; i < n; i++) {
       _v.set(vary() - 0.5, vary() * 0.9, vary() - 0.5).normalize()
-        .multiplyScalar(1.4 + vary() * 3.2)
+      if (dir) _v.addScaledVector(_kd, 1.15).normalize()
+      _v.multiplyScalar((1.4 + vary() * 3.2) * spd)
       const warm = vary()
       this.sparks.emit(p.x, p.y, p.z, _v.x, _v.y, _v.z, {
         life: 0.18 + vary() * 0.3, size: 0.024 + vary() * 0.026,
@@ -359,18 +462,33 @@ export class FX {
     this.puffs.emit(p.x, p.y, p.z, 0, 0.4, 0, { life: 0.45, size: 0.09, sizeEnd: 0.3, r: 0.66, g: 0.6, b: 0.55, alpha: 0.3, drag: 1.8 })
   }
 
-  // 击杀：大爆发 + 膨胀冲击波环 + 光脉冲（机器人 = 电火花过载 + 上升烟柱）
-  killBurst(point, head) {
+  // 击杀：大爆发 + 膨胀冲击波环 + 光脉冲（机器人 = 电火花过载 + 上升烟柱）。
+  // streak=连杀数（1 起）：火花密度每级 +4（封顶 +16）、主灯与第一人称辉光
+  // 向金色递进、峰值抬升——高连杀"越打越烫"（红 #ff6a55 → 金 #ffd27a，
+  // 与击杀音的连杀升调同一语言）。
+  // dir=弹道方向（玩家→命中点）：火花被约束在反弹半球（朝玩家侧溅射）——
+  // 打在装甲上的火星往回崩，不是凭空全向爆
+  killBurst(point, head, streak = 1, dir = null, heavy = false) {
     const p = point ?? { x: 0, y: 1.3, z: 0 }
-    const n = head ? 44 : 30
+    const n = (head ? 44 : 30) + Math.min(16, (streak - 1) * 4)
+    if (dir) _kd.set(dir.x, dir.y, dir.z).normalize().negate() // 命中面反弹法线（朝玩家）
     for (let i = 0; i < n; i++) {
       _v.set(vary() - 0.5, vary() * 1.1 - 0.15, vary() - 0.5).normalize()
-        .multiplyScalar(2 + vary() * 4.6)
+      if (dir) _v.addScaledVector(_kd, 1.15).normalize() // 半球约束：基准朝玩家 + 散射
+      _v.multiplyScalar(2 + vary() * 4.6)
       const warm = vary()
       this.sparks.emit(p.x, p.y, p.z, _v.x, _v.y, _v.z, {
         life: 0.26 + vary() * 0.5, size: 0.026 + vary() * 0.03,
         r: 1, g: head ? 0.42 + warm * 0.35 : 0.6 + warm * 0.3, b: head ? 0.3 : 0.35, grav: 7, drag: 1.6,
       })
+    }
+    // 命中点白闪爆芯：爆头 4 粒大（0.09-0.14m），普通击杀 2 粒小（0.07-0.10m）
+    // ——对称但弱一档的命中"啪"闪，普通击杀也有分量、层级仍分明
+    const coreN = head ? 4 : 2
+    for (let i = 0; i < coreN; i++) {
+      _v.set(vary() - 0.5, vary() - 0.5, vary() - 0.5).normalize().multiplyScalar(0.8 + vary() * 1.4)
+      this.sparks.emit(p.x, p.y, p.z, _v.x, _v.y, _v.z,
+        { life: 0.055 + vary() * 0.035, size: head ? 0.09 + vary() * 0.05 : 0.07 + vary() * 0.03, r: 1, g: 1, b: 0.96, drag: 3.5 })
     }
     for (let i = 0; i < 6; i++) {
       this.puffs.emit(
@@ -386,17 +504,29 @@ export class FX {
     r.mesh.material.opacity = 0.85
     r.mesh.scale.setScalar(0.2)
     r.mesh.visible = true
-    r.life = r.dur = head ? 0.42 : 0.34
+    r.life = (r.dur = head ? 0.42 : 0.34) + 0.008 // +半帧出生补偿（瞬态族第四员）
     r.maxScale = head ? 2.0 : 1.5
-    // 光脉冲
+    // 光脉冲：主场景灯在击杀点（世界被照亮），第一人称通道同款辉光
+    // （枪身+手套吃到击杀光，峰值略高于枪口焰的 1.2——击杀读得出来）。
+    // 连杀递进：色向金 #ffd27a 插值（每级 22%，3 连杀起明显）、峰值 +0.25/级。
+    // heavy=大口径（Sheriff）：光脉冲更深更久（×1.25 峰值 / 0.22s 驻留）——
+    // 与它的深低频枪声、重锤击锤同一份"重"的语言
+    const k = Math.min(1, (streak - 1) * 0.22)
+    _kc.setHex(head ? 0xff6a55 : 0xffa050).lerp(_kg.setHex(0xffd27a), k)
     this.flashLight.position.set(p.x, p.y + 0.2, p.z)
-    this.flashLight.color.setHex(head ? 0xff6a55 : 0xffa050)
-    this.lightPeak = head ? 26 : 18
-    this.lightDur = 0.16
-    this.lightLife = this.lightDur
+    this.flashLight.color.copy(_kc)
+    this.lightPeak = ((head ? 26 : 18) + (streak - 1) * 0.25 * 16) * (heavy ? 1.25 : 1)
+    this.lightDur = heavy ? 0.22 : 0.16
+    this.lightLife = this.lightDur + 0.008 // +半帧出生补偿（与枪口焰/曳光同法）
+    if (this.vmFlash) {
+      this.vmFlash.position.set(0, 0, -0.5)
+      this.vmFlash.color.copy(_kc)
+      this.vmPeak = ((head ? 1.9 : 1.5) + (streak - 1) * 0.25) * (heavy ? 1.2 : 1)
+    }
   }
 
-  // 枪口烟（持续射击更浓）：顺着弹道方向的淡烟丝，heat 0..1 控制密度与尺寸
+  // 枪口烟（持续射击更浓）：顺着弹道方向的淡烟丝，heat 0..1 控制密度与尺寸。
+  // 高热烟色更暗更灰（未燃尽火药的浓烟）——连射久了不只烟多，烟也"变脏"
   muzzleSmoke(worldPos, dir, heat = 0) {
     const n = 2 + Math.round(heat * 3)
     for (let i = 0; i < n; i++) {
@@ -407,21 +537,25 @@ export class FX {
         dir.z * (0.5 + vary() * 0.8) + (vary() - 0.5) * 0.3,
         {
           life: 0.4 + vary() * 0.4 + heat * 0.3, size: 0.05,
-          sizeEnd: 0.18 + heat * 0.14, r: 0.78, g: 0.77, b: 0.75,
+          sizeEnd: 0.18 + heat * 0.14,
+          r: 0.78 - heat * 0.26, g: 0.77 - heat * 0.26, b: 0.75 - heat * 0.24,
           alpha: 0.15 + heat * 0.17, drag: 2.2,
         })
     }
   }
 
   // 抛壳（世界坐标抛壳口；refMatrix = 枪身世界矩阵 → 沿枪身右/上/后抛出）
-  // 爆头击杀：头盔从头部位置飞出（上抛 + 随机侧旋，落地反弹后淡出）
-  helmetPop(point) {
+  // 爆头击杀：头盔从头部位置飞出（上抛 + 随机侧旋，落地反弹后淡出）。
+  // dir=弹道方向（可选）：头盔顺着子弹来向被"掀飞"（动量守恒的读法），
+  // 与击杀辉光同帧强化爆头瞬间的力度感
+  helmetPop(point, dir = null) {
     const p = point ?? { x: 0, y: 1.6, z: 0 }
     const h = this.helmets[this.helmetIdx]
     this.helmetIdx = (this.helmetIdx + 1) % MAX_HELMETS
     const m = h.mesh
     m.position.set(p.x, p.y + 0.08, p.z)
     h.vel.set((vary() - 0.5) * 1.6, 2.6 + vary() * 1.2, (vary() - 0.5) * 1.6)
+    if (dir) h.vel.addScaledVector(dir, 1.2 + vary() * 0.6) // 顺弹道方向的掀飞冲量
     h.ang.set(vary() * 10 - 5, vary() * 10 - 5, vary() * 10 - 5)
     h.life = 1.4
     m.rotation.set(vary() * 3, vary() * 3, vary() * 3)
@@ -451,19 +585,44 @@ export class FX {
     for (const t of this.tracers) {
       if (t.life <= 0) continue
       t.life -= dt
-      if (t.life <= 0) { t.mesh.visible = false; continue }
+      if (t.life <= 0) {
+        t.mesh.visible = false
+        t.glow.visible = false
+        t.halo.visible = false
+        // 到达火花已移除（查重结论）：hitBurst/impact 在击发帧即出全套命中 FX，
+        // 曳光到达再补一簇小花是双份且晚 dist/240（40-100ms）错拍——
+        // 命中瞬间的读法以即时 FX 为准，曳光只负责"飞过去"的路径表现
+        continue
+      }
       // 飞行进度：段头从枪口冲向命中点，段尾落后 seg 米（钳在弹道内）
       const p = 1 - t.life / t.dur
       const head = p * t.dist
       const tail = Math.max(0, head - t.seg)
       const m = t.mesh
       _v.subVectors(t.to, t.from).normalize()
+      // 末段冲刺（彗尾效应）：最后 25% 行程光带纵向拉伸至 ×1.35——配合渐隐
+      // 读成"加速冲向命中点"的拖影（子弹不加速，视觉修辞成立）
+      const rush = t.life < t.dur * 0.25 ? 1 + 0.35 * (1 - t.life / (t.dur * 0.25)) : 1
+      m.material.uniforms.uRush.value = rush - 1 // 0..0.35，shader 内按 50% 白热偏移
       m.position.copy(t.from).addScaledVector(_v, tail)
       m.lookAt(t.to)
-      m.scale.set(t.width, t.width, Math.max(head - tail, 0.1))
+      m.scale.set(t.width, t.width, Math.max((head - tail) * rush, 0.1))
       m.updateMatrix()
-      // 末段 30% 渐隐（撞点前光段自然熄灭）
-      m.material.opacity = Math.min(1, t.life / (t.dur * 0.3)) * t.baseOp
+      // 末段 30% 渐隐（撞点前光段自然熄灭）；段头光珠随弹头飞行，头部更亮；
+      // 亮度乘每发抖动系数 t.bright（±15%，连发不重样）
+      const fade = Math.min(1, t.life / (t.dur * 0.3)) * (t.bright ?? 1)
+      m.material.uniforms.uAlpha.value = fade * t.baseOp
+      const gl = t.glow
+      gl.visible = true
+      gl.position.copy(t.from).addScaledVector(_v, head)
+      gl.material.opacity = fade * t.baseOp
+      gl.scale.setScalar((0.06 + 0.02 * t.width) * (0.7 + 0.3 * rush)) // 冲刺段光珠微缩=速度感
+      // halo：更大更淡的外层泛光（×0.35 透明度、×3 尺寸）——亮场景里的存在感
+      const ha = t.halo
+      ha.visible = true
+      ha.position.copy(gl.position)
+      ha.material.opacity = fade * t.baseOp * 0.35
+      ha.scale.setScalar(gl.scale.x * 3)
     }
     for (const d of this.decals) {
       if (d.life <= 0) continue
@@ -523,8 +682,19 @@ export class FX {
         h.mesh.position.y = 0.05
         h.vel.y *= -0.38
         h.vel.x *= 0.7; h.vel.z *= 0.7
+        // 碰撞火花补发：金属壳拍地迸几点暖白碎火，与 helmetClank 同帧——
+        // 弹点强度决定火花数（首次拍地 6 点，后续弹跳递减）
+        if (impactV > 0.9) {
+          const nSpk = Math.min(6, Math.round(impactV * 1.8))
+          for (let i = 0; i < nSpk; i++) {
+            _v.set((vary() - 0.5) * 2.4, 0.4 + vary() * 1.2, (vary() - 0.5) * 2.4)
+            this.sparks.emit(h.mesh.position.x, 0.05, h.mesh.position.z, _v.x, _v.y, _v.z,
+              { life: 0.1 + vary() * 0.12, size: 0.018 + vary() * 0.014, r: 1, g: 0.9, b: 0.72, grav: 9, drag: 2.5 })
+          }
+        }
         h.ang.multiplyScalar(0.55)
-        if (impactV > 0.9) this.onHelmetBounce?.(Math.min(1, impactV / 2.5))
+        // 带落点坐标：头盔在 10-25m 外弹地，必须空间化（否则"哐"在脑袋里响）
+        if (impactV > 0.9) this.onHelmetBounce?.(Math.min(1, impactV / 2.5), h.mesh.position.x, h.mesh.position.y, h.mesh.position.z)
         if (Math.abs(h.vel.y) < 0.5) h.vel.y = 0
       }
       h.mesh.rotation.x += h.ang.x * dt
@@ -546,7 +716,7 @@ export class FX {
 
   // 回合重置：清掉上一局残留的弹孔/曳光/弹壳/火花/烟/环/头盔 —— 新回合干净靶场
   clearAll() {
-    for (const t of this.tracers) { t.life = 0; t.mesh.visible = false }
+    for (const t of this.tracers) { t.life = 0; t.mesh.visible = false; t.glow.visible = false; t.halo.visible = false }
     for (const d of this.decals) { d.life = 0; d.mesh.visible = false }
     for (const s of this.shells) { s.life = 0; s.mesh.visible = false }
     for (const r of this.rings) { r.life = 0; r.mesh.visible = false }
@@ -563,5 +733,8 @@ const _dq = new THREE.Quaternion()
 const _fwd = new THREE.Vector3(0, 0, 1)
 const _n = new THREE.Vector3()
 const _v = new THREE.Vector3()
+const _kd = new THREE.Vector3()
+const _kc = new THREE.Color()
+const _kg = new THREE.Color()
 const _ta = new THREE.Vector3()
 const _tb = new THREE.Vector3()

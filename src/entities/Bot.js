@@ -323,8 +323,15 @@ export class Bot {
     const yaw = this.mesh.rotation.y
     const lx = this.velX * Math.cos(yaw)
 
-    // 相位始终随位移推进（里程积分），跨低速段也不失锁
+    // 相位始终随位移推进（里程积分），跨低速段也不失锁。
+    // 脚步声：walkPhase 每跨过 kπ = 走满一步（STEP_LEN 位移），恰是 |cos|=1
+    // 的落脚瞬间——听到的步声与看到的落脚同拍；onFootstep 由 BotManager 注入，
+    // 传连续速度（脚步随加速渐强，不是两档跳变）
+    const kPrev = Math.floor(this.walkPhase / Math.PI)
     this.walkPhase += speed * dt * Math.PI / STEP_LEN
+    if (speed > 0.5 && Math.floor(this.walkPhase / Math.PI) > kPrev) {
+      this.onFootstep?.(speed)
+    }
 
     if (speed > 0.3) {
       // 摆动取 cos：walkPhase = kπ（每步整除 STEP_LEN）时 |cos|=1，正是落脚（步距最开）瞬间
@@ -463,6 +470,7 @@ export class Bot {
   startDeath() {
     this.mode = 'dying'
     this.deathT = 0
+    this._landed = false
     this.velX = 0
     this.deathRoll = (vary() - 0.5) * 0.55 // 带随机侧倒更自然
     this.flinch = 0
@@ -497,6 +505,11 @@ export class Bot {
       this.mesh.rotation.z = this.deathRoll * e
       this.mesh.position.y = -e * 0.05
       this.blobMat.opacity = Math.max(0, 1 - t * 1.4)
+      // 触地闷响：ease-out 立方在 t≈0.63 转 angle 已达 ~95%=机体拍地帧，只响一次
+      if (!this._landed && this.deathT > CONFIG.bot.deathTime * 0.63) {
+        this._landed = true
+        this.onDeathLand?.()
+      }
       if (this.deathT > 0.75) this.setOpacity(Math.max(0, 1 - (this.deathT - 0.75) / 0.45))
       if (this.deathT > 1.2) this.hide()
       return
@@ -583,10 +596,12 @@ export class Bot {
   }
 
   // 受击反馈：泛红自发光 + 踉跄（爆头白热闪 + 更强后仰）
-  flashHit(head = false) {
+  // power=伤害力度（0.4-1.4，按 dmg/55 归一）：踉跄幅度与命中火花密度共用——
+  // 重枪（Sheriff 55 伤）打得踉跄更深、火星更密，轻枪点到为止
+  flashHit(head = false, power = 1) {
     this.hitFlash = Math.max(CONFIG.bot.hitFlashTime, 0.11)
     this.flinch = 1
-    this.flinchAmp = head ? 0.28 : 0.15
+    this.flinchAmp = (head ? 0.28 : 0.15) * (0.7 + 0.5 * power)
     const c = head ? 0xffd9cf : 0xff4630
     for (const m of Object.values(this.mats)) m.emissive?.setHex?.(c)
   }

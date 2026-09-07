@@ -102,3 +102,67 @@ describe('_syncLead（WebAudio 输出延迟补偿）', () => {
     expect(a._syncLead()).toBeCloseTo(0.012, 6)
   })
 })
+
+// 音量滑杆 → 主增益的感知补偿（幂律 0.62）：小音量端弱信号（脚步/落点）
+// 不被压进听阈以下，满音量端点不变。锚定：0.1 → 0.24、0.5 → 0.65、1 → 1。
+describe('setVolume（低音量感知补偿曲线）', () => {
+  const gainOf = (v) => {
+    const a = new AudioSys()
+    a.master = { gain: { value: 0 } }
+    a.setVolume(v)
+    return a.master.gain.value
+  }
+
+  it('幂律 0.62：0.1 → ~0.24（线性只有 0.1，弱信号得以保留）', () => {
+    expect(gainOf(0.1)).toBeCloseTo(0.24, 2)
+  })
+
+  it('中段 0.5 → ~0.65', () => {
+    expect(gainOf(0.5)).toBeCloseTo(0.65, 2)
+  })
+
+  it('端点：0 → 0，1 → 1（满音量不变）', () => {
+    expect(gainOf(0)).toBe(0)
+    expect(gainOf(1)).toBeCloseTo(1, 6)
+  })
+
+  it('单调性：补偿曲线随滑杆单调递增（0.2 < 0.5 < 0.8）', () => {
+    expect(gainOf(0.2)).toBeLessThan(gainOf(0.5))
+    expect(gainOf(0.5)).toBeLessThan(gainOf(0.8))
+  })
+})
+
+// 用户替换音效的响度归一（_userGain）：自有录音电平参差，按 RMS 归一到
+// 合成基准 0.18、±12dB（×0.25/×4）限幅。锚定：基准录音→1、过响→压、
+// 过轻→抬、极端值钳制、静音/异常不产生增益。
+describe('_userGain（用户音效响度归一）', () => {
+  const stub = (rms) => {
+    // 构造 1 秒、RMS≈rms 的单声道伪 buffer（方波 RMS=振幅，精确可控）
+    const n = 44100
+    const d = new Float32Array(n)
+    for (let i = 0; i < n; i++) d[i] = ((i % 2) ? rms : -rms)
+    return { getChannelData: () => d, length: n }
+  }
+  const a = new AudioSys()
+
+  it('基准电平（RMS 0.18）→ 增益 ≈1', () => {
+    expect(a._userGain(stub(0.18))).toBeCloseTo(1, 1)
+  })
+
+  it('过响录音（RMS 0.72，+12dB）→ 压到 ×0.25', () => {
+    expect(a._userGain(stub(0.72))).toBeCloseTo(0.25, 2)
+  })
+
+  it('过轻录音（RMS 0.02）→ 抬到 ×4 封顶（理论 9）', () => {
+    expect(a._userGain(stub(0.02))).toBe(4)
+  })
+
+  it('中等偏轻（RMS 0.09）→ ×2 线性区内', () => {
+    expect(a._userGain(stub(0.09))).toBeCloseTo(2, 1)
+  })
+
+  it('静音/异常 → 不施加增益（返回 1）', () => {
+    expect(a._userGain(stub(0))).toBe(1)
+    expect(a._userGain({ getChannelData: () => new Float32Array(16), length: 16 })).toBe(1)
+  })
+})

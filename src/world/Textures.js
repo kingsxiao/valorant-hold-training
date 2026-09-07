@@ -337,7 +337,7 @@ const polymer = () => get('polymer', () => {
       cg.strokeStyle = 'rgba(0,0,0,0.4)'; cg.lineWidth = 2.5
       cg.beginPath(); cg.moveTo(x, 0); cg.lineTo(x, s); cg.stroke()
       hg.strokeStyle = '#5f5f5f'; hg.lineWidth = 3.5
-      hg.beginPath(); cg.moveTo(x, 0); cg.lineTo(x, s); cg.stroke()
+      hg.beginPath(); hg.moveTo(x, 0); hg.lineTo(x, s); hg.stroke()
     }
     // 握持区磨亮（常用处聚合物发亮）
     for (let i = 0; i < 8; i++) {
@@ -468,7 +468,7 @@ const wall = () => get('wall', () => {
       cg.strokeStyle = 'rgba(255,250,240,0.16)'; cg.lineWidth = 1.6
       cg.beginPath(); cg.moveTo(x + 4, 0); cg.lineTo(x + 4, s); cg.stroke()
       hg.strokeStyle = '#4a4a4a'; hg.lineWidth = 8
-      hg.beginPath(); cg.moveTo(x, 0); hg.lineTo(x, s); hg.stroke()
+      hg.beginPath(); hg.moveTo(x, 0); hg.lineTo(x, s); hg.stroke()
     }
     // 腰线（青绿漆带，带漆面流淌）
     cg.fillStyle = '#3d7068'; cg.fillRect(0, s * 0.70, s, s * 0.062)

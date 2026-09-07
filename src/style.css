@@ -75,6 +75,17 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
   /* 静态暗角：视线聚焦画面中心，纯 CSS 零成本；很淡，不压暗准星区域 */
   background: radial-gradient(ellipse at center, transparent 58%, rgba(4, 8, 14, 0.32) 100%); }
 
+/* 闪光致盲白屏：FlashSystem 插在 #hud 首位——准星/弹药等 HUD 按层序叠于其上
+   （与游戏内"被闪时 HUD 仍可见"一致）。径向渐变：中心纯白、边缘略透——渐褪
+   时边缘先透出一点视野，接近游戏闪屏的收束观感；透明度每帧直写（0.06s 快速
+   拉满 → 到期 1s 线性渐褪），不用 CSS 过渡 */
+.flash-blind {
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse at center, #fff 0%, #fff 58%, rgba(255, 255, 255, 0.86) 100%);
+  opacity: 0;
+  will-change: opacity;
+}
+
 /* 通用 HUD 块：直角 + 角标括号 + 顶部微高光 */
 .hud-block {
   position: absolute;
@@ -349,6 +360,8 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 .ch-group > .ch-toggle { display: block; width: 100%; text-align: left; }
 /* 分组关闭时子设置灰显不可点（对应游戏面板置灰） */
 .ch-group.off .ch-sub { opacity: 0.35; pointer-events: none; }
+/* 子设置单列：误差行（开关+滑条+数值）比普通行宽，两列网格会把滑条压成零宽 */
+.ch-group .slider-grid { grid-template-columns: 1fr; }
 .ch-toggle.sm { width: 42px; flex: none; padding: 4px 0; text-align: center; font-size: 12px; }
 .ch-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
 .ch-swatch { width: 32px; height: 24px; border: none; cursor: pointer; position: relative; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45); }

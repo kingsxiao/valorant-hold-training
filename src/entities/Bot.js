@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { CONFIG } from '../core/Config.js'
+import { groundStep, accelFor } from '../core/GroundMotion.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
 import { raySphere } from '../world/World.js'
@@ -45,7 +46,8 @@ export class Bot {
     this.foreLean = 0   // 上身前倾量（cross 顺跑向跑时的奔跑重心，负 rot.x）
     this._foreW = 0     // 步态的前进权重（wFore>0 时才前倾：侧移对枪保持上身立直）
     this.plantT = 0     // 急停卸力下沉的剩余时间
-    this._prevSpeed = 0 // 检测"高速→近停"跨越，触发一次 plant settle
+    this._prevSpeed = 0 // 上一 tick 速度（调试/平滑用）
+    this._wasFast = false // 高速闩锁：本条命跑出过 >2.2 m/s（近停时据此触发卸力下沉）
     this.flinch = 0      // 受击踉跄相位（0~1+，衰减）
     this.flinchAmp = 0   // 本次踉跄后仰幅度
     this.deathRoll = 0   // 死亡侧倒角
@@ -379,8 +381,12 @@ export class Bot {
     this.foreLean += (foreTarget - this.foreLean) * Math.min(1, dt * foreRate)
     this.mesh.rotation.x = this.foreLean
 
-    // counter-strafe 卸力：高速 → 近停瞬间触发一次短促下沉（重心急停的重量感）
-    if (this._prevSpeed > 2.2 && speed <= 1.0) this.plantT = 0.16
+    // counter-strafe 卸力：高速跑过/拉出的 Bot 减速到近停时触发一次短促下沉
+    // （重心急停的重量感）。摩擦模型下速度逐 tick 递减（单 tick 降幅 ~0.3 m/s），
+    // 单帧跨过"2.2 → ≤1.0"不可能发生 —— 用高速闩锁：只要出现过 >2.2 就记住，
+    // 降到 1.0 以下那一刻卸力一次
+    if (speed > 2.2) this._wasFast = true
+    else if (this._wasFast && speed <= 1.0) { this._wasFast = false; this.plantT = 0.16 }
     this._prevSpeed = speed
     if (this.plantT > 0) {
       this.plantT = Math.max(0, this.plantT - dt)
@@ -418,6 +424,7 @@ export class Bot {
     this._foreW = 0
     this.plantT = 0
     this._prevSpeed = 0
+    this._wasFast = false
     if (this.legL) { this.legL.rotation.set(0, 0, 0); this.legR.rotation.set(0, 0, 0) }
     this.setOpacity(1)
     this.blobMat.opacity = 1
@@ -455,15 +462,15 @@ export class Bot {
   now() { return this.manager ? this.manager.now() : performance.now() / 1000 } // 跟随游戏时钟（暂停时冻结）
 
   moveToward(targetVelX, dt) {
-    const B = CONFIG.bot
-    // 指令归零/反向 = counter-strafe 急停：与玩家同规则享受反向减速倍率
-    // （55×1.6=88 m/s²，5.4→0 约 61ms，peek 急停的节奏与真人一致）
-    const counter = (targetVelX === 0 || this.velX * targetVelX < 0)
-      ? CONFIG.movement.counterStrafeMult
-      : 1
-    const a = (Math.abs(targetVelX) > Math.abs(this.velX) ? B.accel : B.decel * counter) * dt
-    if (this.velX < targetVelX) this.velX = Math.min(targetVelX, this.velX + a)
-    else this.velX = Math.max(targetVelX, this.velX - a)
+    // 与玩家同款地面移动模型（core/GroundMotion.js）：加速 18.75 m/s²@步枪档、
+    // 摩擦 28.6+3.3v 急停（5.4→0 ≈0.147s，对齐 Riot_Classick 官方停稳 0.160s；
+    // 反向键无额外加成）。Bot 启停节奏 = 真人 peek 的节奏
+    const M = CONFIG.movement
+    this.velX = groundStep(this.velX, targetVelX, {
+      accel: accelFor(targetVelX, M.groundAccel, M.runSpeed),
+      decelFlat: M.groundDecelFlat,
+      decelDrag: M.groundDecelDrag,
+    }, dt)
     this.pos.x += this.velX * dt
   }
 
@@ -583,8 +590,6 @@ export class Bot {
       this.mesh.rotation.x = k * this.flinchAmp
       this.mesh.position.y -= k * 0.025
     }
-
-    ctx.drive?.(this, dt)
 
     _v.copy(this.prevPos).lerp(this.pos, ctx.alpha ?? 1)
     this.mesh.position.x = _v.x

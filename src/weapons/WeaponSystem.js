@@ -457,6 +457,8 @@ export class WeaponSystem {
 
   updateViewmodel(dt, mouseDx, mouseDy) {
     const p = this.player
+    // 摆动/侧倾的移速基准分武器化（副武器 5.73 满速时 bob/roll 与步枪各自归一）
+    const baseSpeed = CONFIG.movement.runSpeed * (this.weapon.moveSpeedMult ?? 1)
     // ---- 弹簧组步进（后坐/随机微抖/落地颠簸/手部滞后）----
     this.sKick.step(dt); this.sYaw.step(dt); this.sRoll.step(dt)
     this.sDip.step(dt); this.sFlinch.step(dt)
@@ -470,7 +472,7 @@ export class WeaponSystem {
     this.swayX += (-mouseDx * 0.00012 - this.swayX) * Math.min(1, dt * 12)
     this.swayY += (-mouseDy * 0.00012 - this.swayY) * Math.min(1, dt * 12)
     // 移动起伏
-    const speedRatio = Math.min(1, p.moveSpeed / CONFIG.movement.runSpeed)
+    const speedRatio = Math.min(1, p.moveSpeed / baseSpeed)
     this.bobT += dt * (6 + speedRatio * 6)
     const bob = p.grounded ? Math.sin(this.bobT) * 0.006 * speedRatio : 0
     const bobX = p.grounded ? Math.cos(this.bobT * 0.5) * 0.004 * speedRatio : 0
@@ -496,9 +498,9 @@ export class WeaponSystem {
     }
     // 侧移手感对：枪身轻微反向倾 + 平移滞后拖尾（急停时摆回）
     const strafe = p.vel.x * Math.cos(p.yaw) - p.vel.z * Math.sin(p.yaw)
-    const rollT = -strafe / CONFIG.movement.runSpeed * 0.045
+    const rollT = -strafe / baseSpeed * 0.045
     this.strafeRoll += (rollT - this.strafeRoll) * Math.min(1, dt * 9)
-    this.strafeLag += (-strafe / CONFIG.movement.runSpeed * 0.014 - this.strafeLag) * Math.min(1, dt * 8)
+    this.strafeLag += (-strafe / baseSpeed * 0.014 - this.strafeLag) * Math.min(1, dt * 8)
     this.vmHolder.position.set(
       this.vmBase.x + this.swayX + bobX + breatheX + this.strafeLag,
       this.vmBase.y + this.swayY + bob - lower - crouchDrop + breatheY - this.sDip.x - this.airK * 0.016,
@@ -529,8 +531,8 @@ export class WeaponSystem {
     const trigRate = trigTarget > this.trig ? 26 : 10
     this.trig += (trigTarget - this.trig) * Math.min(1, dt * trigRate)
     this.grip = Math.max(0, this.grip - dt * 7)
-    // 待机微动强度：静止满幅、移动收敛（与呼吸摆动同一因子逻辑）
-    const idleFactor = 1 - Math.min(1, this.player.moveSpeed / CONFIG.movement.runSpeed)
+    // 待机微动强度：静止满幅、移动收敛（与呼吸摆动同一因子逻辑，移速基准分武器化）
+    const idleFactor = 1 - Math.min(1, this.player.moveSpeed / (CONFIG.movement.runSpeed * (this.weapon.moveSpeedMult ?? 1)))
     for (const side of ['right', 'left']) {
       const h = ha[side]
       if (!h) continue

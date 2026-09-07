@@ -80,8 +80,8 @@ export class BotManager {
       return
     }
 
-    const ctx = { player: this.player, alpha, drive: null }
-    this._stepHold(dt, ctx)
+    const ctx = { player: this.player, alpha }
+    this._stepHold(dt)
 
     // 脚步声由 Bot.step 内置（与步频同步的空间音），这里不再重复触发
     for (const b of this.bots) {
@@ -109,13 +109,13 @@ export class BotManager {
     return { slots: [{ nextAt: 0, bot: null }] }
   }
 
-  _stepHold(dt, ctx) {
+  _stepHold(dt) {
     if (this.now() < this.countdownUntil) return // 倒计时内不出人
     const h = this.hold ??= this._initHold()
-    for (const slot of h.slots) this._stepSlot(slot, dt, ctx)
+    for (const slot of h.slots) this._stepSlot(slot, dt)
   }
 
-  _stepSlot(slot, dt, ctx) {
+  _stepSlot(slot, dt) {
     const nowMs = this.now() * 1000
     const activeBot = slot.bot && slot.bot.active && slot.bot.mode === 'peek' ? slot.bot : null
 
@@ -157,7 +157,6 @@ export class BotManager {
       b.slot = slot
       slot.bot = b
       slot.nextAt = 0
-      void ctx
       return
     }
 
@@ -275,6 +274,18 @@ export class BotManager {
     for (const slot of this.hold?.slots ?? []) { slot.bot = null; slot.nextAt = 0 }
     for (const b of this.bots) {
       if (b.active && b.mode === 'peek') b.hide()
+    }
+  }
+
+  // 敌方闪光起爆后由 main 调用："闪拉"配合——下一波 peek 提前到起爆后 ~0.5-1s
+  // （本波已在场的让它演完，只影响未排程/晚排程的槽位）
+  urgeNextPeek(afterSec = 0.8) {
+    const h = this.hold
+    if (!h || this.now() < this.countdownUntil) return
+    const target = (this.now() + afterSec) * 1000
+    for (const slot of h.slots) {
+      if (slot.bot?.active) continue
+      slot.nextAt = Math.min(slot.nextAt > 0 ? slot.nextAt : Infinity, target)
     }
   }
 

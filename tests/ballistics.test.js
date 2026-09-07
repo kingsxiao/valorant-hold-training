@@ -64,14 +64,14 @@ describe('spreadAt 移动散布', () => {
     expect(s999).toBeCloseTo(V.spread.max)
   })
 
-  it('走路（50% 速）锚点精确命中 walk 值（分段曲线中间锚）', () => {
-    expect(spreadAt(V, { speedRatio: 0.5, crouched: false, grounded: true, sprayIndex: 0 })).toBeCloseTo(V.spread.walk)
+  it('走路（静步 62.8% 速）锚点精确命中 walk 值（分段曲线中间锚）', () => {
+    expect(spreadAt(V, { speedRatio: CONFIG.movement.walkMult, crouched: false, grounded: true, sprayIndex: 0 })).toBeCloseTo(V.spread.walk)
   })
 
   it('蹲走叠加 crouchMove 惩罚：比蹲立大、比站走小', () => {
     const crouchStill = spreadAt(V, { speedRatio: 0, crouched: true, grounded: true, sprayIndex: 0 })
-    const crouchMove = spreadAt(V, { speedRatio: 0.34, crouched: true, grounded: true, sprayIndex: 0 }) // 蹲姿满速
-    const walk = spreadAt(V, { speedRatio: 0.5, crouched: false, grounded: true, sprayIndex: 0 })
+    const crouchMove = spreadAt(V, { speedRatio: CONFIG.movement.crouchMult, crouched: true, grounded: true, sprayIndex: 0 }) // 蹲姿满速
+    const walk = spreadAt(V, { speedRatio: CONFIG.movement.walkMult, crouched: false, grounded: true, sprayIndex: 0 })
     expect(crouchMove).toBeCloseTo(V.spread.stand * V.spread.crouchMult + V.spread.crouchMove)
     expect(crouchMove).toBeGreaterThan(crouchStill)
     expect(crouchMove).toBeLessThan(walk)

@@ -11,13 +11,21 @@ export const CONFIG = {
   },
 
   movement: {
-    runSpeed: 5.4,          // m/s 步枪全速奔跑（Valorant 主武器跑速）
-    knifeSpeed: 6.75,       // m/s 持刀跑速
-    walkMult: 0.5,          // Shift 静步 = 50%（且无声）
+    // 分档跑速（Fandom 维基各武器页 infobox，2021→2026 稳定口径）：
+    //   步枪/狙/重机枪 5.4 · 副武器与 SMG 5.73 · 霰弹枪 5.06 · 刀 6.75
+    //   各枪实际跑速 = runSpeed × weapons.*.moveSpeedMult
+    runSpeed: 5.4,          // m/s 基准跑速（= 步枪档）
+    knifeSpeed: 6.75,       // m/s 持刀跑速（维基 Melee 页）
+    walkMult: 0.628,        // Shift 静步 = 62.8%（≈3.39 m/s；Riot_Classick 官方实测
+                            //   走路级精度门槛 = 61% 速度，与通行引用 3.39 m/s 互证）
     crouchMult: 0.34,       // 蹲下移速 ≈ 1.8 m/s
-    groundAccel: 55,        // m/s² 地面加速（~0.1s 达全速，接近游戏的急促加速感）
-    groundDecel: 55,        // m/s² 松键滑行减速
-    counterStrafeMult: 1.6, // 按反方向键时的额外减速倍率（急停/counter-strafe）
+    // 地面启停 = 无畏契约摩擦模型（社区实测推导 + Riot 开发者 Riot_Classick 官方
+    // 急停里程碑互证）：输入方向恒定加速；松键/降档/反向 = dv/dt = -(flat + drag·v)。
+    // 反向键无额外减速加成（摩擦恒大于加速；官方实测 counter-strafe 仅省 ~10ms，非 CS 机制）
+    groundAccel: 18.75,     // m/s² 持步枪实测加速（按目标速度等比缩放 → 各档位 ≈0.29s 达标）
+    groundDecelFlat: 28.6,  // m/s² 恒定摩擦分量
+    groundDecelDrag: 3.3,   // /s 速度比例阻尼（5.4→61% 0.055s / 25% 0.104s / 停稳
+                            //   0.147s，复现官方里程碑 0.055/0.104/0.160）
     airAccel: 4,            // 空中操控加速度
     gravity: 22,            // m/s²（跳跃高度 ≈0.79m、滞空 ≈0.54s，接近游戏跳跃弧线）
     jumpVel: 5.9,
@@ -94,7 +102,7 @@ export const CONFIG = {
       ],
       spread: { stand: 0.4, walk: 1.5, run: 2.7, jump: 7.4, crouchMult: 0.75, crouchMove: 0.5, max: 1.8 },
       recoil: { recoverTime: 0.35, viewPunch: 0.45, punchRecover: 8, protected: 6, swingTime: 0.6 },
-      moveSpeedMult: 1.0,
+      moveSpeedMult: 1.0611,                                      // 副武器跑速 5.73 m/s（维基 infobox）
       vmKick: 0.03,
       sound: 'pistol',
     },
@@ -108,7 +116,7 @@ export const CONFIG = {
       ],
       spread: { stand: 0.3, walk: 1.4, run: 2.6, jump: 7.3, crouchMult: 0.77, crouchMove: 0.5, max: 1.65 },
       recoil: { recoverTime: 0.3, viewPunch: 0.35, punchRecover: 8.5, protected: 6, swingTime: 0.6 },
-      moveSpeedMult: 1.0,
+      moveSpeedMult: 1.0611,                                      // 副武器跑速 5.73 m/s（维基 infobox）
       vmKick: 0.024,                                             // 消音手枪更轻
       suppressed: true,                                          // 消音视觉：枪口焰/曳光/枪口烟同步收敛
       sound: 'pistol_suppressed',
@@ -122,12 +130,10 @@ export const CONFIG = {
     },
   },
 
-  // ---- 机器人（模拟真人 peek：与玩家同移速模型）----
+  // ---- 机器人（模拟真人 peek：与玩家同移速/启停物理模型，见 core/GroundMotion.js）----
   bot: {
     health: 100,
-    moveSpeed: 5.4,         // Bot 拉出角度的横移速度 = 玩家全速
-    walkSpeed: 2.7,
-    accel: 55, decel: 55,   // 与玩家一致的启停（counter-strafe 急停）
+    moveSpeed: 5.4,         // Bot 横移速度 = 持步枪跑速（Bot 持枪 5.4 档，与玩家对枪时同速）
     aimTimeMs: 450,         // Bot 完全可见后超此时限未击杀 → 对枪失败（Bot 缩回，玩家无伤害）
     hitFlashTime: 0.09,
     deathTime: 0.55,
@@ -143,6 +149,33 @@ export const CONFIG = {
     crossChance: 0.5,       // 每波风格：侧面跑过（贯穿缺口顺跑向）vs 横向拉出（肩peek 拉出对枪）
     pullJiggleChance: 0.3,  // 拉出波里"露头即缩"jiggle-peek 的概率（拉到中段折返）
     pullHoldMaxMs: 2400,    // 拉出后站定对枪的兜底时长（可见判负之外防挂场，如玩家挪位断 LOS）
+  },
+
+  // ---- 闪光干扰（敌方投掷 1:1 数值，来源：Fandom 维基 2026-09 各技能页 + Deployment types）----
+  // 通用致盲模型：维基定性描述的参数化近似 —— 直视满时长 / 背对轻微短暂 /
+  // 超远距离免疫；到期后白屏 1 秒渐褪（1 秒为维基确认值）
+  flash: {
+    intervalMin: 9,        // 敌方闪光事件随机间隔（s）
+    intervalMax: 17,
+    firstMin: 5,           // GO 后首次闪光延迟（s）
+    firstMax: 9,
+    fullDist: 18,          // 距离衰减：≤18m 满时长，70m 线性归零（近似口径）
+    zeroDist: 70,
+    fovHalf: 51.5,         // 半水平 FOV（103°/2）：起爆点在视野内 = 直视
+    backFactor: 0.08,      // 完全背对时长系数（"轻微短暂致盲"）
+    angleExp: 2,           // 视野外随角度的衰减幂次
+    fadeTime: 1,           // 致盲到期后白屏渐褪 1s（维基确认值）
+    // KAY/O FLASH/drive：Class 2 投掷物（1800uu/s=18m/s、重力系数 0.3×9.8=2.94），
+    // 总引信 1.6s；v10.06 起首次弹跳后改为 0.8s 引信（不延长剩余时间）；最大致盲 2.25s（v11.08 起双手同值）
+    kayo: { speed: 18, gravity: 2.94, maxFuse: 1.6, bounceFuse: 0.8, telegraph: 0.3, maxBlind: 2.25, restitution: 0.32 },
+    // Skye Guiding Light：导弹 18m/s 无重力、最长飞行 2s（v7.04）、到时自动起爆（v8.01）；
+    // 最大致盲 1→2.25s 随飞行 0.75s 充能（v5.07，v10.00 修复生效）；手动激活后 0.3s 起爆（v3.06）。
+    // 敌方操控近似：瞄点实时跟在玩家视线前方 2.2m，急转自然减速 → 到位后绕人盘旋
+    // 等充能，充满即激活（拿到满 2.25s 的 pop flash）
+    skye: { speed: 18, maxFlight: 2, chargeTime: 0.75, minBlind: 1, maxBlind: 2.25, activationWindup: 0.3, turnRate: 3.4, aimAhead: 2.2, popDist: 4.5 },
+    // Phoenix Curveball：Fixed 路径导弹（无重力、左/右曲），cast→起爆 0.6s（v11.00）、
+    // 最大致盲 1.5s（v5.01）。飞行速度无公开值：按对局观察 ~9m 落点 ÷ 0.6s ≈ 15m/s（README 已知边界）
+    phoenix: { speed: 15, windup: 0.6, maxBlind: 1.5 },
   },
 
   graphics: {

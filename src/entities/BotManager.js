@@ -10,6 +10,14 @@ export const MODE_INFO = { label: '架枪对枪', desc: 'Bot 侧面跑过/横向
 
 const rand = (a, b) => a + Math.random() * (b - a)
 
+// 池调度纯逻辑：池未满 → null（新建，每只 Bot 构造时随机抽一名英雄，cap 只
+// 覆盖全英雄池）；池满 → 从休眠 Bot 中随机挑一只复用（出场英雄波次轮换）。
+// cap=1（单模板/程序化假人）时随机区间收缩为唯一一只 = 原「复用第一只」行为
+export function pickIdleBot(idle, poolSize, cap, random = Math.random) {
+  if (poolSize < cap) return null
+  return idle[Math.floor(random() * idle.length)]
+}
+
 export class BotManager {
   constructor({ scene, world, map, audio, player }) {
     this.scene = scene; this.world = world; this.map = map
@@ -56,7 +64,12 @@ export class BotManager {
   }
 
   _bot() {
-    let b = this.bots.find(x => !x.active && x.mode !== 'dying') // 复用已播完死亡动画的 Bot（隐藏后 mode 已归位 idle）
+    // 池随英雄模板数建满（每只 Bot 构造时随机抽一名英雄 → 4 只覆盖全池）；满后
+    // 从休眠 Bot 中随机挑一只复用 —— 出场英雄波次轮换，不整局锁死一名。单模板/
+    // 程序化假人 cap=1，退化为「复用唯一一只」（原行为）
+    const cap = Bot.customTemplates?.length || 1
+    const idle = this.bots.filter(x => !x.active && x.mode !== 'dying')
+    let b = pickIdleBot(idle, this.bots.length, cap)
     if (!b) {
       b = new Bot(this.scene, this.world); b.manager = this; this.bots.push(b)
       // Bot 脚步声（空间化 HRTF）：墙后 Bot 拉出/跑过的方位信息——与步态

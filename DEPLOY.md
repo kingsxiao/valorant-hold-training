@@ -140,3 +140,62 @@ node scripts/smooth-normals.mjs public/models/glove.glb
 ```
 
 两脚本均幂等（已有 UV / 已平滑则无操作或效果一致），内置 GLB 已处理完毕。
+
+## 附：无畏契约模型获取与转换管线（2026-09-08）
+
+> ⚠ 下述资源均为**非官方游戏提取件，无再分发授权**——仅限个人本地使用，请自行决定是否推送到远端。
+
+### 来源清单
+
+| 内容 | 来源 | 路径/文件 |
+|---|---|---|
+| 英雄（jett/phoenix/sage/sova，带贴图+kamae 待机动画，UE 骨架） | GitHub 粉丝仓库 [Valorant-3D-Immersive-Guide](https://github.com/abdullah-nadeem-lodhi/Valorant-3D-Immersive-Guide)（Sketchfab 导出） | `dist/{jett,phoenix,sage,sova}/*_animated.glb` → 拷为 `public/models/agent-*.glb` |
+| 武器（32 把 .blend：Vandal/Phantom/Sheriff/Classic/Ghost/Operator/Odin…含皮肤变体） | YouTube Rocklan 模型包的 Google Drive 文件夹 | `drive.google.com/drive/folders/17pJMWTGJloEFU86NE9sIOBlH4VB9rFVh` → `Weapons/` 子目录 |
+| 武器纯几何（无 UV/贴图，仅素材备用） | GitHub [codex-vibe-fps](https://github.com/yseho031018/codex-vibe-fps) | `assets/models/weapons/*.glb` → `models-optional/weapons-raw/` |
+
+已验证的死路：models-resource 的 Valorant 页面是空的（0 资源）；Sketchfab/Meshy 下载需登录；
+Mega 链接（YouTube 描述里的各包）大多已失效；"skins changer" 类仓库是恶意软件勿碰。
+
+### 下载要点（Drive）
+
+1. **过盾/访问**：Drive 公开文件夹不需要登录，但 `models-resource` 等站有 Cloudflare——
+   chrome-devtools MCP 的 Chrome 过不了盾（无感验证死循环），**Playwright 浏览器能过**。
+2. **取文件 ID**：文件夹页面 DOM 里 `[data-id]` 属性即文件 ID（或 `drive.usercontent.google.com` 抓包）。
+3. **直下**（单文件 <100MB 无需确认页）：
+   ```bash
+   curl -sL -C - --retry 5 -o Vandal.blend \
+     "https://drive.usercontent.google.com/download?id=<文件ID>&export=download&confirm=t"
+   ```
+4. **断流坑**：CN 网络对 Google 直连易截断（Vandal 25.1MB 下成 24MB），截断的 .blend
+   在 Blender 报 `Missing DNA block`——用 `-C -` 续传补齐即可。先 `ls -l` 对照 Drive 页面大小。
+
+### .blend → GLB 转换配方（Blender 4.5 LTS headless）
+
+Blender 安装：官方源 `download.blender.org` 对 CN 网络常 HTTP/2 中断，用 TUNA 镜像
+`https://mirrors.tuna.tsinghua.edu.cn/blender/release/Blender4.5/blender-4.5.9-macos-arm64.dmg`。
+
+```bash
+# 转换脚本要点（完整版思路）：
+/Applications/Blender.app/Contents/MacOS/Blender -b -P blend2glb.py -- 源.blend 出.glb
+#   1) 删 LIGHT/CAMERA/EMPTY 对象 + 删 0 尺寸图像块（Render Result）
+#   2) 选中全部 MESH → bpy.ops.export_scene.gltf(
+#        use_selection=True, export_format='GLB', export_apply=True, export_animations=False)
+#   3) 贴图（DF 漫反射/NM 法线/MRS ORM/AEM 自发光遮罩）会自动内嵌
+```
+
+转换后两个必须的修正（脚本用 @gltf-transform，项目自带依赖）：
+
+1. **材质补丁**：Valorant 的 MRS 通道语义与 glTF ORM 不一致，导出结果全金属+全粗糙
+   （= 纯黑剪影）。摘 `metallicRoughnessTexture`、写死 `metallicFactor 0.3 / roughnessFactor 0.5`
+   （法线贴图保留）。注意漫反射贴图本来就是近黑的（Vandal 默认皮肤暗色系），黑 ≠ 损坏。
+2. **枪口朝向**：截面法检测（两端各 8% 顶点，横截面小的一端 = 细枪管 = 枪口）。
+   枪口在 +X 时绕 Y 翻 180°（`Node.setRotation([0,1,0,0])` + 平移 xy 取反）对齐本项目
+   「-X = 枪口」作者系约定。
+
+最后 `npm run optimize:models public/models/viewmodel-*.glb` 压缩（实测 -18% ~ -43%）。
+
+### 扩枪
+
+同一 Drive 文件夹里的其余武器（Sheriff/Classic/Ghost 等本训练器的手枪槽、或新槽位）
+走完全相同的配方即可；材质/网格名是官方代号（Vandal=GN_AK、Phantom=GN_Carbine+Tritium
+氚光自发光），可用于识别与特效挂点。

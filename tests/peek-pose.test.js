@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { peekFacingYaw, strafeGait } from '../src/core/PeekPose.js'
-import { BotManager } from '../src/entities/BotManager.js'
+import { peekFacingYaw, strafeRampW, strafeStepPose } from '../src/core/PeekPose.js'
+import { BotManager, pickIdleBot } from '../src/entities/BotManager.js'
 
 // 两种出场姿势（pull 横向拉出 / cross 侧身跑过）的朝向与步态判定。
 // 场景坐标约定：玩家在 Bot 北侧（dz>0）——Bot 面向玩家 yaw=±π（模型正面 -Z，
@@ -34,32 +34,58 @@ describe('peekFacingYaw 出场姿势朝向', () => {
   })
 })
 
-describe('strafeGait GLB 横移步态骨骼偏转', () => {
-  it('cross 波不偏转（顺跑向前进跑姿，clip 原样）', () => {
-    expect(strafeGait({ style: 'cross', speed: 5.4, lateralVel: 5.4 })).toEqual({ w: 0, hipYaw: 0, lean: 0 })
+describe('strafeRampW 横移步态权重（clip→程序化侧移淡入）', () => {
+  it('cross 波恒 0（顺跑向前进 clip 原样）', () => {
+    expect(strafeRampW({ style: 'cross', speed: 5.4 })).toBe(0)
   })
 
-  it('pull 静止/起步低速（<0.25 m/s）不偏转', () => {
-    expect(strafeGait({ style: 'pull', speed: 0.2, lateralVel: 0.2 }).w).toBe(0)
-    expect(strafeGait({ style: 'pull', speed: 0, lateralVel: 0 }).hipYaw).toBe(0)
+  it('pull 随移速 0.25→1.15 m/s 淡入：低速 0、中点 0.5、全速 1', () => {
+    expect(strafeRampW({ style: 'pull', speed: 0.2 })).toBe(0)
+    expect(strafeRampW({ style: 'pull', speed: 0.7 })).toBeCloseTo(0.5)
+    expect(strafeRampW({ style: 'pull', speed: 1.15 })).toBe(1)
+    expect(strafeRampW({ style: 'pull', speed: 5.4 })).toBe(1)
+  })
+})
+
+describe('strafeStepPose 程序化侧移步态（与程序化假人同套 VALORANT 口径）', () => {
+  it('镜像外展：abductL = −s·a、abductR = +s·a，步距开合随相位交替', () => {
+    const ph0 = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 })    // s=1：左腿 −a、右腿 +a
+    const ph1 = strafeStepPose({ speed: 5.4, phase: Math.PI, lateralVel: 1 }) // s=−1：互换
+    const a = Math.min(0.36, 0.12 + 5.4 * 0.058)
+    expect(ph0.abductL).toBeCloseTo(-a)
+    expect(ph0.abductR).toBeCloseTo(a)
+    expect(ph1.abductL).toBeCloseTo(a)
+    expect(ph1.abductR).toBeCloseTo(-a)
+    expect(a).toBeCloseTo(0.36) // 全速外展封顶 0.36
   })
 
-  it('pull 全速横移：w=1、髋部 ±π/2 朝移动方向（前进 clip 迈步转向移动方向，不滑步）', () => {
-    expect(strafeGait({ style: 'pull', speed: 5.4, lateralVel: 5.4 }).hipYaw).toBeCloseTo(-Math.PI / 2) // 向模型右侧
-    expect(strafeGait({ style: 'pull', speed: 5.4, lateralVel: -5.4 }).hipYaw).toBeCloseTo(Math.PI / 2) // 向模型左侧
+  it('外展幅度随移速增长并封顶：1 m/s ≈ 0.178、全速 0.36', () => {
+    expect(strafeStepPose({ speed: 1, phase: 0, lateralVel: 1 }).abductR).toBeCloseTo(0.12 + 0.058)
   })
 
-  it('偏转随移速淡入（与 idle→walk 权重同曲线）：0.7 m/s 中点 → w=0.5、±π/4', () => {
-    const g = strafeGait({ style: 'pull', speed: 0.7, lateralVel: 0.7 })
-    expect(g.w).toBeCloseTo(0.5)
-    expect(g.hipYaw).toBeCloseTo(-Math.PI / 4)
-    expect(strafeGait({ style: 'pull', speed: 1.15, lateralVel: -1.15 }).w).toBeCloseTo(1)
+  it('脚尖微朝移动方向（含步内反摆）：feetYaw = −sign(lx)·0.26 + s·0.12', () => {
+    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 }).feetYaw).toBeCloseTo(-0.26 + 0.12)
+    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: -1 }).feetYaw).toBeCloseTo(0.26 + 0.12)
+    expect(strafeStepPose({ speed: 5.4, phase: Math.PI / 2, lateralVel: 1 }).feetYaw).toBeCloseTo(-0.26) // s=0
+  })
+
+  it('屈膝：支撑步（|s|=1）近伸直 0.06，并腿过中点（s=0）最深、随速度加强', () => {
+    const support = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 })
+    const passing = strafeStepPose({ speed: 5.4, phase: Math.PI / 2, lateralVel: 1 })
+    expect(support.knee).toBeCloseTo(0.06)
+    expect(passing.knee).toBeCloseTo(0.06 + 0.4) // 全速过中点
+    expect(strafeStepPose({ speed: 1.35, phase: Math.PI / 2, lateralVel: 1 }).knee).toBeCloseTo(0.06 + 0.4 * (1.35 / 5.4))
+  })
+
+  it('重心起伏：落脚最低（|s|=1 → 0）、并腿过中点最高（0.01+speed·0.0036）', () => {
+    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 }).bob).toBeCloseTo(0)
+    expect(strafeStepPose({ speed: 5.4, phase: Math.PI / 2, lateralVel: 1 }).bob).toBeCloseTo(0.01 + 5.4 * 0.0036)
   })
 
   it('侧倾向移动方向且 ±0.05 限幅（与程序化假人 _stepLegs 同参数）', () => {
-    expect(strafeGait({ style: 'pull', speed: 5.4, lateralVel: 5.4 }).lean).toBeCloseTo(-0.05) // 5.4×0.011 超限幅
-    expect(strafeGait({ style: 'pull', speed: 5.4, lateralVel: -5.4 }).lean).toBeCloseTo(0.05)
-    expect(strafeGait({ style: 'pull', speed: 1.5, lateralVel: 1.5 }).lean).toBeCloseTo(-1.5 * 0.011)
+    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 5.4 }).lean).toBeCloseTo(-0.05)
+    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: -5.4 }).lean).toBeCloseTo(0.05)
+    expect(strafeStepPose({ speed: 1.5, phase: 0, lateralVel: 1.5 }).lean).toBeCloseTo(-1.5 * 0.011)
   })
 })
 
@@ -109,5 +135,31 @@ describe('出场风格防连击（两种姿势交替）', () => {
   it('出场后记入历史且只留最近两条（不无限增长）', () => {
     const { slot } = spawnWith(['cross', 'pull'], 0) // 无连击 → cross
     expect(slot.lastStyles).toEqual(['pull', 'cross'])
+  })
+})
+
+// —— 池调度：英雄池下波次轮换出场英雄（不整局锁死一名），单模板退化为原行为 ——
+describe('pickIdleBot 池调度（英雄池轮换）', () => {
+  const bots = (n) => Array.from({ length: n }, (_, i) => ({ i, active: false, mode: 'idle' }))
+
+  it('池未满 → null（新建：每只构造时随机抽英雄，4 只覆盖全英雄池）', () => {
+    expect(pickIdleBot(bots(1), 1, 4)).toBeNull()
+    expect(pickIdleBot(bots(3), 3, 4)).toBeNull()
+  })
+
+  it('池满 → 从休眠 Bot 随机挑一只（边界随机数取首/末/中间）', () => {
+    const idle = bots(4)
+    expect(pickIdleBot(idle, 4, 4, () => 0)).toBe(idle[0])
+    expect(pickIdleBot(idle, 4, 4, () => 0.5)).toBe(idle[2])
+    expect(pickIdleBot(idle, 4, 4, () => 0.999)).toBe(idle[3])
+  })
+
+  it('单模板（cap=1，程序化假人/agent.glb）→ 唯一一只 = 原「复用第一只」行为', () => {
+    const only = bots(1)
+    expect(pickIdleBot(only, 1, 1, () => 0.999)).toBe(only[0])
+  })
+
+  it('池满但全在忙（活跃/濒死）→ undefined→ falsy → 调用侧新建（与原 find 落空同路）', () => {
+    expect(pickIdleBot([], 4, 4)).toBeFalsy()
   })
 })

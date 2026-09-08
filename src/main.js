@@ -401,11 +401,14 @@ if (import.meta.env.DEV) {
   window.__game = { engine, input, audio, world, map, player, weapons, bots, flashes, hud, menu, result, fx, state, CONFIG }
 }
 
-// 用户/开源资产（可选）：public/models/ 下的 agent.glb、viewmodel-vandal/phantom.glb
-// （双枪各有高模；旧 viewmodel.glb 单模型作回退）、glove.glb 与 hands.glb
-loadUserAssets().then(({ agent, agentAnimations, viewmodel, viewmodels, glove, hands }) => {
+// 用户/开源资产（可选）：public/models/ 下的无畏契约英雄池 agent-{jett,phoenix,
+// sage,sova}.glb（命中即取代单模板，每 bot 随机一名英雄）、agent.glb（单模板回退，
+// 当前内置 Mixamo X Bot）、viewmodel-vandal/phantom.glb（双枪各有高模；旧
+// viewmodel.glb 单模型作回退）、glove.glb 与 hands.glb
+loadUserAssets().then(({ agent, agentAnimations, agents, viewmodel, viewmodels, glove, hands }) => {
   let changed = false
-  if (agent) { Bot.customTemplate = agent; Bot.customAnimations = agentAnimations; changed = true }
+  if (agents?.length) { Bot.customTemplates = agents; changed = true }
+  else if (agent) { Bot.customTemplate = agent; Bot.customAnimations = agentAnimations; changed = true }
   const vmMap = {}
   for (const id of ['vandal', 'phantom']) if (viewmodels?.[id]) vmMap[id] = viewmodels[id]
   if (!Object.keys(vmMap).length && viewmodel) vmMap.vandal = vmMap.phantom = viewmodel // 旧单模型

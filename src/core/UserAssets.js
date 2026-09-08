@@ -29,8 +29,12 @@ function smoothSkinGeometry(root) {
 }
 
 // 用户/开源模型加载：
+//   public/models/agent-{jett,phoenix,sage,sova}.glb → 无畏契约英雄池（每 bot 随机一名，
+//                                          UE 风格骨架 + 内嵌 PBR 贴图 + kamae 持枪待机 clip；
+//                                          走/跑 clip 由 core/GaitBake 步态数学现场烘焙）
 //   public/models/agent.glb              → 训练机器人外观（当前内置：Mixamo "X Bot"，CC-BY，
-//                                          含骨骼走路动画；自动缩放到总高 1.8m、脚底对地、面向 -Z）
+//                                          含骨骼走路动画；英雄池缺位时的单模板回退；自动缩放到
+//                                          总高 1.8m、脚底对地、面向 -Z）
 //   public/models/viewmodel-vandal.glb   → Vandal 第一人称枪模（"AK-47 Kalashnikov" by
 //                                          Mateusz Woliński, Sketchfab, CC-BY 4.0；真实 PBR 贴图，
 //                                          原生材质直接保留；作者系枪管沿 -X，与管线约定一致）
@@ -45,7 +49,7 @@ function smoothSkinGeometry(root) {
 //                                          glove.glb 缺失时回退使用）
 // 文件缺失时静默跳过，回退到内置程序化模型。
 export async function loadUserAssets() {
-  const out = { agent: null, agentAnimations: null, viewmodel: null, viewmodels: {}, hands: null, glove: null }
+  const out = { agent: null, agentAnimations: null, agents: [], viewmodel: null, viewmodels: {}, hands: null, glove: null }
   const loader = new GLTFLoader()
   const tryLoad = (file) => new Promise((res) => {
     loader.load(
@@ -55,13 +59,29 @@ export async function loadUserAssets() {
       () => res(null),
     )
   })
-  const [agentGltf, vandalGltf, phantomGltf, legacyVmGltf, handsGltf, gloveGltf] = await Promise.all([
-    tryLoad('agent.glb'), tryLoad('viewmodel-vandal.glb'), tryLoad('viewmodel-phantom.glb'),
+  const hasRealTextures = (root) => {
+    let any = false
+    root.traverse(o => {
+      const ms = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])
+      if (ms.some(m => m.map)) any = true
+    })
+    return any
+  }
+  // 无畏契约英雄池：命中即整体取代 agent.glb 单模板（main.js 注入 Bot.customTemplates）
+  const AGENT_POOL = ['agent-jett.glb', 'agent-phoenix.glb', 'agent-sage.glb', 'agent-sova.glb']
+  const loaded = await Promise.all([
+    tryLoad('agent.glb'), ...AGENT_POOL.map(tryLoad),
+    tryLoad('viewmodel-vandal.glb'), tryLoad('viewmodel-phantom.glb'),
     tryLoad('viewmodel.glb'), tryLoad('hands.glb'), tryLoad('glove.glb'),
   ])
+  const agentGltf = loaded[0]
+  const agentPoolGltfs = loaded.slice(1, 1 + AGENT_POOL.length)
+  const [vandalGltf, phantomGltf, legacyVmGltf, handsGltf, gloveGltf] = loaded.slice(1 + AGENT_POOL.length)
 
-  if (agentGltf?.scene) {
-    const agent = agentGltf.scene
+  // agent 归一化：匿名节点命名/轨道引用重写（BrainStem 类模型）→ 缩放 1.8m →
+  // 居中贴地 → 白模补程序化贴图（自带 PBR 贴图的英雄 GLB 原生材质直接保留）
+  const normalizeAgent = (gltf) => {
+    const agent = gltf.scene
     // BrainStem 类模型的节点大多无名字，动画轨道以"原始 UUID"引用节点；
     // SkeletonUtils.clone 会生成新 UUID → 先给匿名节点起稳定名并重写轨道引用，动画才能绑定
     const uuidToName = new Map()
@@ -73,7 +93,7 @@ export async function loadUserAssets() {
         uuidToName.set(o.uuid, n)
       }
     })
-    const animations = agentGltf.animations ?? []
+    const animations = gltf.animations ?? []
     for (const clip of animations) {
       for (const track of clip.tracks) {
         const dot = track.name.indexOf('.')
@@ -93,9 +113,16 @@ export async function loadUserAssets() {
     agent.position.x -= c.x
     agent.position.z -= c.z
     agent.position.y -= box.min.y
-    applyAgentTextures(agent) // GLB 白模 → 程序化装甲/关节贴图
-    out.agent = agent
-    out.agentAnimations = animations
+    if (!hasRealTextures(agent)) applyAgentTextures(agent) // GLB 白模 → 程序化装甲/关节贴图
+    return { root: agent, clips: animations }
+  }
+  for (const gltf of agentPoolGltfs) {
+    if (gltf?.scene) out.agents.push(normalizeAgent(gltf))
+  }
+  if (!out.agents.length && agentGltf?.scene) {
+    const a = normalizeAgent(agentGltf)
+    out.agent = a.root
+    out.agentAnimations = a.clips
   }
 
   // 枪模归一化：最长水平轴对齐到 Z（枪管向），随后按包围盒尺寸归一到 0.85m
@@ -112,14 +139,6 @@ export async function loadUserAssets() {
     vm.position.y -= c.y
     vm.position.z -= c.z
     return vm
-  }
-  const hasRealTextures = (vm) => {
-    let any = false
-    vm.traverse(o => {
-      const ms = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])
-      if (ms.some(m => m.map)) any = true
-    })
-    return any
   }
   for (const [key, gltf] of [['vandal', vandalGltf], ['phantom', phantomGltf]]) {
     if (!gltf?.scene) continue

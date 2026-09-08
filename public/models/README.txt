@@ -1,20 +1,40 @@
 把你有权使用的模型文件放进本目录，即可替换内置程序化模型（GLB 格式，文件名固定）：
 
-  agent.glb               训练机器人（假人）外观
+  agent-jett.glb          无畏契约英雄池（jett / phoenix / sage / sova，每只 Bot
+  agent-phoenix.glb       随机抽一名；池最多 4 只、波次轮换出场英雄——不是整局
+  agent-sage.glb          锁死一名，见 BotManager.pickIdleBot。命中任一文件即
+  agent-sova.glb          整体取代 agent.glb 单模板）
+  agent-sage.glb          - UE 风格骨架（Pelvis / L_Hip / L_Knee / L_Foot / L_Toe /
+  agent-sova.glb            Spine…），骨名映射见 src/core/GaitBake.js（兼容 Mixamo）
+                          - 自带 PBR 贴图直接保留；白模才走程序化装甲贴图
+                          - 只需 kamae（持枪站姿）待机 clip：走/跑 clip 由步态数学
+                            现场烘焙（周期 2×1.15m/参考速度，与移速锁相不滑步；
+                            跑动上身保持持枪姿态，手臂不出烘焙轨道）
+                          - ⚠ 非官方游戏提取资源，无再分发授权（仅个人本地使用）
+
+  agent.glb               训练机器人（假人）外观（英雄池缺位时的单模板回退）
                           - Y-up、面向 -Z；自动缩放到总高 1.8m、脚底对地、水平居中
                           - 含 idle/walk/run 动画时按实际移速加权混合（脚步与位移同步）；
                             单动画模型取走路段播放、静止时冻结
                           - 建议单网格或少量网格；命中判定不依赖你的网格几何
                             （固定头/胸/腿球体区域，但会跟随受击后仰/横移侧倾等姿态）
 
-  viewmodel-vandal.glb    Vandal 第一人称持枪模型（经典 AKM 木质造型）
-  viewmodel-phantom.glb   Phantom 第一人称持枪模型（战术导轨 + 消音器造型）
-                          - 作者系枪管沿 -X（-X=枪口、+Y 上、-Z 射手右侧）；
-                            运行时自动归一到 0.85m 并在作者系内居中
-                          - 带真实 PBR 贴图的模型原生材质直接保留；
-                            无贴图白模回退程序化盒式投影 + 材质
-                          - 模型自带名为 bolt carrier 的节点会绑成击发后坐机件
-                            （Phantom 内置即用）；无命名机件则补程序化拉机柄
+  viewmodel-vandal.glb    Vandal 第一人称持枪模型（无畏契约本体：GN_AK_S0 骨架网格
+                          + 官方贴图 DF/NM/MRS/AEM 四件套，非官方游戏提取资源）
+  viewmodel-phantom.glb   Phantom 第一人称持枪模型（GN_Carbine_S0 + 氚光瞄具 Tritium
+                          自发光；同上来源）
+                          - 转换管线：Rocklan 模型包 .blend（Blender 2.83）→
+                            Blender 4.5 LTS headless 导出 GLB（贴图内嵌）→
+                            glTF-Transform 材质补丁（MRS 通道语义与 glTF 不一致 →
+                            摘 metallicRoughnessTexture、metal 0.3 / rough 0.5，
+                            法线贴图保留）→ 绕 Y 翻 180° 对齐 -X 枪口 → optimize 压缩
+                          - 运行时仍自动归一到 0.85m、作者系居中、-X=枪口约定不变；
+                            白模才走程序化盒式投影
+                          - 原 CC-BY AK 双枪备份：models-optional/viewmodel.ak-{vandal,
+                            phantom}.bak.glb；纯几何 Vandal 提取件备份为
+                            models-optional/viewmodel.vandal-geo.bak.glb；
+                            其余武器几何素材（Operator/Odin/Sheriff 等未接入）在
+                            models-optional/weapons-raw/
                           - 旧版单文件 viewmodel.glb 仍支持（两把步枪共用，作回退）
 
   hands.glb               第一人称手臂（含 Hand.L / Hand.R 骨骼的蒙皮模型）
@@ -63,7 +83,11 @@
                           examples/models/gltf/Xbot.glb；动画含 idle/walk/run，
                           训练靶按实际移速混合播放）。原 BrainStem 备份为
                           models-optional/agent.brainstem.bak.glb（Microsoft, CC-BY 4.0）。
-  viewmodel-vandal.glb    "AK-47 Kalashnikov" by Mateusz Woliński
+  viewmodel-vandal.glb    无畏契约 Vandal 几何（非官方游戏提取资源，经
+                          github.com/yseho031018/codex-vibe-fps 分发；纯网格，
+                          程序化贴图。原 CC-BY AK 备份为
+                          models-optional/viewmodel.ak-vandal.bak.glb）
+  viewmodel-phantom.glb   "AK 47 Tactical Upgrade" by Mateusz Woliński
                           （Sketchfab，CC-BY 4.0；经 Objaverse 分发，几何量化 +
                           贴图 JPEG 重编码，2026-09-04）
   viewmodel-phantom.glb   "AK 47 Tactical Upgrade" by Mateusz Woliński

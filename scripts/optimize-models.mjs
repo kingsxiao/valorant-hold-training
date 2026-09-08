@@ -1,5 +1,6 @@
 // 压缩 public/models/ 下的 GLB（对换入的自有模型同样适用）：
-//   1. 删除 agent.glb 中未使用的动画 clip（代码只按 /idle|stand|walk|run|sprint/ 匹配）
+//   1. 删除 agent.glb 中未使用的动画 clip（代码只按 /idle|stand|walk|run|sprint|kamae/
+//      匹配；kamae = 无畏契约英雄 GLB 的持枪待机 clip，勿裁）
 //   2. dedup/prune/weld：去重、清未引用资源、焊接重复顶点
 //      （prune 必须保留空叶子节点：Top_end / IndexTip.R.001 等末端节点
 //       是 HandsRig 测量拇指方向、解剖学定尺的标记，删了手部装配会回退）
@@ -15,7 +16,7 @@ import { dedup, prune, weld, quantize, resample } from '@gltf-transform/function
 import { readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 
-const KEEP_ANIM = /idle|stand|walk|run|sprint/i
+const KEEP_ANIM = /idle|stand|walk|run|sprint|kamae/i
 
 const io = new NodeIO().registerExtensions([KHRMeshQuantization])
 

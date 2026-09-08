@@ -66,9 +66,32 @@ describe('parseCrosshairCode 游戏代码解析', () => {
     expect(parseCrosshairCode(`  "0;P;c;5；h;0；1b;0" \n`)).not.toBeNull()
     expect(parseCrosshairCode('')).toBeNull()
     expect(parseCrosshairCode('hello world')).toBeNull()
-    expect(parseCrosshairCode('0')).toBeNull() // 无 P 段：没有可导入的配置
     expect(parseCrosshairCode(null)).toBeNull()
     expect(parseCrosshairCode(123)).toBeNull()
+  })
+
+  it('裸 "0"（游戏与本训练器对默认配置的导出形态）导入即全默认', () => {
+    const s = parseCrosshairCode('0')
+    expect(s).toEqual(crosshairDefaults())
+    expect(parseCrosshairCode('0;')).toEqual(crosshairDefaults())
+    // 往返闭环：默认导出 "0" → 导入还原默认（此前导出自己的代码却报"无效"）
+    expect(parseCrosshairCode(exportCrosshairCode(crosshairDefaults()))).toEqual(crosshairDefaults())
+  })
+
+  it('真实社区点准心代码：中心点开 + 内外线隐藏（0b/1b 与 0l;0 两种编码风格）', () => {
+    // overgear 教程给的点准心代码（b 键关线组）
+    const dot = parseCrosshairCode('0;P;c;1;o;1;d;1;0b;0;1b;0')
+    expect(dot.dot).toBe(true)
+    expect(dot.inner.show).toBe(false)
+    expect(dot.outer.show).toBe(false)
+    // 长度 0 风格（如 turbosmurfs 黑描边点准心）：线段 length=0，渲染为不可见
+    const lz = parseCrosshairCode('0;P;c;5;o;1;d;1;z;1;f;0;0t;1;0l;0;0o;1;0a;1;0f;0;1t;1;1l;0;1o;1;1a;1;1m;0;1f;0')
+    expect(lz.dot).toBe(true)
+    expect(lz.inner.length).toBe(0)
+    expect(lz.outer.length).toBe(0)
+    for (const s of [dot, lz]) {
+      expect(parseCrosshairCode(exportCrosshairCode(s))).toEqual(s)
+    }
   })
 
   it('越界/非法数值被钳制不炸（防手改代码）', () => {
@@ -136,8 +159,8 @@ describe('sanitizeCrosshair 脏数据防线', () => {
       colorIdx: 12, custom: 'XYZ!', outlines: 'yes', outlineOpacity: 2,
       dotSize: -1, inner: { length: 999, thickness: 'abc', opacity: 0.5 },
     })
-    expect(s.colorIdx).toBe(0)
-    expect(s.custom).toBe('FFFFFF')
+    expect(s.colorIdx).toBe(5)          // 非法色索引回落游戏默认青
+    expect(s.custom).toBe('00FFFF')
     expect(s.outlines).toBe(true)
     expect(s.outlineOpacity).toBe(1)
     expect(s.dotSize).toBe(1) // -1 钳到范围下界（范围内的合法值保留）

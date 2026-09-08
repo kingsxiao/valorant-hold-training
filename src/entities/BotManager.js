@@ -1,8 +1,9 @@
 import { Bot } from './Bot.js'
 import { CONFIG } from '../core/Config.js'
 
-// 纯架枪对枪训练：随机延迟后 Bot 以两种风格出掩体——侧面跑过（贯穿缺口、顺跑向）
-// 或横向拉出（肩peek 拉出到窗口内急停对枪，含"露头即缩"变体）；玩家须在击杀时限
+// 纯架枪对枪训练：随机延迟后 Bot 以两种姿势交替出掩体（连出两波同风格强制换）
+// ——侧面跑过（贯穿缺口、顺跑向侧身入镜）或横向拉出（肩peek 面向玩家横移
+// 拉出到窗口内急停对枪，含"露头即缩"变体）；玩家须在击杀时限
 // 内命中——没打中 Bot 开火反击后跑向对面掩体，躲进墙后才出下一波（判负只进统计，
 // 不弹提示；无伤害/死亡，训练不中断）
 export const MODE_INFO = { label: '架枪对枪', desc: 'Bot 侧面跑过/横向拉出 · 没打中就继续打' }
@@ -145,10 +146,15 @@ export class BotManager {
       const fromLeft = this.params.peekSide === 'random'
         ? Math.random() > 0.5
         : this.params.peekSide === 'left'
-      // 每波二选一（训练两种读局情景）：
+      // 每波二选一（训练两种读局情景，连出两波同风格后强制换另一种 ——
+      // 两种姿势交替，不让随机连击把另一姿态连续藏几波）：
       //  cross 侧面跑过 —— 从墙后贯穿缺口跑到另一侧，身体顺跑向（旋转跑，侧身入镜）
       //  pull  横向拉出 —— 从墙后肩peek 拉出，面向玩家横移到窗口内急停对枪，之后缩回
-      const cross = Math.random() < CONFIG.training.crossChance
+      slot.lastStyles ??= []
+      const lastTwo = slot.lastStyles.slice(-2)
+      const cross = lastTwo.length === 2 && lastTwo[0] === lastTwo[1]
+        ? lastTwo[0] !== 'cross'
+        : Math.random() < CONFIG.training.crossChance
       let startX
       if (cross) {
         startX = fromLeft ? gap.x0 - 2.2 : gap.x1 + 2.2
@@ -172,6 +178,8 @@ export class BotManager {
       b.slot = slot
       slot.bot = b
       slot.nextAt = 0
+      slot.lastStyles.push(b.peek.style)
+      if (slot.lastStyles.length > 2) slot.lastStyles.shift() // 只留最近两条防连击判断
       return
     }
 

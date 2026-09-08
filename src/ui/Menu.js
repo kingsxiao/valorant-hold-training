@@ -112,9 +112,9 @@ export class Menu {
       gapSide: 'left',      // 缺口位置：左 / 右（切换即重建静态地图）
       peekSide: CONFIG.training.peekSide, // Bot 出场侧：left / right 固定一侧 / random 两侧随机
       flash: 'off',         // 闪光干扰：off / kayo / skye / phoenix / mix（敌方道具按维基数值 1:1）
-      // 出厂默认 = 游戏默认形态 + 青色（接近游戏新号默认观感）；已有存档由
+      // 出厂默认 = 游戏默认形态（青十字，见 crosshairDefaults）；已有存档由
       // _sanitizeCfg 迁移/清洗后覆盖
-      crosshair: { ...crosshairDefaults(), colorIdx: 5 },
+      crosshair: crosshairDefaults(),
       ...loadSettings(),
     }
     this._sanitizeCfg()
@@ -223,21 +223,21 @@ export class Menu {
             <div class="ch-swatches"></div>
           </div>
           <div class="ch-group">
-            <button class="opt-btn ch-toggle" data-chkey="outlines">轮廓</button>
+            <button class="opt-btn ch-toggle" data-chkey="outlines">轮廓<span class="ch-st"></span></button>
             <div class="slider-grid ch-sub">
               <div class="slider-row"><label>轮廓不透明度</label><input type="range" data-chp="outlineOpacity" min="0" max="1" step="0.01"><span class="val"></span></div>
               <div class="slider-row"><label>轮廓粗细</label><input type="range" data-chp="outlineThickness" min="0" max="6" step="1"><span class="val"></span></div>
             </div>
           </div>
           <div class="ch-group">
-            <button class="opt-btn ch-toggle" data-chkey="dot">中心点</button>
+            <button class="opt-btn ch-toggle" data-chkey="dot">中心点<span class="ch-st"></span></button>
             <div class="slider-grid ch-sub">
               <div class="slider-row"><label>中心点不透明度</label><input type="range" data-chp="dotOpacity" min="0" max="1" step="0.01"><span class="val"></span></div>
               <div class="slider-row"><label>中心点大小</label><input type="range" data-chp="dotSize" min="1" max="6" step="1"><span class="val"></span></div>
             </div>
           </div>
           <div class="ch-group">
-            <button class="opt-btn ch-toggle" data-chkey="inner.show">内线</button>
+            <button class="opt-btn ch-toggle" data-chkey="inner.show">内线<span class="ch-st"></span></button>
             <div class="slider-grid ch-sub">
               <div class="slider-row"><label>内线不透明度</label><input type="range" data-chp="inner.opacity" min="0" max="1" step="0.01"><span class="val"></span></div>
               <div class="slider-row"><label>内线长度</label><input type="range" data-chp="inner.length" min="0" max="20" step="1"><span class="val"></span></div>
@@ -249,7 +249,7 @@ export class Menu {
             </div>
           </div>
           <div class="ch-group">
-            <button class="opt-btn ch-toggle" data-chkey="outer.show">外线</button>
+            <button class="opt-btn ch-toggle" data-chkey="outer.show">外线<span class="ch-st"></span></button>
             <div class="slider-grid ch-sub">
               <div class="slider-row"><label>外线不透明度</label><input type="range" data-chp="outer.opacity" min="0" max="1" step="0.01"><span class="val"></span></div>
               <div class="slider-row"><label>外线长度</label><input type="range" data-chp="outer.length" min="0" max="20" step="1"><span class="val"></span></div>
@@ -631,7 +631,15 @@ export class Menu {
     for (const b of this.panel.querySelectorAll('[data-chkey]')) {
       const v = !!get(b.dataset.chkey)
       b.classList.toggle('active', v)
+      // 状态必须可读：行内小开关写进文字，分组头（轮廓/中心点/内线/外线）右侧
+      // 挂"开/关"状态字——只靠底色高亮区分，用户看不出哪些组是开的，点准心
+      // 这类组合形态就没法有把握地调
       if (b.classList.contains('sm')) b.textContent = v ? '开' : '关'
+      else {
+        const st = b.querySelector('.ch-st')
+        if (st) st.textContent = v ? '开' : '关'
+      }
+      b.setAttribute('aria-pressed', String(v))
       // 灰显只由分组头开关控制（轮廓/中心点/内线/外线显示）——误差行开关同前缀，
       // 不能跟着灰显整组
       if (['outlines', 'dot', 'inner.show', 'outer.show'].includes(b.dataset.chkey)) {

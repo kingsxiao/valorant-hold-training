@@ -43,12 +43,13 @@ export const RANGES = {
   errMult: [0, 3, 0.1],
 }
 
-// 游戏"重置默认"形态：白十字 + 轮廓半透明 + 外线淡而远（开火/移动误差的默认
-// 开关组合 = 游戏原味：跑动外线张开、扫射内线张开）。代码解析也以此为缺省基准，
-// 缺键即取默认——这样老代码（缺新键）导入结果与游戏内一致
+// 游戏"重置默认"形态：青十字（游戏默认色即青 c;5，社区默认准星代码 "0" 所指）
+// + 轮廓半透明 + 外线淡而远（开火/移动误差的默认开关组合 = 游戏原味：跑动外线
+// 张开、扫射内线张开）。代码解析也以此为缺省基准，缺键即取默认——这样老代码
+// （缺新键）导入结果与游戏内一致
 export function crosshairDefaults() {
   return {
-    colorIdx: 0, custom: 'FFFFFF',
+    colorIdx: 5, custom: '00FFFF',
     outlines: true, outlineOpacity: 0.5, outlineThickness: 1,
     dot: false, dotOpacity: 1, dotSize: 2,
     // Advanced 三开关：f 游戏默认开（默认准星扫射时会淡出——大家都关的就是它）；
@@ -72,6 +73,8 @@ export function crosshairDefaults() {
 export function parseCrosshairCode(raw) {
   if (typeof raw !== 'string') return null
   const code = raw.replace(/[\s"'\\/]/g, '').replace(/；/g, ';')
+  // 裸 "0" = 全默认准星（游戏与导出端对默认配置的编码形态），导入即还原默认
+  if (/^0;?$/.test(code)) return sanitizeCrosshair(crosshairDefaults())
   // 段切分：P/A/S/NAME 作分隔符；只消费首个 P 段，其余段忽略
   const parts = code.split(/(P|A|S|NAME);/g)
   let seg = null

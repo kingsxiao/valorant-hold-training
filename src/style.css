@@ -400,7 +400,9 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 .ch-group > .ch-toggle { padding: 6px 12px; font-size: 12.5px; }
 [data-group=chAdv] .opt-btn { padding: 6px 9px; font-size: 12px; }
 .ch-group-head { font-size: 12px; font-weight: 600; letter-spacing: 2px; opacity: 0.55; margin: 2px 0 8px; }
-.ch-group > .ch-toggle { display: block; width: 100%; text-align: left; }
+.ch-group > .ch-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: left; }
+/* 分组开关右侧"开/关"状态字：底色高亮不足以传达状态（游戏面板是明确的开/关行） */
+.ch-toggle .ch-st { font-size: 11px; letter-spacing: 2px; opacity: 0.55; }
 /* 分组关闭时子设置灰显不可点（对应游戏面板置灰） */
 .ch-group.off .ch-sub { opacity: 0.35; pointer-events: none; }
 /* 子设置单列：误差行（开关+滑条+数值）比普通行宽，两列网格会把滑条压成零宽 */

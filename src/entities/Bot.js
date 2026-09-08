@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { CONFIG } from '../core/Config.js'
 import { groundStep, accelFor } from '../core/GroundMotion.js'
+import { peekFacingYaw, strafeGait } from '../core/PeekPose.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
 import { raySphere } from '../world/World.js'
@@ -18,8 +19,14 @@ import { raySphere } from '../world/World.js'
 //  - 腿部遵循无畏契约运动规则：拉出（pull）面向目标持枪侧移（strafe）、跑过
 //    （cross）顺跑向前进跑姿 + 上身前倾；步频与位移/脚步声锁相、counter-strafe
 //    急停即刻站定、身体向移动方向微倾
+//  - GLB 只有前进向 clip：pull 的横移步态用骨骼偏转拼 —— 髋部向移动方向
+//    转 ±π/2（脚掌顺移动方向迈步，不滑步）+ 脊柱逐节回正（胸肩正对玩家），
+//    见 _stepStrafeGait；骨骼链不齐的老模型 pull 退回顺跑向（防滑步穿帮）
 const STEP_LEN = 1.15 // 一步的位移（m）：脚步声触发与步态相位锁相共用
 const _v = new THREE.Vector3()
+const _q1 = new THREE.Quaternion()
+const _q2 = new THREE.Quaternion()
+const _up = new THREE.Vector3(0, 1, 0)
 
 export class Bot {
   static customTemplate = null   // 用户 GLB 模板（UserAssets 注入）
@@ -258,6 +265,15 @@ export class Bot {
       this._setAnimWeights(0)
       this.mixer.update(0)
     }
+    // 横移步态骨骼链：Hips 偏转朝移动方向迈步 + Spine 系逐节回正面向玩家。
+    // 链不齐（老模型）→ null：pull 波退回顺跑向（侧移放前进 clip 会滑步穿帮）
+    const hips = [], spines = []
+    clone.traverse(o => {
+      if (!o.isBone) return
+      if (/hips|pelvis/i.test(o.name)) hips.push(o)
+      else if (/spine|chest|torso/i.test(o.name)) spines.push(o)
+    })
+    this._strafeBones = hips.length === 1 && spines.length > 0 ? { hips: hips[0], spines } : null
     this.blobMat = new THREE.MeshBasicMaterial({ map: Tex.blob(), transparent: true, depthWrite: false })
     const blob = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), this.blobMat)
     blob.rotation.x = -Math.PI / 2
@@ -303,12 +319,46 @@ export class Bot {
   _stepAnim(speed, dt) {
     if (!this.mixer) return
     this._setAnimWeights(speed)
-    // 60Hz 采样足够平滑，省一半蒙皮计算（逻辑帧 128Hz）
+    // 60Hz 采样足够平滑，省一半蒙皮计算（逻辑帧 128Hz）。_mixerRan 告知骨骼
+    // 偏转写入：本帧骨骼四元数是否被 clip 轨道整体重写过
     this._animAcc += dt
+    this._mixerRan = false
     if (this._animAcc >= 1 / 60) {
       this.mixer.update(this._animAcc)
       this._animAcc = 0
+      this._mixerRan = true
     }
+  }
+
+  // GLB 横移步态：pull 波面向玩家横移时，把前进 clip 拼成侧移姿态 ——
+  // 髋部向移动方向偏转 ±π/2（脚掌顺移动方向迈步，不滑步），脊柱逐节回正
+  // 合计 −髋偏转（胸肩/头正对玩家 = 持枪对枪）；外加与程序化假人同款的
+  // 向移动方向侧倾。cross 波/站定时 w→0，增量写法自动收回偏转
+  _stepStrafeGait(speed, dt) {
+    if (!this._strafeBones) return
+    const lx = this.velX * Math.cos(this.mesh.rotation.y) // 模型局部横向速度（右侧 +X 为正）
+    const g = strafeGait({ style: this.peek?.style, speed, lateralVel: lx })
+    // 侧倾回正比起倾更快（急停干净利落，与 _stepLegs 同节奏）
+    const leanRate = Math.abs(g.lean) > Math.abs(this.lean) ? 8 : 18
+    this.lean += (g.lean - this.lean) * Math.min(1, dt * leanRate)
+    this.mesh.rotation.z = this.lean
+    this._applyBoneYaw(this._strafeBones.hips, g.hipYaw)
+    const spineYaw = -g.hipYaw / this._strafeBones.spines.length
+    for (const b of this._strafeBones.spines) this._applyBoneYaw(b, spineYaw)
+  }
+
+  // 骨骼偏转写入（绕骨局部 Y 右乘）。mixer 60Hz 节流：跑过 update 的帧骨骼
+  // 被 clip 轨道重写为原值 → 直接乘目标偏转；没跑的帧骨骼上还挂着上次偏转
+  // → 右乘「上次⁻¹·本次」增量。两种帧序都收敛到 clip姿态·当前偏转
+  _applyBoneYaw(bone, yaw) {
+    const prev = bone.userData._strafeYaw ?? 0
+    if (prev === yaw && !this._mixerRan) return // 偏转未变且未被重写：仍挂在骨骼上
+    if (this._mixerRan) {
+      bone.quaternion.multiply(_q1.setFromAxisAngle(_up, yaw))
+    } else {
+      bone.quaternion.multiply(_q2.setFromAxisAngle(_up, prev).invert().multiply(_q1.setFromAxisAngle(_up, yaw)))
+    }
+    bone.userData._strafeYaw = yaw
   }
 
   // 程序化假人腿部：按无畏契约 strafe 运动规则驱动
@@ -433,6 +483,13 @@ export class Bot {
       this._setAnimWeights(0)
       this.mixer.update(0)
       this._animAcc = 0
+      // mixer 复位已把骨骼重写为干净姿态 → 清偏转记账，下一帧增量才不会
+      // 把已不存在的旧偏转当成"仍挂在骨骼上"去抵消
+      this._mixerRan = false
+      if (this._strafeBones) {
+        this._strafeBones.hips.userData._strafeYaw = 0
+        for (const b of this._strafeBones.spines) b.userData._strafeYaw = 0
+      }
     }
   }
 
@@ -542,27 +599,32 @@ export class Bot {
       if (this.hitFlash <= 0) this._restoreEmissive()
     }
 
-    // 朝向：横向拉出 = VALORANT 肩peek，持枪面向对枪目标横移（strafe）；
-    // 侧面跑过 = 顺行进方向跑（旋转跑、侧身入镜），急停/站定时转回面向目标（停步挑战）；
-    // 骨骼假人例外：GLB 只有前进向 clip，任何移动中都朝行进方向（侧移放前进 clip 会滑步穿帮）
+    // 朝向（判定在 core/PeekPose.js，两种姿势 50/50 交替）：
+    //  pull 横向拉出 = VALORANT 肩peek，面向对枪目标持枪横移（strafe）——
+    //    GLB 靠 _stepStrafeGait 的骨骼偏转拼横移步态；骨骼链不齐的老模型
+    //    canStrafe=false 退回顺跑向（侧移放前进 clip 会滑步穿帮）
+    //  cross 侧面跑过 = 顺行进方向跑（旋转跑、侧身入镜）
+    //  急停/站定一律转回面向目标（停步挑战）
     const stopped = this.mode === 'peek' && this.peek?.stopUntil > this.now()
     const moving = Math.abs(this.velX) > 0.4
-    let targetYaw
-    if ((this.mixer || this.peek?.style === 'cross') && moving && !stopped) {
-      targetYaw = this.velX > 0 ? -Math.PI / 2 : Math.PI / 2
-    } else {
-      targetYaw = Math.atan2(-(p.pos.x - this.pos.x), -(p.pos.z - this.pos.z))
-    }
+    const targetYaw = peekFacingYaw({
+      style: this.peek?.style,
+      canStrafe: !this.mixer || !!this._strafeBones, // 程序化假人自带横移步态
+      velX: this.velX, moving, stopped,
+      dx: p.pos.x - this.pos.x, dz: p.pos.z - this.pos.z,
+    })
     let dy = targetYaw - this.mesh.rotation.y
     dy = Math.atan2(Math.sin(dy), Math.cos(dy)) // 取最短角差
     this.mesh.rotation.y += dy * Math.min(1, dt * 14)
 
-    // 移动表现：程序化假人 = VALORANT 横移步态；骨骼假人播放混合动画（脚步与位移同步）
+    // 移动表现：程序化假人 = VALORANT 横移步态；骨骼假人播放混合动画（脚步
+    // 与位移同步），pull 波再叠加骨骼偏转的横移步态（面向玩家侧移）
     const speed = Math.abs(this.velX)
     if (this.legL && this.legR) {
       this._stepLegs(speed, dt)
     } else if (this.mixer) {
       this._stepAnim(speed, dt)
+      this._stepStrafeGait(speed, dt)
     } else if (speed > 0.3) {
       // 无动画的自定义模型兜底：至少保留位移节奏的起伏
       this.walkPhase += speed * dt * Math.PI / STEP_LEN

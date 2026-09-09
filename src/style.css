@@ -86,6 +86,35 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
   will-change: opacity;
 }
 
+/* Reyna Leer 近视：中央（6m 视界）留一点清晰，四周坠入紫黑虚焦——backdrop-filter
+   真糊掉场景，径向渐变让中心渐变透出；非白闪，透明度独立于白屏 */
+.nearsight-blind {
+  position: absolute; inset: 0;
+  backdrop-filter: blur(9px) saturate(0.35) brightness(0.5);
+  -webkit-backdrop-filter: blur(9px) saturate(0.35) brightness(0.5);
+  background:
+    radial-gradient(ellipse 58% 62% at center, rgba(38, 8, 58, 0) 0%, rgba(38, 8, 58, 0.28) 55%, rgba(24, 4, 40, 0.88) 100%),
+    linear-gradient(rgba(30, 6, 48, 0.22), rgba(30, 6, 48, 0.22));
+  opacity: 0;
+  will-change: opacity;
+}
+
+/* Gekko Dizzy 等离子糊屏：紫粉浆块糊满全屏、边缘留一圈可见（游戏同款
+   "covers the screen but leaves some visibility around the edges"） */
+.plasma-blind {
+  position: absolute; inset: 0;
+  backdrop-filter: blur(7px) saturate(0.6) brightness(0.72);
+  -webkit-backdrop-filter: blur(7px) saturate(0.6) brightness(0.72);
+  background:
+    radial-gradient(ellipse 34% 30% at 22% 30%, rgba(196, 108, 255, 0.85) 0%, rgba(196, 108, 255, 0) 100%),
+    radial-gradient(ellipse 30% 34% at 74% 24%, rgba(150, 84, 244, 0.8) 0%, rgba(150, 84, 244, 0) 100%),
+    radial-gradient(ellipse 38% 30% at 66% 72%, rgba(214, 96, 236, 0.82) 0%, rgba(214, 96, 236, 0) 100%),
+    radial-gradient(ellipse 32% 36% at 30% 76%, rgba(158, 96, 250, 0.8) 0%, rgba(158, 96, 250, 0) 100%),
+    radial-gradient(ellipse 50% 46% at 50% 48%, rgba(120, 62, 210, 0.62) 0%, rgba(120, 62, 210, 0) 100%);
+  opacity: 0;
+  will-change: opacity;
+}
+
 /* 通用 HUD 块：直角 + 角标括号 + 顶部微高光 */
 .hud-block {
   position: absolute;

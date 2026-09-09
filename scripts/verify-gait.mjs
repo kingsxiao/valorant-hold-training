@@ -36,9 +36,8 @@ const probe = await page.evaluate(async () => {
     b = find(x => Math.abs(x.velX) > 0.8)
   }
   if (!b) return { err: 'no moving mixer bot', actives: all.filter(x => x.active).map(x => ({ vel: x.velX, mixer: !!x.mixer })) }
-  const t0 = performance.now(); const p0 = b.walkPhase
+  const p0 = b.walkPhase
   const k0 = b.anim.walk.time; const r0 = b.anim.run ? b.anim.run.time : 0
-  const frames0 = b.anim.walk.time
   await new Promise(r => setTimeout(r, 1000))
   const dPhase = b.walkPhase - p0
   return {

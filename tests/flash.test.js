@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { CONFIG } from '../src/core/Config.js'
-import { angleFactor, distFactor, blindDuration, skyeMaxBlind, kayoFuseAfterBounce, arcBezier } from '../src/world/flashMath.js'
+import { angleFactor, distFactor, blindDuration, skyeMaxBlind, kayoFuseAfterBounce, arcBezier, leerAffects, dizzyPlasmaBlind } from '../src/world/flashMath.js'
 
 // 闪光干扰数值回归：口径 = Fandom 维基 2026-09（FLASH/drive / Guiding Light /
 // Curveball 各技能页 + Deployment types 投掷物等级表 + Status Effect#Flash）
@@ -148,5 +148,63 @@ describe('Curveball 弧长参数化贝塞尔（恒速 Fixed 导弹）', () => {
     expect(minD).toBeGreaterThan(0)
     expect(maxD / minD).toBeLessThan(1.02) // 弧长表线性插值误差内近似等距
     expect(a.x + b.x + c.x).toBe(0) // 引用避免未用告警
+  })
+})
+
+// ---- 第七类扩容（2026-09-09）：Yoru/Breach/Reyna/Gekko —— 口径 =
+// Fandom 维基 2026-09 各技能页 + Deployment types 投掷物等级表 ----
+describe('新闪光类型：维基确认值锁死', () => {
+  it('Yoru Blindside：Class 3（29m/s、重力 0.45×9.8）、显形预备 0.6s、致盲 1.5s', () => {
+    expect(F.yoru.speed).toBe(29) // 2900uu/s（Class 3）
+    expect(F.yoru.gravity).toBeCloseTo(4.41, 2) // 重力系数 0.45 × 9.8
+    expect(F.yoru.maxAir).toBe(2) // 未撞面消散（未确认值）
+    expect(F.yoru.windup).toBe(0.6) // v2.06
+    expect(F.yoru.maxBlind).toBe(1.5) // v11.08
+  })
+
+  it('Breach Flashpoint：穿墙放置预备 0.5s（v1.07）、致盲 2.25s（v11.08）', () => {
+    expect(F.breach.windup).toBe(0.5)
+    expect(F.breach.maxBlind).toBe(2.25)
+  })
+
+  it('Reyna Leer：10m 部署距、到位 0.4s 预备（v5.07）、近视 1.6s、60HP 可击毁', () => {
+    expect(F.reyna.deployDist).toBe(10)
+    expect(F.reyna.travel).toBe(0.55) // 未确认值（维基 0.55s@10m）
+    expect(F.reyna.arrivalWindup).toBe(0.4)
+    expect(F.reyna.nearsight).toBe(1.6)
+    expect(F.reyna.visionRadius).toBe(6)
+    expect(F.reyna.hp).toBe(60)
+  })
+
+  it('Gekko Dizzy：Class 2 物理、激活 0.65s、锁定 0.35s（v7.12）、活跃 1s（v9.08）、等离子 1+1s', () => {
+    expect(F.gecko.speed).toBe(18) // Class 2 同 KAY/O
+    expect(F.gecko.gravity).toBeCloseTo(2.94, 2)
+    expect(F.gecko.activationWindup).toBe(0.65) // 未确认值
+    expect(F.gecko.acquireWindup).toBe(0.35) // v7.12
+    expect(F.gecko.active).toBe(1) // v9.08
+    expect(F.gecko.detect).toBe(45)
+    expect(F.gecko.splash).toBe(2.5)
+    expect(F.gecko.blindPotency).toBe(1)
+    expect(F.gecko.blindFade).toBe(1)
+    expect(F.gecko.hp).toBe(20)
+  })
+})
+
+describe('Reyna Leer 近视命中条件（看清瞳孔 = LOS + 视野锥）', () => {
+  it('LOS 内 + 视野内 = 命中；转出视野/被遮挡 = 不命中', () => {
+    expect(leerAffects(0, true)).toBe(true)
+    expect(leerAffects(F.fovHalf, true)).toBe(true)
+    expect(leerAffects(F.fovHalf + 1, true)).toBe(false)
+    expect(leerAffects(180, true)).toBe(false)
+    expect(leerAffects(0, false)).toBe(false) // 视线被墙挡：眼在但看不到瞳孔
+  })
+})
+
+describe('Gekko Dizzy 等离子致盲时长（game files：1s 满效 + 1s 渐褪）', () => {
+  it('总 2s，转身不可避——纯 LOS 判定后固定时长，不做角度/距离衰减', () => {
+    const b = dizzyPlasmaBlind()
+    expect(b.potency).toBe(1)
+    expect(b.fade).toBe(1)
+    expect(b.total).toBe(2)
   })
 })

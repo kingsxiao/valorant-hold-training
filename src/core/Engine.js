@@ -298,6 +298,15 @@ export class Engine {
 
   stop() { this.running = false; cancelAnimationFrame(this._raf) }
 
+  // 着色器/贴图预热：隐藏对象（枪口焰精灵、曳光段、弹孔…）的材质是懒编译的，
+  // 首见才建 GPU 程序 —— 没有这步，回合第一枪会卡 ~100ms 等编译。开局空闲期
+  // 调一次把两个场景全部材质初始化好（透明/加法对象 visible=false 也不会漏，
+  // compile 走的是全量材质初始化而非渲染遍历）
+  prewarm() {
+    this.renderer.compile(this.scene, this.camera)
+    this.renderer.compile(this.vmScene, this.vmCamera)
+  }
+
   _recordFrame(dtMs) {
     this.frameMs = dtMs
     this.frameTimes[this.frameIdx] = dtMs

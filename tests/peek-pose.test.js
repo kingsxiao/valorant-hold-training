@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { peekFacingYaw, strafeRampW, strafeStepPose } from '../src/core/PeekPose.js'
+import { peekFacingYaw, strafeRampW, strafeStepPose, leanInto } from '../src/core/PeekPose.js'
 import { BotManager, pickIdleBot } from '../src/entities/BotManager.js'
 
 // 两种出场姿势（pull 横向拉出 / cross 侧身跑过）的朝向与步态判定。
@@ -57,13 +57,20 @@ describe('strafeStepPose 程序化侧移步态（官方横移循环口径）', (
     expect(p0.kneeR).toBeCloseTo(half.kneeL)                       // R 腿取 p+π 相位
   })
 
-  it('矢状摆动/膝曲线复用官方跑曲线按速度缩放：k=1 等价 GAIT.run（膝峰值 ~106°）', () => {
+  it('膝曲线官方 WalkE→RunE 双锚点按速度插值：5.4=RunE 既有口径、走速以下全程 WalkE 深膝', () => {
     const p = strafeStepPose({ speed: 5.4, phase: 2.0, lateralVel: 1 })
-    expect(p.thighL).toBeCloseTo(0.82 * Math.sin(2.0))             // 官方髋摆 0.82rad
-    expect(p.kneeL).toBeCloseTo(0.20 + 1.55 * Math.max(0, -Math.sin(2.0 - 0.5))) // 官方膝曲线
+    expect(p.thighL).toBeCloseTo(0.82 * Math.sin(2.0))             // 官方髋摆 0.82rad（RunE 锚点）
+    expect(p.kneeL).toBeCloseTo(0.20 + 1.55 * Math.max(0, -Math.sin(2.0 - 0.5))) // 官方 RunE 膝曲线
+    // 走速（3.39）及以下 = WalkE 锚点（基础 28.1°/摆动幅 60.6°）：起步拉出是深膝慢步，不再浅膝缩放
     const slow = strafeStepPose({ speed: 1.35, phase: 2.0, lateralVel: 1 })
-    expect(slow.kneeL).toBeCloseTo(p.kneeL * (1.35 / 5.4))         // k 线性缩放
-    expect(slow.thighL).toBeCloseTo(p.thighL * (1.35 / 5.4))
+    expect(slow.thighL).toBeCloseTo(0.70 * Math.sin(2.0))
+    expect(slow.kneeL).toBeCloseTo(0.49 + 1.06 * Math.max(0, -Math.sin(2.0 - 0.5)))
+    const atWalk = strafeStepPose({ speed: 3.39, phase: 2.0, lateralVel: 1 })
+    expect(atWalk.kneeL).toBeCloseTo(slow.kneeL)                   // 3.39 以下不再随速度缩幅
+    // 中点线性插值（(1.35+5.4)/2 不落在锚点上，取 4.395 = t 0.5）
+    const mid = strafeStepPose({ speed: 4.395, phase: 2.0, lateralVel: 1 })
+    expect(mid.kneeL).toBeCloseTo((p.kneeL + slow.kneeL) / 2)
+    expect(mid.thighL).toBeCloseTo((p.thighL + slow.thighL) / 2)
   })
 
   it('小幅外展稳定（±0.12·k·s，官方 RunE 髋 Y 分量 ~35% 的量级）', () => {
@@ -80,10 +87,12 @@ describe('strafeStepPose 程序化侧移步态（官方横移循环口径）', (
     expect(strafeStepPose({ speed: 5.4, phase: Math.PI / 2, lateralVel: 1 }).bob).toBeCloseTo(0.01 + 5.4 * 0.0036)
   })
 
-  it('侧倾向移动方向且 ±0.05 限幅', () => {
-    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 5.4 }).lean).toBeCloseTo(-0.05)
-    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: -5.4 }).lean).toBeCloseTo(0.05)
-    expect(strafeStepPose({ speed: 1.5, phase: 0, lateralVel: 1.5 }).lean).toBeCloseTo(-1.5 * 0.011)
+  it('侧倾向移动方向且 ±0.12 限幅（官方 RunE/W 盆骨侧倾 5~10° 口径）', () => {
+    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 5.4 }).lean).toBeCloseTo(-0.108)
+    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: -5.4 }).lean).toBeCloseTo(0.108)
+    expect(strafeStepPose({ speed: 1.5, phase: 0, lateralVel: 1.5 }).lean).toBeCloseTo(-1.5 * 0.02)
+    expect(leanInto(99)).toBeCloseTo(-0.12)
+    expect(leanInto(-99)).toBeCloseTo(0.12)
   })
 })
 

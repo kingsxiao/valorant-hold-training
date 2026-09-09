@@ -41,10 +41,11 @@ class Spring {
 }
 
 export class WeaponSystem {
-  constructor({ camera, vmCamera, world, bots, fx, audio, player }) {
+  constructor({ camera, vmCamera, world, bots, fx, audio, player, flash }) {
     this.camera = camera; this.vmCamera = vmCamera; this.world = world; this.bots = bots
     this.vmScene = vmCamera?.parent // 级联刷新矩阵用（vmCamera 固定挂 vmScene 下）
     this.fx = fx; this.audio = audio; this.player = player
+    this.flash = flash ?? null // FlashSystem：可击毁道具（Leer 眼/Dizzy）的命中与结算
 
     // 当前武器与副武器（菜单可改）
     this.primaryId = 'vandal'
@@ -362,12 +363,14 @@ export class WeaponSystem {
     // 视觉上踢（不影响弹道，弹道由表驱动 —— 与游戏一致；跑动乘数同样作用于上踢）
     p.addPunch(THREE.MathUtils.degToRad(pat.p * rmul) * w.recoil.viewPunch * 0.25 + 0.002, THREE.MathUtils.degToRad(pat.y) * w.recoil.viewPunch * 0.12)
 
-    // 命中判定：世界 vs 机器人取最近（射线原点用当前逻辑帧的玩家眼睛，
-    // 而非渲染帧相机位置——后者在固定步长内最多滞后一帧）
+    // 命中判定：世界 vs 可击毁技能道具 vs 机器人取最近（射线原点用当前逻辑帧的
+    // 玩家眼睛，而非渲染帧相机位置——后者在固定步长内最多滞后一帧）
     const eye = _eye.set(p.pos.x, p.pos.y + p.eyeHeight, p.pos.z)
     const maxDist = 250
     const wallHit = this.world.raycast(eye.x, eye.y, eye.z, _dir.x, _dir.y, _dir.z, maxDist)
-    const botHit = this.bots.pickHit(eye, _dir, wallHit ? wallHit.t : maxDist)
+    const wallT = wallHit ? wallHit.t : maxDist
+    const botHit = this.bots.pickHit(eye, _dir, wallT)
+    const propHit = this.flash?.pickHit?.(eye, _dir, botHit ? Math.min(botHit.t, wallT) : wallT) ?? null
 
     // 枪口焰（含动态点光）+ 枪口烟（连射越久越浓）+ 抛壳 + 曳光。
     // userData 点位是枪组本地系 → 经枪自身世界矩阵变换（含持枪偏移/缩放/内偏旋转）；
@@ -400,16 +403,20 @@ export class WeaponSystem {
       this.fx.shell(_eject, this.vmHolder.matrixWorld)
     }
     const end = _hitP.copy(_dir)
-    if (botHit) end.multiplyScalar(botHit.t).add(eye)
+    if (propHit) end.multiplyScalar(propHit.t).add(eye)
+    else if (botHit) end.multiplyScalar(botHit.t).add(eye)
     else if (wallHit) end.set(wallHit.x, wallHit.y, wallHit.z)
     else end.multiplyScalar(maxDist).add(eye)
-    // 曳光接触闪光按命中物着色：机器人=蓝白电火花 / 墙=暖色碎屑 / 脱靶不闪
-    this.fx.tracer(_muzzle, end, sup ? SUPPRESSOR_FX.tracer : {}, botHit ? 'bot' : wallHit ? 'wall' : false)
+    // 曳光接触闪光按命中物着色：机器人/道具=蓝白电火花 / 墙=暖色碎屑 / 脱靶不闪
+    this.fx.tracer(_muzzle, end, sup ? SUPPRESSOR_FX.tracer : {}, botHit || propHit ? 'bot' : wallHit ? 'wall' : false)
 
     // 声音（heat=连射热量 → 音色随持续射击渐变）
     this.audio.shot(w.sound, null, { pos: eye, yaw: p.yaw }, this.heat)
 
-    if (botHit) {
+    if (propHit) {
+      // 击毁技能道具（Leer 眼 60HP / Dizzy 20HP）：按躯体伤害结算，打碎即无效化
+      this.flash.damage(damageFor(this.weapon, 'chest', propHit.t))
+    } else if (botHit) {
       const dmg = damageFor(this.weapon, botHit.zone, botHit.t)
       const killed = this.bots.damage(botHit.bot, dmg, botHit.zone)
       this.onHitBot?.(botHit.bot, botHit.zone, dmg, killed, botHit.point)

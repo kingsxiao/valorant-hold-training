@@ -114,14 +114,16 @@ describe('matchRigBones', () => {
 })
 
 describe('legAngles 步态曲线', () => {
-  const c = { thigh: 0.5, knee: 0.55, kneeBase: 0.5, foot: 0.22 }
-  it('膝恒为负（只屈不反关节）且含基础屈曲；大腿正弦限幅', () => {
+  const c = { thigh: 0.5, knee: 0.55, kneeBase: 0.5, foot: 0.22, toe: 0.155 }
+  it('膝恒为负（只屈不反关节）且含基础屈曲；大腿正弦限幅；趾只屈不反关节', () => {
     for (let i = 0; i < 64; i++) {
       const a = legAngles((i / 64) * Math.PI * 2, c)
       expect(a.knee).toBeLessThanOrEqual(-c.kneeBase + 1e-9)
       expect(Math.abs(a.thigh)).toBeLessThanOrEqual(c.thigh + 1e-9)
       expect(a.foot).toBeGreaterThanOrEqual(-0.45 - 1e-9)
       expect(a.foot).toBeLessThanOrEqual(0.55 + 1e-9)
+      expect(a.toe).toBeLessThanOrEqual(1e-9)              // 趾只屈（蹬地）
+      expect(a.toe).toBeGreaterThanOrEqual(-c.toe - 1e-9)  // 幅值 ≤ toe
     }
   })
 
@@ -142,6 +144,32 @@ describe('legAngles 步态曲线', () => {
     expect(runPk).toBeLessThanOrEqual(117)
     expect(walkPk).toBeGreaterThanOrEqual(83)
     expect(walkPk).toBeLessThanOrEqual(103)
+  })
+
+  it('盆骨三轴官方口径锁死（psa_pelvis.py 实测：yaw 摆/roll 侧摆/pitch 前倾 + bob 收敛）', () => {
+    // 官方：盆骨 yaw 振荡 跑 11.5° / 走 11.9°；roll 侧摆 跑 10.1° / 走 5.65°；
+    // pitch 前倾 跑 -7(Jett -13.5)°→ 取 -8.6°、走 +3.7~+11.9° → 取 +2.9°；
+    // LB 脊柱零轨道 → 前倾主体移到盆骨（spine lean 0.16 → 0.05 仅留补 kamae 直立）；
+    // 盆骨高度起伏官方 跑 ≤3mm / 走 0 → bob 0.012/0.006 防滑步下限
+    expect(GAIT.run.hipsYaw).toBeCloseTo(0.201, 5)
+    expect(GAIT.walk.hipsYaw).toBeCloseTo(0.207, 5)
+    expect(GAIT.run.hipsRoll).toBeCloseTo(0.176, 5)
+    expect(GAIT.walk.hipsRoll).toBeCloseTo(0.099, 5)
+    expect(GAIT.run.hipsPitch).toBeCloseTo(-0.15, 5)
+    expect(GAIT.walk.hipsPitch).toBeCloseTo(0.05, 5)
+    expect(GAIT.run.lean).toBeCloseTo(0.05, 5)
+    expect(GAIT.run.bob).toBeLessThanOrEqual(0.012)
+    expect(GAIT.walk.bob).toBeLessThanOrEqual(0.006)
+  })
+
+  it('趾骨蹬地官方口径锁死（psa L_Toe 2× 谐波：跑 7.5°/走 8.85°，峰值在蹬地）', () => {
+    expect(GAIT.run.toe).toBeCloseTo(0.13, 5)
+    expect(GAIT.walk.toe).toBeCloseTo(0.155, 5)
+    // 蹬地屈伸是 2× 步频（每步一次提踵），且峰值相位 = max(0,-sin(2(p+1.6)))
+    const a1 = legAngles(Math.PI * 2 - 1.6 - Math.PI / 4, GAIT.run) // sin(2(p+1.6))=-1 → 峰值
+    expect(a1.toe).toBeCloseTo(-GAIT.run.toe, 5)
+    const a0 = legAngles(Math.PI * 2 - 1.6, GAIT.run) // sin=0 → 中性
+    expect(a0.toe).toBeCloseTo(0, 5)
   })
 })
 
@@ -165,15 +193,16 @@ describe('bakeLocomotionClips 烘焙', () => {
     expect(baked.run.duration).toBeCloseTo((2 * 1.55) / 5.4, 9)
   })
 
-  it('轨道按骨名绑定：双腿三节 + 髋四元数/位移；数值有限且单位四元数', () => {
+  it('轨道按骨名绑定：双腿四节（含趾蹬地轨道）+ 髋四元数/位移；数值有限且单位四元数', () => {
     const baked = bakeLocomotionClips(make())
     const names = baked.walk.tracks.map(t => t.name)
     for (const n of ['L_Hip_0136.quaternion', 'L_Knee_0137.quaternion', 'L_Foot_0140.quaternion',
       'R_Hip_0146.quaternion', 'Pelvis_0131.quaternion', 'Pelvis_0131.position']) {
       expect(names).toContain(n)
     }
-    // 手臂/趾骨不出轨道：跑步上身保持持枪姿态（kamae clip 权重外骨骼停最后写入帧）
-    expect(names.some(n => n.startsWith('L_Toe') || n.startsWith('R_Toe'))).toBe(false)
+    // 趾骨蹬地轨道（官方 L_Toe 2× 谐波 7.5~8.85°）：双腿都有
+    expect(names).toContain('L_Toe_0120.quaternion')
+    expect(names).toContain('R_Toe_0151.quaternion')
     for (const clip of [baked.walk, baked.run]) {
       for (const t of clip.tracks) {
         const v = t.values

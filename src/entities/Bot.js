@@ -286,15 +286,15 @@ export class Bot {
     // 链不齐（老模型）→ null：pull 波退回顺跑向（侧移放前进 clip 会滑步穿帮）
     g.updateMatrixWorld(true)
     const rig = matchRigBones(clone)
+    const bindOf = (b) => b.getWorldQuaternion(new THREE.Quaternion()) // g 为恒等根 = mesh 空间
     let rigLegs = []
     if (rig) {
-      const bindOf = (b) => b.getWorldQuaternion(new THREE.Quaternion()) // g 为恒等根 = mesh 空间
       rigLegs = rig.legs.map(l => ({
         side: l.side, up: l.up, knee: l.knee, foot: l.foot, toe: l.toe,
         bind: { up: bindOf(l.up), knee: bindOf(l.knee), foot: bindOf(l.foot), toe: bindOf(l.toe) },
       }))
     }
-    this._strafeRig = rig ? { hips: rig.hips, legs: rigLegs } : null
+    this._strafeRig = rig ? { hips: rig.hips, hipsBind: bindOf(rig.hips), legs: rigLegs } : null
     // 死亡塌倒烘焙 + 受击脊柱覆盖层的 bind 基准（mixer 首次 update 前的
     // kamae 绑定姿态）：盆骨父级/自身世界四元数、盆骨世界高、脊柱/颈世界基准
     this._rigExtra = null
@@ -455,12 +455,16 @@ export class Bot {
     }
   }
 
-  // 每次 mixer.update 后快照被程序化覆盖的骨骼 clip 原值——侧移腿覆盖与受击
-  // 脊柱覆盖都以它为混合基准（未跑 update 的帧沿用最近快照，≤16ms 滞后一致）
+  // 每次 mixer.update 后快照被程序化覆盖的骨骼 clip 原值——侧移腿覆盖（含盆骨）
+  // 与受击脊柱覆盖都以它为混合基准（未跑 update 的帧沿用最近快照，≤16ms 滞后一致）
   _snapshotClipPose() {
-    for (const leg of this._strafeRig?.legs ?? []) {
-      for (const b of [leg.up, leg.knee, leg.foot, leg.toe]) {
-        (b.userData._clipQ ??= new THREE.Quaternion()).copy(b.quaternion)
+    const rig = this._strafeRig
+    if (rig) {
+      (rig.hips.userData._clipQ ??= new THREE.Quaternion()).copy(rig.hips.quaternion)
+      for (const leg of rig.legs) {
+        for (const b of [leg.up, leg.knee, leg.foot, leg.toe]) {
+          (b.userData._clipQ ??= new THREE.Quaternion()).copy(b.quaternion)
+        }
       }
     }
     const ex = this._rigExtra
@@ -647,6 +651,17 @@ export class Bot {
       this._poseLegBone(leg.knee, leg.bind.knee, _curW, yaw, 0, -(knee ?? 0), w, _curW)
       this._poseLegBone(leg.foot, leg.bind.foot, _curW, yaw, 0, 0, w, null)
       this._poseLegBone(leg.toe, leg.bind.toe, _curW, yaw, 0, 0, w, null)
+    }
+    // 盆骨：前进跑/走用 clip 的官方盆骨轨道（yaw/roll/pitch，见 GaitBake.GAIT）；
+    // pull 横移时官方 RunE 盆骨几乎不滚不俯（roll 振荡 2.3°、pitch ≈0、恒高）→
+    // 按 w 把盆骨退回 kamae bind（正对玩家持枪，不带前进跑的前倾/侧摆/扭摆）。
+    // 盆骨父级世界与腿链无关（腿是盆骨子孙），腿写完后父级基准仍精确
+    const hq = rig.hips.userData._clipQ
+    if (hq && w > 0 && pose) {
+      this._boneWorldQ(rig.hips.parent, _chainW)
+      _q3.copy(this.mesh.quaternion).multiply(rig.hipsBind)
+      _q3.premultiply(_q4.copy(_chainW).invert())
+      rig.hips.quaternion.copy(hq).slerp(_q3, w)
     }
   }
 

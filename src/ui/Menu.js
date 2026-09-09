@@ -111,7 +111,7 @@ export class Menu {
       rampUp: false,
       gapSide: 'left',      // 缺口位置：左 / 右（切换即重建静态地图）
       peekSide: CONFIG.training.peekSide, // Bot 出场侧：left / right 固定一侧 / random 两侧随机
-      flash: 'off',         // 闪光干扰：off / kayo / skye / phoenix / mix（敌方道具按维基数值 1:1）
+      flash: 'off',         // 闪光干扰：off / kayo / skye / phoenix / yoru / breach / reyna / gecko / mix（敌方道具按维基数值 1:1）
       // 出厂默认 = 游戏默认形态（青十字，见 crosshairDefaults）；已有存档由
       // _sanitizeCfg 迁移/清洗后覆盖
       crosshair: crosshairDefaults(),
@@ -147,7 +147,7 @@ export class Menu {
     for (const k of ['showFps', 'shadows', 'autoRes', 'rampUp', 'heatShimmer']) c[k] = !!c[k]
     c.gapSide = c.gapSide === 'right' ? 'right' : 'left' // 旧存档里的 doubleGap 一并失效忽略
     c.peekSide = ['left', 'right', 'random'].includes(c.peekSide) ? c.peekSide : CONFIG.training.peekSide
-    c.flash = ['kayo', 'skye', 'phoenix', 'mix'].includes(c.flash) ? c.flash : 'off'
+    c.flash = ['kayo', 'skye', 'phoenix', 'yoru', 'breach', 'reyna', 'gecko', 'mix'].includes(c.flash) ? c.flash : 'off'
     // 旧版简化准星模型（length/gap/tShape）→ 游戏同款模型；再全量清洗防手改
     if (isLegacyCrosshair(c.crosshair)) c.crosshair = migrateLegacyCrosshair(c.crosshair)
     c.crosshair = sanitizeCrosshair(c.crosshair)
@@ -374,15 +374,19 @@ export class Menu {
       psBox.appendChild(b)
     }
 
-    // 闪光干扰（敌方道具 1:1）：关闭 / 三选一 / 三种混合随机。
+    // 闪光干扰（敌方道具 1:1）：关闭 / 七选一 / 七种混合随机。
     // 投掷物从墙后袭来——听声辨位、背身躲闪是核心训练点（直视满时长致盲）
     const fBox = p.querySelector('[data-group=flashMode]')
     for (const [v, label] of [
       ['off', '闪光干扰 · 关'],
-      ['kayo', 'KAY/O 闪光（弹跳手雷）'],
-      ['skye', '斯凯 闪光（追踪鹰）'],
-      ['phoenix', '火男 闪光（弧线球）'],
-      ['mix', '三种混合（随机）'],
+      ['kayo', 'KAY/O（弹跳手雷）'],
+      ['skye', '斯凯（追踪鹰·官方模型）'],
+      ['phoenix', '火男（弧线球）'],
+      ['yoru', 'Yoru（盲侧碎片·无声）'],
+      ['breach', 'Breach（穿墙闪）'],
+      ['reyna', 'Reyna（凝视之眼·可击落）'],
+      ['gecko', 'Gekko（Dizzy·官方模型）'],
+      ['mix', '七种混合（随机）'],
     ]) {
       const b = document.createElement('button')
       b.className = 'opt-btn'

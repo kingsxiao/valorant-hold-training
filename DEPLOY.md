@@ -244,3 +244,93 @@ Blender 安装：官方源 `download.blender.org` 对 CN 网络常 HTTP/2 中断
 - 视频回归参照：/tmp/val-rep.mp4（回放模式第三人称，原片 hoc1i5fI0ko 40-75s）；
   浏览器实测脚本 `scripts/verify-gait.mjs`（playwright-core + 系统 Chrome 独立
   profile，真实点击开局保指针锁定；MCP 浏览器被并行会话占用时的替代路径）。
+
+### 盆骨三轴实测（psa_pelvis.py，2026-09-09 第二批：yaw/roll/pitch 落进 GAIT）
+
+解析器 `assets-raw/psa_pelvis.py`（谐波拟合 1×/2× 振荡幅值+相位、绑定四元数差分）。
+**轴语义靠方向集对比锁定，不能看绝对均值**（盆骨绑定位姿是大旋转，rotvec 逐分量
+平均在 ~90° 附近会翻面乱跳）：俯仰 X 由 N/S 前后跑对比锁定（RunN 前倾 -7(Jett
+-13.5)° vs RunS 后仰 +12.8°）、侧倾 Z 由 E/W 横移镜像锁定（RunE -4.8° / RunW +9.8°）、
+偏航 Y 由振荡幅值确认（跑 11.5° / 走 11.9°，1×/步）。
+
+- GAIT 新字段：`hipsYaw` 跑 0.201/走 0.207rad（与大腿摆同相）；`hipsRoll` 跑
+  0.176/走 0.099rad（相位 sin(p+0.83)，摆动腿侧下沉）；`hipsPitch` 跑 -0.15/走
+  +0.05rad（常量前倾/微后仰——LB 脊柱零轨道，前倾主体从 spine lean 0.16 移到盆骨，
+  spine 只留 0.05 补 kamae 直立）。合成 roll·pitch·yaw·bind（roll/pitch 按 mesh
+  世界轴最外层施加，不随 yaw 换轴）。
+- 盆骨高度起伏官方 跑 ≤3mm（±0.7cm 峰谷）/ 走、横移恒 0 → bob 收到 0.012/0.006
+  （防滑步下限，不再加倍）。
+- 横移的盆骨：官方 RunE 盆骨 roll 振荡仅 2.3°、pitch ≈0、恒高（正对瞄准方向）→
+  Bot._applyLegPose 在 w>0 时把盆骨按 w 退回 kamae bind（前进跑的三轴轨道不带入
+  横移），bind 世界四元数在 _buildCustom 捕获（`_strafeRig.hipsBind`）。
+- 侧倾入移动方向上限 0.05→0.12rad（leanInto 系数 0.011→0.02）：官方 RunE/W 盆骨
+  侧倾均值 -4.8°/+9.8°（全速 ~6.9°）。
+- 浏览器复核方法：轨道差值直接读 clip 数据（`anim.run.getClip()` 找 `Pelvis_*.quaternion`
+  轨道算 up 轴倾角：run +10.2° / walk -1.2°，Δ=11.4° = GAIT 口径）；**别用实时
+  rotvec 均值判盆骨 pitch/roll**——hips 父链常量节点旋转 + 复合旋转的轴间泄漏会
+  把分量搅混，视觉截图与轨道差值才是准绳。横移盆骨快照实测：pull 全程振荡幅值=0
+  （成功钉在 kamae bind）。
+
+### 第三批：WalkE 低速横移锚点 + 趾骨蹬地轨道（2026-09-09）
+
+- **strafeStepPose 双锚点插值**（替代 k=speed/5.4 整体缩放）：Sova WalkE 实测膝
+  基础 28.1°/峰值 88.7°（摆动幅 60.6°）→ `{base:0.49, swing:1.06, thigh:0.70}`；
+  RunE 用既有 GAIT.run 口径。t = (speed−3.39)/(5.4−3.39) 线性插值，走速以下全程
+  WalkE 深膝——起步拉出不再是浅膝碎步（旧版 1.15m/s 时膝峰只有 21°，官方走速
+  横移本身就是 88.7° 深膝），外展幅随 t 0.75→1。5.4 及以上 = 已验收 RunE 口径
+  逐值不变（测试锁定）。
+- **趾骨蹬地轨道**：`legAngles` 新增 toe 分量 + `bakeLocomotionClips` 腿链第 4 节
+  （父级 = 脚）。官方 L_Toe 实测：2× 步频谐波主导（跑 7.5°/走 8.85°——每步一次
+  提踵蹬地），峰值相位取膝摆动峰前 ~0.5rad（蹬地→摆动的时序），只屈不反关节；
+  GAIT.toe 跑 0.13/走 0.155rad。横移覆盖时趾保持中性（w>0 写 bind，官方 RunE
+  趾行为未量测不做臆造）；死亡烘焙链仍 3 节不含趾（撒手/塌倒不涉及蹬地）。
+- 回归验证：235 用例全绿（新增 WalkE 锚点/中点插值/趾幅值与相位锁）；verify-gait
+  探针 clip 时长 0.9145/0.5741s 精确、步频 3.484 步/s（官方 3.33 ±5%）、零控制台
+  错误；pull（deep straddle 正对横移）/cross（侧视前倾跑+拖腿深屈膝）近远景截图
+  评审无回归；盆骨探针 roll/upTilt 谐波与上一批逐值一致（盆骨层未受影响）。
+
+## 附：官方技能道具模型（.blend）获取与接入（2026-09-09）
+
+闪光干扰扩到七类的模型来源与方法。技能道具模型与武器/英雄同源（Rocklan Drive
+包），**不在独立 Abilities 目录，而是散在各英雄文件夹里**（Agents/<英雄>/）。
+
+### 可用道具清单（已实测核对官方物体代号）
+
+| 文件 | 官方代号 | 是什么 | 本项目用途 |
+| --- | --- | --- | --- |
+| `skyeHawkSimple.blend` | `AB_Guide_S0_E_Hawk` | 飞行态追踪鹰（TP 贴图，翼骨 L/R_Wing1-3+Tail） | ✅ `public/models/ability-hawk.glb`，运行时扇翅 |
+| `skyeHawkTotem.blend` | `AB_Guide_S0_E_HawkTotem` | 手持鹰图腾（FP 贴图，~30cm） | 备用（手持形态，未接入） |
+| `zamboni.blend` | `AB_AggroBot_S0_E_Zamboni` | **就是 Dizzy**（Gekko E，骨骼 Body/Spine/Head/Tail） | ✅ `public/models/ability-dizzy.glb`，悬停摆尾 |
+| `bubbletov.blend` | `AB_AggroBot_S0_4_Bubbletov` | 休眠泡泡（globule，~14cm） | 备用（未接入） |
+| `shark.blend` | `AB_AggroBot_S0_X_Shark` | Thrash（X 大招鲨鱼） | 非闪光，未接入 |
+| `spikebot.blend` | `AB_AggroBot_S0_Q_Spikebot` | Wingman（Q） | 非闪光，未接入 |
+| `jettKnife/jettSmoke/sageOrb/sageWall/sovaArrow/sovaBow/sovaDrone.blend` | — | Jett 刀/烟、Sage 球/墙、Sova 箭/弓/无人机 | 非闪光，未接入（同名配方可扩） |
+
+**没有的**：KAY/O 手雷、火男弧线球、Breach charge、Yoru 碎片、Reyna 眼——
+各英雄文件夹只有英雄模型（Complex/FirstPerson/Simple；FirstPerson 里也只是
+手臂，无手持道具）。这五类保持程序化原创近似。粉丝仓库（abdullah-nadeem-lodhi）
+只有四个英雄 GLB，无道具；models-resource Valorant 页仍为空；Sketchfab 需登录。
+
+### 转换与接入配方（在武器配方之上新增三点）
+
+1. **带骨骼导出**：`export_apply=False` + 选中 ARMATURE+MESH（scripts/blend2glb.py
+   的 apply=True 会把 armature modifier 烤进网格、丢掉全部骨骼；对照脚本
+   /tmp/blend2glb_rig.py 的差异）。导出后 glTF 骨骼节点齐全，Skin 会保留
+   （gltf-transform prune 日志打 "Removed Skin" 但内存里仍在——日志误导，别慌）。
+2. **朝向**：Blender 侧骨链判头尾（Tail 骨沿 -X → 头在 +X）。Blender→glTF 映射
+   (x,y,z)→(x,z,-y)：头 +X→glTF +X、上 Z→+Y、翼 ±Y→±Z。运行时容器 rotY(-π/2)
+   即对齐本项目「+Z 喙向 + lookAt(航向)」约定（鹰/Dizzy 通用）。
+3. **MRS 补丁 + 压缩**：`node scripts/ability-glb-patch.mjs <src> <out>`（摘
+   metallicRoughnessTexture + metal 0.3/rough 0.5 + 贴图 JPEG 重编码 + 量化，
+   蒙皮安全）。产物拷 `public/models/ability-*.glb`。
+4. **运行时挂载**：FlashSystem `_loadOfficial` 异步加载（document.baseURI 相对
+   路径——import.meta.url 相对路径在 dev 下指到 src/ 会 404），就位后与程序化
+   近似互斥显隐，加载失败静默回退；骨骼扇动 = 静息四元数 ⊗ 本地轴旋转
+   （restQuat 存 userData，直接写 rotation 会覆盖绑定姿态）。
+
+### 浏览器实测
+
+`scripts/verify-flash.mjs`（同 verify-gait 的自驱 Chrome 路线）：七类逐个强制
+`flashes._spawn*` + 数值探针（官方挂载/盲时长/近视/等离子/可击毁 pickHit+damage）
++ 关键帧截图。坑：探针打可击毁目标要按 proj.pos 现算瞄准方向（部署点有随机横向
+偏移，固定视线打不中 0.32m 球）。

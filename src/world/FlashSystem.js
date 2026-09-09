@@ -1,24 +1,34 @@
 import * as THREE from 'three'
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { CONFIG } from '../core/Config.js'
-import { blindDuration, skyeMaxBlind, kayoFuseAfterBounce, arcBezier } from './flashMath.js'
+import { blindDuration, skyeMaxBlind, kayoFuseAfterBounce, arcBezier, leerAffects, dizzyPlasmaBlind } from './flashMath.js'
 import { Tex } from './Textures.js'
 
 // ============================================================================
-// 闪光干扰系统：敌方从墙后投掷三类闪光道具 1:1 还原（数值见 CONFIG.flash，
+// 闪光干扰系统：敌方从墙后施放七类闪光/致盲道具 1:1 还原（数值见 CONFIG.flash，
 // 来源 Fandom 维基各技能页 + Deployment types 投掷物等级表）：
 //  - KAY/O FLASH/drive：Class 2 手雷（18m/s、重力 2.94），总引信 1.6s，
 //    首次弹跳改 0.8s 引信（v10.06），最大致盲 2.25s（v11.08）
 //  - Skye Guiding Light：追踪鹰导弹（18m/s 无重力、最长飞 2s），最大致盲
 //    1→2.25s 随飞行 0.75s 充能（充能满有橙光+提示音），激活后 0.3s 起爆
+//    ——官方模型 ability-hawk.glb（Rocklan 包 skyeHawkSimple.blend，翼骨运行时扇动）
 //  - Phoenix Curveball：Fixed 曲线导弹（无重力、左/右曲），cast→起爆 0.6s，
 //    最大致盲 1.5s；撞墙即熄灭
-// 致盲判定：视线(LOS) + 朝向角 + 距离（模型见 flashMath.js），到期后白屏
-// 1 秒渐褪。投掷起点在墙后（模拟看不见的敌人），轨迹按"敌方 pop flash"
-// 设计：穿缺口或越墙顶起爆在玩家视野内
+//  - Yoru Blindside：Class 3 碎片（29m/s、重力 4.41），飞行不可见也无声
+//    （v11.10）——撞面才显形 + 0.6s 预备；最大致盲 1.5s（v11.08）
+//  - Breach Flashpoint：Placement 穿墙放置在墙前面，0.5s 预备；最大致盲 2.25s
+//  - Reyna Leer：近视系——导弹穿地形到 10m 部署距，0.4s 睁眼后施加近视 1.6s
+//    （持续判定"瞳孔在视野内"，6m 视界）；60HP 可击毁
+//  - Gekko Dizzy：官方模型 ability-dizzy.glb——Class 2 投掷，0.65s 激活后减速
+//    悬停，活跃 1s 内对 45m 视线目标 0.35s 锁定喷等离子：全屏 2s=1s 满效+
+//    1s 渐褪（转身不可避）；20HP 可击毁
+// 白闪判定：视线(LOS) + 朝向角 + 距离（模型见 flashMath.js），到期后白屏
+// 1 秒渐褪；近视/等离子走独立屏效（reyna 紫雾近视、gecko 等离子糊屏）。
+// 投掷起点在墙后（模拟看不见的敌人），轨迹按"敌方 pop flash"设计
 // ============================================================================
 const rand = (a, b) => a + Math.random() * (b - a)
 const clamp = THREE.MathUtils.clamp
-const TYPES = ['kayo', 'skye', 'phoenix']
+const TYPES = ['kayo', 'skye', 'phoenix', 'yoru', 'breach', 'reyna', 'gecko']
 const MODES = [...TYPES, 'mix', 'off']
 
 // ---- 程序化模型（原创近似：官方美术资产有版权，不做提取复用）----
@@ -105,6 +115,93 @@ function buildPhoenixOrb() {
   return { group: g, mat, halo, light }
 }
 
+// Yoru 盲侧碎片：暗青色维度碎片——八面体核心 + 线框外壳。飞行中整个 group
+// 不可见（v11.10 敌方视角），撞面显形后 0.6s 预备内由内而外亮起
+function buildYoruShard() {
+  const g = new THREE.Group()
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x0a2a30, emissive: 0x37e6ff, emissiveIntensity: 0.6, roughness: 0.3, metalness: 0.2,
+  })
+  const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.09), mat)
+  const shell = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.13),
+    new THREE.MeshBasicMaterial({ color: 0x7deaff, wireframe: true, transparent: true, opacity: 0.5 }),
+  )
+  const light = new THREE.PointLight(0x37e6ff, 0, 5, 2) // 0 强度：显形前无光
+  g.add(core, shell, light)
+  return { group: g, mat, shell, light }
+}
+
+// Breach 穿墙闪 Charge：贴墙圆盘雷体 + 环形指示灯（0.5s 预备内红橙脉冲加速）
+function buildBreachCharge() {
+  const g = new THREE.Group()
+  const disc = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.16, 0.18, 0.07, 20),
+    new THREE.MeshStandardMaterial({ color: 0x2e2a26, metalness: 0.7, roughness: 0.4 }),
+  )
+  disc.rotation.x = Math.PI / 2 // 轴向贴墙：盘面朝 +Z（墙前面法线）
+  const glowMat = new THREE.MeshStandardMaterial({
+    color: 0x30140a, emissive: 0xff5a2a, emissiveIntensity: 0.8, roughness: 0.5,
+  })
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.018, 8, 28), glowMat)
+  const light = new THREE.PointLight(0xff6a30, 0.5, 6, 2)
+  g.add(disc, ring, light)
+  return { group: g, glowMat, light }
+}
+
+// Reyna 凝视之眼：紫晶眼球——虹膜球 + 深色瞳孔（+Z 朝向玩家）+ 魂雾光晕；
+// 60HP 可击毁，命中判定以"瞳孔"（眼心）为准
+function buildReynaEye() {
+  const g = new THREE.Group()
+  const irisMat = new THREE.MeshStandardMaterial({
+    color: 0x3a1054, emissive: 0xb44dff, emissiveIntensity: 1.6, roughness: 0.35,
+  })
+  const iris = new THREE.Mesh(new THREE.SphereGeometry(0.16, 20, 16), irisMat)
+  const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.075, 14, 12), new THREE.MeshBasicMaterial({ color: 0x12002b }))
+  pupil.position.z = 0.105
+  const aura = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: Tex.spark(), color: 0xb44dff, transparent: true, opacity: 0.5,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }))
+  aura.scale.set(0.9, 0.9, 1)
+  const light = new THREE.PointLight(0xb44dff, 1.0, 6, 2)
+  g.add(iris, pupil, aura, light)
+  return { group: g, irisMat, aura, light }
+}
+
+// Gekko Dizzy 程序化回退（官方模型 ability-dizzy.glb 加载失败时兜底）：
+// 圆身小怪兽——薰衣草圆球身 + 两只大眼 + 短尾，悬停摆尾；20HP 可击毁
+function buildDizzyProc() {
+  const g = new THREE.Group()
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: 0x6a55c9, emissive: 0x4a3aa0, emissiveIntensity: 0.5, roughness: 0.55,
+  })
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 14), bodyMat)
+  body.scale.set(1, 0.92, 1.05)
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0xf4f0ff, roughness: 0.25 })
+  const pupilMat = new THREE.MeshBasicMaterial({ color: 0x1a1030 })
+  const makeEye = (sx) => {
+    const e = new THREE.Mesh(new THREE.SphereGeometry(0.062, 12, 10), eyeMat)
+    e.position.set(sx * 0.075, 0.06, 0.155)
+    const pu = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 8), pupilMat)
+    pu.position.set(0, 0, 0.042)
+    e.add(pu)
+    return e
+  }
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.18, 10), bodyMat)
+  tail.rotation.x = Math.PI / 2.4
+  tail.position.set(0, -0.02, -0.24)
+  const glowMat = new THREE.MeshStandardMaterial({
+    color: 0x231a3a, emissive: 0xc98aff, emissiveIntensity: 1.2, roughness: 0.5,
+  })
+  const crest = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.1, 8), glowMat)
+  crest.position.set(0, 0.2, 0.02)
+  const light = new THREE.PointLight(0xc98aff, 0.9, 5, 2)
+  for (const m of [body, tail]) m.castShadow = true
+  g.add(body, makeEye(1), makeEye(-1), tail, crest, light)
+  return { group: g, body, glowMat, light }
+}
+
 // 模块级临时对象：128Hz 步进 + 每渲染帧动画，避免分配
 const _va = new THREE.Vector3()
 const _vb = new THREE.Vector3()
@@ -128,16 +225,75 @@ export class FlashSystem {
     this._pulse = 0            // KAY/O 引信脉冲相位（频率随预告进度加速）
     this._wispSide = 1         // 火男卷曲火丝的左右交替
     this._blindAt = 0          // 最近一次致盲开始时刻（白屏快速淡入用）
+    this._nearsightUntil = -1  // Reyna 近视命中截止时刻（转开即停刷新，0.3s 内褪去）
+    this._plasma = null        // Dizzy 等离子：{ at, potencyUntil, until }（转身不可避）
 
-    // 三种模型常驻场景、按需显隐
-    this._models = { kayo: buildKayoGrenade(), skye: buildSkyeHawk(), phoenix: buildPhoenixOrb() }
+    // 七种模型常驻场景、按需显隐
+    this._models = {
+      kayo: buildKayoGrenade(),
+      skye: buildSkyeHawk(),
+      phoenix: buildPhoenixOrb(),
+      yoru: buildYoruShard(),
+      breach: buildBreachCharge(),
+      reyna: buildReynaEye(),
+      gecko: buildDizzyProc(),
+    }
+    // skye/gecko 套容器壳：程序化近似与官方 GLB 互斥显示（group=容器）
+    const wrap = (m) => {
+      const c = new THREE.Group()
+      c.add(m.group)
+      return { ...m, group: c, proc: m.group }
+    }
+    this._models.skye = wrap(this._models.skye)
+    this._models.gecko = wrap(this._models.gecko)
     for (const m of Object.values(this._models)) { m.group.visible = false; scene.add(m.group) }
+
+    // 官方模型（Rocklan 包 .blend→GLB，MRS 补丁见 scripts/ability-glb-patch.mjs）：
+    // 异步加载、就位后与程序化近似互换（加载失败静默留在程序化）。官方导出坐标：
+    // 头沿 +X、上 +Y（Blender 骨链 Tail 沿 -X）→ rotY(-π/2) 对齐本项目 +Z 喙向约定
+    this._loader = new GLTFLoader()
+    this._loadOfficial('ability-hawk.glb', this._models.skye, { scale: 1.35 })
+    this._loadOfficial('ability-dizzy.glb', this._models.gecko, { scale: 1.6 })
 
     // 致盲白屏：插在 #hud 第一个子节点——准星/弹药/计分按 DOM 顺序叠在白屏
     // 之上，与游戏内"被闪时 HUD 仍可见"一致；透明度每帧直写
     this.overlayEl = document.createElement('div')
     this.overlayEl.className = 'flash-blind'
     hudRoot.insertBefore(this.overlayEl, hudRoot.firstChild)
+    // 近视（Reyna）/等离子（Dizzy）屏效叠在白屏之上：游戏内两者都不是白闪
+    this.nearsightEl = document.createElement('div')
+    this.nearsightEl.className = 'nearsight-blind'
+    hudRoot.insertBefore(this.nearsightEl, this.overlayEl.nextSibling)
+    this.plasmaEl = document.createElement('div')
+    this.plasmaEl.className = 'plasma-blind'
+    hudRoot.insertBefore(this.plasmaEl, this.nearsightEl.nextSibling)
+  }
+
+  // 官方 GLB 挂载：成功后隐藏程序化根、记住骨骼（鹰翼/尾骨运行时扇动）。
+  // 文件缺失/损坏静默跳过——程序化近似兜底，绝不阻塞启动
+  _loadOfficial(file, entry, { scale = 1 } = {}) {
+    this._loader.load(
+      new URL(`models/${file}`, document.baseURI).href,
+      (gltf) => {
+        const root = gltf.scene
+        root.rotation.y = -Math.PI / 2
+        root.scale.setScalar(scale)
+        root.visible = true
+        const bones = {}
+        root.traverse((o) => {
+          if (o.isBone) {
+            o.userData.restQuat = o.quaternion.clone() // 静息姿态：扇翅叠加其上
+            bones[o.name] = o
+          }
+        })
+        entry.group.add(root)
+        entry.official = root
+        entry.bones = bones
+        if (entry.proc) entry.proc.visible = false
+      },
+      undefined,
+      () => { /* 缺文件：程序化兜底 */ },
+    )
   }
 
   get _listener() { return this.player } // 音频听者：{ pos, yaw } 实时读
@@ -159,14 +315,18 @@ export class FlashSystem {
     this.t = 0
     this._despawn()
     this.blindUntil = -1
+    this._nearsightUntil = -1
+    this._plasma = null
     this.startAfter = countdownSec
     this.nextAt = this.mode === 'off' ? Infinity : countdownSec + rand(CONFIG.flash.firstMin, CONFIG.flash.firstMax)
   }
 
-  // 回合结束（结算面板弹出）：清道具并立即解除白屏
+  // 回合结束（结算面板弹出）：清道具并立即解除白屏/近视/等离子
   endRound() {
     this._despawn()
     this.blindUntil = -1
+    this._nearsightUntil = -1
+    this._plasma = null
   }
 
   // 地图重建（缺口左右切换）：旧轨迹作废，清道具重排
@@ -193,7 +353,11 @@ export class FlashSystem {
     const gapCx = (gap.x0 + gap.x1) / 2
     if (type === 'kayo') this._spawnKayo(gap, gapCx)
     else if (type === 'skye') this._spawnSkye(gap, gapCx)
-    else this._spawnPhoenix(gap, gapCx)
+    else if (type === 'phoenix') this._spawnPhoenix(gap, gapCx)
+    else if (type === 'yoru') this._spawnYoru(gap, gapCx)
+    else if (type === 'breach') this._spawnBreach(gap, gapCx)
+    else if (type === 'reyna') this._spawnReyna(gap, gapCx)
+    else this._spawnGecko(gap, gapCx)
   }
 
   // KAY/O：墙后投掷，二选一弹道——越墙顶高位爆（经典过墙闪）或穿缺口低位爆。
@@ -255,12 +419,92 @@ export class FlashSystem {
     this.audio.flashCast('phoenix', p0, this._listener)
   }
 
+  // Yoru：墙后掷出 Class 3 碎片（29m/s、重力 4.41）——飞行不可见也无声（v11.10），
+  // 撞到玩家侧墙面/地面才显形，0.6s 预备后爆（反应转身的时间窗）
+  _spawnYoru(gap, gapCx) {
+    const Y = CONFIG.flash.yoru
+    const startX = clamp(gapCx + rand(-0.8, 0.8), gap.x0 + 0.4, gap.x1 - 0.4)
+    const start = { x: startX, y: 1.6, z: -31.5 }
+    // 目标二选一：穿缺口砸玩家侧地面，或撞缺口旁的墙前面（z=-23.6 面）
+    const target = Math.random() < 0.5
+      ? { x: clamp(gapCx + rand(-1.1, 1.1), gap.x0 + 0.4, gap.x1 - 0.4), y: 0.05, z: rand(-21.6, -20.2) }
+      : { x: (Math.random() < 0.5 ? gap.x0 - rand(0.3, 0.9) : gap.x1 + rand(0.3, 0.9)), y: rand(1.6, 2.6), z: -23.5 }
+    const T = 0.55
+    const vel = {
+      x: (target.x - start.x) / T,
+      y: (target.y - start.y) / T + 0.5 * Y.gravity * T,
+      z: (target.z - start.z) / T,
+    }
+    this.proj = { type: 'yoru', pos: start, prevPos: { ...start }, vel, t: 0, bounced: false, windT: 0 }
+    // 无 cast 音：敌方本就听不见飞行中的碎片
+  }
+
+  // Breach：Placement 穿墙放置——charge 直接出现在玩家侧的墙前面（穿墙到达，
+  // 不飞弹道），0.5s 预备后爆 2.25s（预备期红橙脉冲是唯一的转身提示）
+  _spawnBreach(gap, gapCx) {
+    const side = Math.random() < 0.5 ? 1 : -1
+    const x = clamp(side > 0 ? gap.x1 + rand(0.3, 1.0) : gap.x0 - rand(0.3, 1.0), -16.8, 16.8)
+    const pos = { x, y: rand(1.7, 2.7), z: -23.53 } // 墙前面（厚 0.8、中心 -24）+ 盘半厚
+    this.proj = { type: 'breach', pos, prevPos: { ...pos }, t: 0 }
+    this.audio.flashCast('breach', pos, this._listener)
+  }
+
+  // Reyna：近视眼——Missile 从墙后直线穿地形（不撞墙！）到 10m 部署距，
+  // 0.4s 睁眼后 1.6s 内持续判定"瞳孔是否在玩家视野内"→ 命中即近视
+  _spawnReyna(gap, gapCx) {
+    const R = CONFIG.flash.reyna
+    const startX = clamp(gapCx + rand(-1.0, 1.0), gap.x0 + 0.4, gap.x1 - 0.4)
+    const start = { x: startX, y: 1.55, z: -31 }
+    const eye = this._eye()
+    const dx = eye.x - start.x, dz = eye.z - start.z
+    const dh = Math.hypot(dx, dz) || 1
+    // 部署点：朝玩家方向 10m（穿墙）——高度压在眼高附近，逼玩家正面应对
+    const to = {
+      x: start.x + (dx / dh) * R.deployDist,
+      y: clamp(eye.y + rand(-0.2, 0.5), 1.0, 2.3),
+      z: start.z + (dz / dh) * R.deployDist,
+    }
+    this.proj = {
+      type: 'reyna', pos: { ...start }, prevPos: { ...start },
+      from: start, to, t: 0, phase: 'fly', armT: 0, eyeT: 0, hp: R.hp,
+      voice: this.audio.leerHum?.(this._listener) ?? null,
+    }
+    this.proj.voice?.setPos(start.x, start.y, start.z)
+    this.audio.flashCast('reyna', start, this._listener)
+  }
+
+  // Gekko：Dizzy Class 2 投掷（同 KAY/O 物理）——半空悬停点 低弹道抛过墙，
+  // 0.65s 激活预备后减速悬停，活跃 1s 内锁定视线内玩家喷等离子
+  _spawnGecko(gap, gapCx) {
+    const G = CONFIG.flash.gecko
+    const startX = clamp(gapCx + rand(-0.8, 0.8), gap.x0 + 0.4, gap.x1 - 0.4)
+    const start = { x: startX, y: 1.6, z: -31.5 }
+    const target = { x: clamp(gapCx + rand(-1.2, 1.2), gap.x0 + 0.4, gap.x1 - 0.4), y: rand(1.6, 2.4), z: rand(-21.6, -20.4) }
+    const T = 0.6
+    const vel = {
+      x: (target.x - start.x) / T,
+      y: (target.y - start.y) / T + 0.5 * G.gravity * T,
+      z: (target.z - start.z) / T,
+    }
+    this.proj = {
+      type: 'gecko', pos: start, prevPos: { ...start }, vel, t: 0,
+      bounced: false, acquire: 0, fired: false, hp: G.hp, bobPhase: rand(0, 6),
+      voice: this.audio.dizzyFlight?.(this._listener) ?? null,
+    }
+    this.proj.voice?.setPos(start.x, start.y, start.z)
+    this.audio.flashCast('gecko', start, this._listener)
+  }
+
   _stepProj(dt) {
     const p = this.proj
     p.prevPos.x = p.pos.x; p.prevPos.y = p.pos.y; p.prevPos.z = p.pos.z
     if (p.type === 'kayo') this._stepKayo(p, dt)
     else if (p.type === 'skye') this._stepSkye(p, dt)
-    else this._stepPhoenix(p, dt)
+    else if (p.type === 'phoenix') this._stepPhoenix(p, dt)
+    else if (p.type === 'yoru') this._stepYoru(p, dt)
+    else if (p.type === 'breach') this._stepBreach(p, dt)
+    else if (p.type === 'reyna') this._stepReyna(p, dt)
+    else this._stepGecko(p, dt)
   }
 
   _stepKayo(p, dt) {
@@ -394,14 +638,175 @@ export class FlashSystem {
     if (p.t >= P.windup) this._pop(p, P.maxBlind)
   }
 
-  // 撞墙熄灭：小火花 + 泄气声（无致盲——被墙挡掉的闪光是无效道具）
+  // Yoru：飞行段 Class 3 物理 + 撞面弹起；撞面后静止原地显形，0.6s 预备倒数。
+  // 飞满 2s 一直没撞到任何面 → 消散（维基：fade away，无爆闪）
+  _stepYoru(p, dt) {
+    const Y = CONFIG.flash.yoru
+    p.t += dt
+    if (p.bounced) {
+      p.windT += dt
+      if (p.windT >= Y.windup) this._pop(p, Y.maxBlind)
+      return
+    }
+    if (p.t >= Y.maxAir) { this._fizzle(p, null); return } // 消散：无声无爆，安全
+    p.vel.y -= Y.gravity * dt
+    const speed = Math.hypot(p.vel.x, p.vel.y, p.vel.z)
+    if (speed > 1e-4) {
+      const dirX = p.vel.x / speed, dirY = p.vel.y / speed, dirZ = p.vel.z / speed
+      const dist = speed * dt
+      const hit = this.world.raycast(p.pos.x, p.pos.y, p.pos.z, dirX, dirY, dirZ, dist + 0.04)
+      if (hit && hit.t <= dist + 0.04) {
+        p.pos.x = hit.x + hit.nx * 0.06
+        p.pos.y = hit.y + hit.ny * 0.06
+        p.pos.z = hit.z + hit.nz * 0.06
+        p.bounced = true
+        p.windT = 0
+        // 显形瞬间：青色迸溅 + 上升预备音（0.6s 反应窗的听觉起点）
+        for (let i = 0; i < 12; i++) {
+          _va.set(Math.random() - 0.5, Math.random() * 0.9, Math.random() - 0.5).normalize().multiplyScalar(0.8 + Math.random() * 1.6)
+          this.fx.sparks.emit(p.pos.x, p.pos.y, p.pos.z, _va.x, _va.y, _va.z,
+            { life: 0.22 + Math.random() * 0.2, size: 0.03, r: 0.45, g: 0.9, b: 1, drag: 2.6 })
+        }
+        this.audio.flashBounce(p.pos, this._listener, 1)
+        this.audio.riftWindup?.(Y.windup - p.windT, p.pos, this._listener)
+        return
+      }
+      p.pos.x += p.vel.x * dt; p.pos.y += p.vel.y * dt; p.pos.z += p.vel.z * dt
+    }
+  }
+
+  // Breach：贴墙静止，0.5s 预备倒数（视觉脉冲在 renderSync）
+  _stepBreach(p, dt) {
+    p.t += dt
+    if (p.t >= CONFIG.flash.breach.windup) this._pop(p, CONFIG.flash.breach.maxBlind)
+  }
+
+  // Reyna：三段——fly（0.55s 匀速穿墙）→ arrive（0.4s 睁眼）→ active（1.6s 施加窗：
+  // 每步判 leerAffects，命中刷新近视截止时刻；被击毁在 damage()）
+  _stepReyna(p, dt) {
+    const R = CONFIG.flash.reyna
+    p.t += dt
+    if (p.phase === 'fly') {
+      const k = Math.min(1, p.t / R.travel)
+      p.pos.x = p.from.x + (p.to.x - p.from.x) * k
+      p.pos.y = p.from.y + (p.to.y - p.from.y) * k
+      p.pos.z = p.from.z + (p.to.z - p.from.z) * k
+      if (k >= 1) { p.phase = 'arrive'; p.armT = 0 }
+      return
+    }
+    if (p.phase === 'arrive') {
+      p.armT += dt
+      if (p.armT >= R.arrivalWindup) { p.phase = 'active'; p.eyeT = 0 }
+      return
+    }
+    p.eyeT += dt
+    const eye = this._eye()
+    const dxE = p.pos.x - eye.x, dyE = p.pos.y - eye.y, dzE = p.pos.z - eye.z
+    const dist = Math.hypot(dxE, dyE, dzE)
+    let angleDeg = 180
+    if (dist > 1e-6) {
+      const fw = this._forward()
+      angleDeg = Math.acos(clamp((fw.x * dxE + fw.y * dyE + fw.z * dzE) / dist, -1, 1)) * 180 / Math.PI
+    }
+    const los = this.world.lineOfSight(eye.x, eye.y, eye.z, p.pos.x, p.pos.y, p.pos.z)
+    if (leerAffects(angleDeg, los)) this._nearsightUntil = this.t + 0.3 // 命中：刷新视界占用
+    if (p.eyeT >= R.nearsight) { this._expire(p) } // 自然消散：无爆闪、不催 peek
+  }
+
+  // Gekko：抛掷段 Class 2 物理（0.65s 激活预备后强阻尼减速 → 半空悬停）；
+  // 活跃 1s 窗：视线内 45m 目标锁定 0.35s → 喷等离子（转身不可避），失准回退
+  _stepGecko(p, dt) {
+    const G = CONFIG.flash.gecko
+    p.t += dt
+    if (!p.slowed && p.t >= G.activationWindup) p.slowed = true
+    if (!p.slowed) {
+      // 抛掷段：重力 + 撞面即停（半空目标一般撞不到，撞到也算到位）
+      p.vel.y -= G.gravity * dt
+      const speed = Math.hypot(p.vel.x, p.vel.y, p.vel.z)
+      if (speed > 1e-4) {
+        const dirX = p.vel.x / speed, dirY = p.vel.y / speed, dirZ = p.vel.z / speed
+        const dist = speed * dt
+        const hit = this.world.raycast(p.pos.x, p.pos.y, p.pos.z, dirX, dirY, dirZ, dist + 0.04)
+        if (hit && hit.t <= dist + 0.04) {
+          p.pos.x = hit.x + hit.nx * 0.1; p.pos.y = hit.y + hit.ny * 0.1; p.pos.z = hit.z + hit.nz * 0.1
+          p.slowed = true; p.vel.x = p.vel.y = p.vel.z = 0
+        } else {
+          p.pos.x += p.vel.x * dt; p.pos.y += p.vel.y * dt; p.pos.z += p.vel.z * dt
+        }
+      }
+    } else {
+      // 悬停段：速度阻尼到 0 + 低频浮动（renderSync 叠加正弦，逻辑位不动）
+      const k = Math.exp(-6 * dt)
+      p.vel.x *= k; p.vel.y *= k; p.vel.z *= k
+      p.pos.x += p.vel.x * dt; p.pos.y += p.vel.y * dt; p.pos.z += p.vel.z * dt
+      if (p.pos.y < 0.55) p.pos.y = 0.55
+    }
+    const activeT = p.t - G.activationWindup
+    if (activeT < 0) return
+    if (activeT >= G.active) { this._expireGecko(p); return } // 活跃窗耗尽先判（喷过的也要收摊）
+    if (p.fired) return
+    const eye = this._eye()
+    const dist = Math.hypot(eye.x - p.pos.x, eye.y - p.pos.y, eye.z - p.pos.z)
+    const los = dist <= G.detect
+      && this.world.lineOfSight(p.pos.x, p.pos.y, p.pos.z, eye.x, eye.y, eye.z)
+    if (los) {
+      p.acquire += dt
+      if (p.acquire >= G.acquireWindup) this._firePlasma(p)
+    } else {
+      p.acquire = Math.max(0, p.acquire - dt * 2) // 目标丢失：锁定回退
+    }
+  }
+
+  // 等离子命中：溅射 2.5m 内必中（玩家眼即溅点）——全屏 2s = 1s 满效 + 1s 渐褪，
+  // 转身不可避（维基：cannot avoid by turning away），只要求喷溅瞬间 LOS
+  _firePlasma(p) {
+    p.fired = true
+    const eye = this._eye()
+    const total = dizzyPlasmaBlind()
+    this._plasma = { at: this.t, potencyUntil: this.t + total.potency, until: this.t + total.total }
+    // 等离子束 + 溅射糊屏的落点视觉
+    const dx = eye.x - p.pos.x, dy = eye.y - p.pos.y, dz = eye.z - p.pos.z
+    for (let i = 0; i < 22; i++) {
+      const f = i / 22
+      this.fx.sparks.emit(p.pos.x + dx * f, p.pos.y + dy * f, p.pos.z + dz * f,
+        (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 0.8,
+        { life: 0.3 + Math.random() * 0.25, size: 0.05, r: 0.78, g: 0.4, b: 1, alpha: 0.95, drag: 2 })
+    }
+    this.fx.sparks.emit(eye.x, eye.y, eye.z, 0, 0.3, 0,
+      { life: 0.5, size: 0.3, sizeEnd: 0.9, r: 0.78, g: 0.4, b: 1, alpha: 0.5, drag: 1 })
+    this.audio.plasmaSplat?.({ x: eye.x, y: eye.y, z: eye.z }, this._listener)
+    this.onPopped?.(true) // 敌方成功施放 → 催促 peek（与白闪 pop 同语义）
+  }
+
+  // Dizzy 活跃窗耗尽：坠落成休眠泡泡再消散（装饰性，无伤害）
+  _expireGecko(p) {
+    this.fx.sparks.emit(p.pos.x, p.pos.y - 0.1, p.pos.z, 0, -1.2, 0,
+      { life: 0.4, size: 0.08, sizeEnd: 0.04, r: 0.6, g: 0.5, b: 1, alpha: 0.8, drag: 0.4 })
+    this.audio.globuleDrop?.(p.pos, this._listener)
+    this._despawn()
+    this.onPopped?.(false)
+  }
+
+  // Reyna 眼自然消散：紫雾散尽（无白闪——近视眼到期不产生闪光）
+  _expire(p) {
+    this.fx.puffs.emit(p.pos.x, p.pos.y, p.pos.z, 0, 0.2, 0,
+      { life: 0.5, size: 0.2, sizeEnd: 0.5, r: 0.45, g: 0.3, b: 0.62, alpha: 0.3, drag: 1.2 })
+    this._despawn()
+    this.onPopped?.(false)
+  }
+
+  // 撞墙熄灭（hit=null = 空中消散，如 Yoru 碎片飞满 2s）：小火花 + 泄气声
+  // （无致盲——被墙挡掉/自然消散的闪光是无效道具）
   _fizzle(p, hit) {
+    const px = hit ? hit.x + hit.nx * 0.03 : p.pos.x
+    const py = hit ? hit.y + hit.ny * 0.03 : p.pos.y
+    const pz = hit ? hit.z + hit.nz * 0.03 : p.pos.z
     for (let i = 0; i < 10; i++) {
       _va.set(Math.random() - 0.5, Math.random() * 0.8, Math.random() - 0.5).normalize().multiplyScalar(0.6 + Math.random() * 1.4)
-      this.fx.sparks.emit(hit.x + hit.nx * 0.03, hit.y + hit.ny * 0.03, hit.z + hit.nz * 0.03,
+      this.fx.sparks.emit(px, py, pz,
         _va.x, _va.y, _va.z, { life: 0.2 + Math.random() * 0.2, size: 0.03, r: 1, g: 0.7, b: 0.4, drag: 2.5 })
     }
-    this.audio.flashFizzle({ x: hit.x, y: hit.y, z: hit.z }, this._listener)
+    this.audio.flashFizzle({ x: px, y: py, z: pz }, this._listener)
     this._despawn()
     this.onPopped?.(false)
   }
@@ -430,7 +835,10 @@ export class FlashSystem {
     }
     this._popVisual(p.type, pos)
     // 渐褪尾段的残像色（白屏退到一半时切类型色余晖）
-    this._tint = { kayo: '#bfeaff', skye: '#d8ffe6', phoenix: '#ffd9a8' }[p.type] ?? ''
+    this._tint = {
+      kayo: '#bfeaff', skye: '#d8ffe6', phoenix: '#ffd9a8',
+      yoru: '#cff5ff', breach: '#d6e2ff',
+    }[p.type] ?? ''
     // blinded=dur>0 传给音效：躲过（背对/无视线）时高频层压暗——"背身成功"听得出来
     this.audio.flashPop(p.type, pos, this._listener, intensity, dur > 0)
     this._despawn()
@@ -445,6 +853,8 @@ export class FlashSystem {
       kayo: { light: 0xbfeaff, ring: 0x7deaff, ringMax: 2.8, s1: [0.72, 0.96, 1], s2: [1, 1, 1] },
       skye: { light: 0xd8ffe6, ring: 0x66ffb2, ringMax: 2.4, s1: [0.55, 1, 0.72], s2: [1, 0.88, 0.5] },
       phoenix: { light: 0xffd9a8, ring: 0xff9a3c, ringMax: 2.6, s1: [1, 0.55, 0.16], s2: [1, 0.85, 0.45] },
+      yoru: { light: 0xcff5ff, ring: 0x7deaff, ringMax: 2.6, s1: [0.45, 0.9, 1], s2: [1, 1, 1] },
+      breach: { light: 0xd6e2ff, ring: 0x9db8ff, ringMax: 3.0, s1: [0.62, 0.72, 1], s2: [1, 1, 1] },
     }[type]
     // 爆闪照明：主场景灯在真实爆点（峰值 3× 步枪枪口焰、驻留 0.26s），
     // 第一人称通道由 vmPopGlow 以类型色点亮枪身+手套
@@ -487,7 +897,7 @@ export class FlashSystem {
     skye.glowMat.emissive.setHex(0x46ffb0)
   }
 
-  // ---- 渲染帧：白屏透明度 / 网格插值 / 模型动画 / 拖尾 / 移动声源 ----
+  // ---- 渲染帧：白屏/近视/等离子透明度 / 网格插值 / 模型动画 / 拖尾 / 移动声源 ----
   renderSync(alpha, dt = 0.016) {
     // 白屏：起爆后 0.06s 快速拉满（游戏同款的瞬时白），致盲期内不透明，
     // 到期后 1 秒线性渐褪（维基确认值）；径向渐变让边缘先透出一点视野。
@@ -505,10 +915,25 @@ export class FlashSystem {
     const bg = tail && this._tint ? this._tint : ''
     if (this.overlayEl.style.background !== bg) this.overlayEl.style.background = bg
 
+    // 近视（Reyna）：命中期不透明、转开 0.3s 内褪去；等离子（Dizzy）：1s 满效
+    // + 1s 渐褪（转身不可避）。两者都不是白闪，走独立屏效
+    this._nsO = this._nsO ?? 0
+    const nsTarget = this._nearsightUntil > this.t ? 1 : 0
+    this._nsO += (nsTarget - this._nsO) * Math.min(1, (nsTarget ? 9 : 4) * dt)
+    this.nearsightEl.style.opacity = this._nsO.toFixed(3)
+    let po = 0
+    if (this._plasma) {
+      if (this.t < this._plasma.potencyUntil) po = 1
+      else if (this.t < this._plasma.until) po = 1 - (this.t - this._plasma.potencyUntil) / (this._plasma.until - this._plasma.potencyUntil)
+      else this._plasma = null
+    }
+    this.plasmaEl.style.opacity = po.toFixed(3)
+
     const p = this.proj
     if (!p) return
     const m = this._models[p.type]
-    m.group.visible = true
+    // Yoru 碎片飞行中不可见（v11.10 敌方视角）——撞面显形才出现
+    m.group.visible = p.type !== 'yoru' || p.bounced
     const ix = p.prevPos.x + (p.pos.x - p.prevPos.x) * alpha
     const iy = p.prevPos.y + (p.pos.y - p.prevPos.y) * alpha
     const iz = p.prevPos.z + (p.pos.z - p.prevPos.z) * alpha
@@ -516,11 +941,16 @@ export class FlashSystem {
     this._animT += dt
 
     // 各自的起爆预告（telegraph）进度 0..1：KAY/O 最后 0.3s 发亮（维基 telegraph
-    // 0.3s）、斯凯预备期 0.3s、火男全程渐亮（与渐强音效同拍）
+    // 0.3s）、斯凯预备期 0.3s、火男全程渐亮（与渐强音效同拍）、Yoru/Breach 预备期
+    // 全程亮起、Reyna 睁眼进度、Dizzy 激活充能
     let tele = 0
     if (p.type === 'kayo') tele = clamp(1 - (p.fuse - p.t) / CONFIG.flash.kayo.telegraph, 0, 1)
     else if (p.type === 'skye' && p.phase === 'arm') tele = clamp(p.armT / CONFIG.flash.skye.activationWindup, 0, 1)
     else if (p.type === 'phoenix') tele = clamp(p.t / CONFIG.flash.phoenix.windup, 0, 1)
+    else if (p.type === 'yoru') tele = p.bounced ? clamp(p.windT / CONFIG.flash.yoru.windup, 0, 1) : 0
+    else if (p.type === 'breach') tele = clamp(p.t / CONFIG.flash.breach.windup, 0, 1)
+    else if (p.type === 'reyna') tele = p.phase === 'arrive' ? clamp(p.armT / CONFIG.flash.reyna.arrivalWindup, 0, 1) : p.phase === 'active' ? 1 : 0
+    else if (p.type === 'gecko') tele = clamp((p.t - 0.2) / CONFIG.flash.gecko.activationWindup, 0, 1)
 
     if (p.type === 'kayo') {
       // 翻滚随速度：出手快转，落地静止后收势（速度越低转越慢直至停住）
@@ -541,23 +971,67 @@ export class FlashSystem {
       const amp = armed ? 0.55 * (1 - tele) : 0.5 + 0.08 * Math.sin(phase * 0.13)
       const flap = armed ? 0 : Math.sin(phase * Math.PI * 2) * amp
       const base = 0.22 + (armed ? tele * 0.5 : 0) // 预备期翅膀上扬定格
-      m.wingL.rotation.z = base + flap
-      m.wingR.rotation.z = -base - flap
+      if (m.official && m.bones?.L_Wing1 && m.bones?.R_Wing1) {
+        // 官方鹰：翼骨绕本地 X（前轴）上下扑，叠加在静息姿态上
+        this._boneFlap(m.bones.L_Wing1, base + flap)
+        this._boneFlap(m.bones.R_Wing1, -(base + flap))
+        if (m.bones.Tail) this._boneFlap(m.bones.Tail, Math.sin(phase * 0.7) * 0.12, 'z')
+      } else {
+        m.wingL.rotation.z = base + flap
+        m.wingR.rotation.z = -base - flap
+      }
       m.glowMat.emissiveIntensity = 1.4 + tele * 4.4
       m.light.intensity = 0.8 + tele * 2.2
-    } else {
+    } else if (p.type === 'yoru') {
+      // 显形后原地自旋 + 内芯亮起（0.6s 预备的视觉倒数）
+      m.group.rotation.y += dt * 5
+      m.group.rotation.x += dt * 2.2
+      m.mat.emissiveIntensity = 0.6 + tele * 6
+      m.light.intensity = tele * 2.6
+      m.shell.material.opacity = 0.5 + tele * 0.5
+    } else if (p.type === 'breach') {
+      // 贴墙脉冲：随预备进度加速的呼吸灯（唯一的转身提示——v1.06 音画预告口径）
+      this._pulse += dt * (4 + 18 * tele)
+      m.glowMat.emissiveIntensity = 0.8 + tele * 3 * (0.55 + 0.45 * Math.sin(this._pulse * Math.PI * 2))
+      m.light.intensity = 0.5 + tele * 2.2
+    } else if (p.type === 'reyna') {
+      // 眼球盯人：+Z 瞳孔朝玩家 + 悬停浮动；睁眼期（tele）虹膜由暗转亮
+      m.group.lookAt(this.player.pos.x, iy, this.player.pos.z)
+      m.group.position.y = iy + Math.sin(this._animT * 2.2) * 0.05
+      const open = p.phase === 'fly' ? 0.4 : 0.6 + tele * 0.55
+      m.group.scale.setScalar(open)
+      m.irisMat.emissiveIntensity = 0.8 + tele * 2 + Math.sin(this._animT * 6) * 0.25
+      m.light.intensity = 0.6 + tele * 1.8
+      m.aura.material.opacity = 0.35 + tele * 0.35
+    } else if (p.type === 'phoenix') {
+      // 火球：9Hz 脉动 + 光晕随预告放大 + 全程渐亮（与渐强音效同拍）
       const pulse = 1 + Math.sin(this._animT * Math.PI * 2 * 9) * 0.12
       m.group.scale.setScalar(pulse)
       const hs = (0.42 + tele * 0.3) * pulse
       m.halo.scale.set(hs, hs, 1)
       m.mat.emissiveIntensity = 2 + tele * 4.5
       m.light.intensity = 1.1 + tele * 2.5
+    } else if (p.type === 'gecko') {
+      // Dizzy：悬停浮动 + 身体俯仰朝向玩家；官方模型摆尾/点头，程序化回退压身
+      m.group.position.y = iy + Math.sin(this._animT * 3.1 + p.bobPhase) * 0.06
+      m.group.lookAt(this.player.pos.x, m.group.position.y, this.player.pos.z)
+      const wag = Math.sin(this._animT * 7) * (0.25 + tele * 0.35)
+      if (m.official && m.bones?.Tail_01) {
+        this._boneFlap(m.bones.Tail_01, wag, 'y')
+        if (m.bones.Head) this._boneFlap(m.bones.Head, Math.sin(this._animT * 3.1 + p.bobPhase) * 0.14, 'x')
+        m.group.scale.setScalar(1 + tele * 0.12)
+      } else {
+        m.body.scale.y = 0.92 - tele * 0.1 + Math.sin(this._animT * 6) * 0.02
+        m.glowMat.emissiveIntensity = 1.2 + tele * 3
+      }
+      m.light.intensity = 0.9 + tele * 2
     }
 
-    // 拖尾：鹰绿光尾迹（充能满转橙+上飘余烬）/ 火球双层火焰+卷曲火丝；
-    // KAY/O 手雷无尾迹（游戏同款）
+    // 拖尾：鹰绿光尾迹（充能满转橙+上飘余烬）/ 火球双层火焰+卷曲火丝 /
+    // 眼与 Dizzy 的紫雾细缕；KAY/O 无尾迹（游戏同款）、Yoru 飞行不可见、
+    // Breach 贴墙静止（游戏同款均无）
     this._trailAt += dt
-    if (p.type !== 'kayo' && this._trailAt > 0.02) {
+    if ((p.type === 'skye' || p.type === 'phoenix' || p.type === 'reyna' || p.type === 'gecko') && this._trailAt > 0.02) {
       this._trailAt = 0
       const fx = this.fx
       if (p.type === 'skye') {
@@ -569,6 +1043,14 @@ export class FlashSystem {
         if (p.charged && Math.random() < 0.55) fx.sparks.emit(ix + (Math.random() - 0.5) * 0.2, iy, iz + (Math.random() - 0.5) * 0.2,
           (Math.random() - 0.5) * 0.3, 0.5 + Math.random() * 0.6, (Math.random() - 0.5) * 0.3,
           { life: 0.5, size: 0.028, r: 1, g: 0.5, b: 0.18, drag: 1.2 })
+      } else if (p.type === 'reyna') {
+        if (Math.random() < 0.6) fx.sparks.emit(ix + (Math.random() - 0.5) * 0.2, iy - 0.1, iz + (Math.random() - 0.5) * 0.2,
+          (Math.random() - 0.5) * 0.2, -0.3 - Math.random() * 0.3, (Math.random() - 0.5) * 0.2,
+          { life: 0.55, size: 0.045, sizeEnd: 0.01, r: 0.7, g: 0.3, b: 1, alpha: 0.7, drag: 1.4 })
+      } else if (p.type === 'gecko') {
+        if (Math.random() < 0.5) fx.sparks.emit(ix + (Math.random() - 0.5) * 0.15, iy - 0.05, iz + (Math.random() - 0.5) * 0.15,
+          (Math.random() - 0.5) * 0.3, -0.2 - Math.random() * 0.2, (Math.random() - 0.5) * 0.3,
+          { life: 0.4, size: 0.04, sizeEnd: 0.012, r: 0.78, g: 0.45, b: 1, alpha: 0.75, drag: 1.6 })
       } else {
         // 白热芯（贴核快熄）+ 橙红焰（外层缓淡）
         fx.sparks.emit(ix, iy, iz, -p.vel.x * 0.03 + (Math.random() - 0.5) * 0.3, -p.vel.y * 0.03 + 0.2 + Math.random() * 0.3, -p.vel.z * 0.03 + (Math.random() - 0.5) * 0.3,
@@ -591,8 +1073,58 @@ export class FlashSystem {
     p.voice?.setPos(ix, iy, iz)
   }
 
+  // 官方骨骼摆动：静息姿态 ⊗ 本地轴旋转（不覆盖绑定姿态）。轴按骨骼本地系：
+  // 翼骨 = x（前轴上下扑）、Dizzy 尾骨 = y（左右摆）、头骨 = x（点头）
+  _boneFlap(bone, angle, axis = 'x') {
+    _q.setFromAxisAngle(_axis.set(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0), angle)
+    bone.quaternion.copy(bone.userData.restQuat).multiply(_q)
+  }
+
   // 致盲剩余秒数（0 = 未致盲；调试/自动化用）
   get blindRemaining() {
     return this.blindUntil < 0 ? 0 : Math.max(0, this.blindUntil - this.t)
+  }
+
+  // ---- 可击毁道具（Leer 眼 60HP / Dizzy 20HP）：射线-球命中，供 WeaponSystem ----
+  // 在墙/机器人取最近时夹入。只认"到位后"的目标（飞行导弹段判定点还在移动），
+  // 返回 { t }（射线参数距离）或 null
+  pickHit(eye, dir, lim) {
+    const p = this.proj
+    if (!p) return null
+    const isEye = p.type === 'reyna' && p.phase === 'active'
+    const isDizzy = p.type === 'gecko' && p.slowed && !p.fired
+    if (!isEye && !isDizzy) return null
+    const R = isEye ? CONFIG.flash.reyna.radius : CONFIG.flash.gecko.radius
+    const cx = p.pos.x - eye.x, cy = p.pos.y - eye.y, cz = p.pos.z - eye.z
+    const t = cx * dir.x + cy * dir.y + cz * dir.z
+    if (t < 0 || t > lim) return null
+    const d2 = cx * cx + cy * cy + cz * cz - t * t
+    if (d2 > R * R) return null
+    return { t }
+  }
+
+  // 对当前可击毁道具结算伤害（dmg 已是该武器该距离的伤害值）；打碎 = 紫雾迸溅 +
+  // 碎裂声 + 无效化（近视/等离子都不会发生——"射掉闪光"是本训练器的新练点）
+  damage(dmg) {
+    const p = this.proj
+    if (!p || (p.type !== 'reyna' && p.type !== 'gecko') || p.hp === undefined) return
+    p.hp -= dmg
+    if (p.hp > 0) {
+      this.audio.propHit?.(p.pos, this._listener, p.hp / (p.type === 'reyna' ? CONFIG.flash.reyna.hp : CONFIG.flash.gecko.hp))
+      for (let i = 0; i < 6; i++) {
+        _va.set(Math.random() - 0.5, Math.random() * 0.7, Math.random() - 0.5).normalize().multiplyScalar(1 + Math.random() * 2)
+        this.fx.sparks.emit(p.pos.x, p.pos.y, p.pos.z, _va.x, _va.y, _va.z,
+          { life: 0.18 + Math.random() * 0.15, size: 0.028, r: 0.78, g: 0.5, b: 1, drag: 3 })
+      }
+      return
+    }
+    for (let i = 0; i < 24; i++) {
+      _va.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(1.2 + Math.random() * 3)
+      this.fx.sparks.emit(p.pos.x, p.pos.y, p.pos.z, _va.x, _va.y, _va.z,
+        { life: 0.3 + Math.random() * 0.3, size: 0.04, sizeEnd: 0.01, r: 0.7, g: 0.35, b: 1, alpha: 0.9, drag: 2.4 })
+    }
+    this.audio.propDestroyed?.(p.pos, this._listener)
+    this._despawn()
+    this.onPopped?.(false)
   }
 }

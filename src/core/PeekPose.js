@@ -27,24 +27,25 @@ export function strafeRampW({ style, speed, minSpeed = 0.25, rampSpeed = 1.15 })
   return Math.min(1, Math.max(0, (speed - minSpeed) / (rampSpeed - minSpeed)))
 }
 
-// 程序化侧移步态的姿态量 —— 官方口径（assets-raw/sova-psa Q_Bow_RunE/W 实测）：
-// 横移循环 = 腿链朝移动方向 yaw 后的「前进跑循环」——左右腿反相（一屈一伸交替）、
-// 膝基础屈曲 ~11.5° + 摆动峰值 ~106°、髋摆同跑（膝/髋曲线直接复用 GaitBake 跑步
-// 曲线按速度强度 k 缩放）；躯干/盆骨不扭（正对瞄准方向），盆骨侧倾随步态。
-// 这替换了早前「双腿镜像外展开合滑步（同屈同伸）」方案——官方数据里横移不是
-// 双脚同时触地的开合步，而是交替深膝循环，两种步态肉眼可辨。
-//   yaw   = −sign(lx)·0.90 + s·0.12      腿链朝移动方向（含步内呼吸）
-//   thigh = GAIT.run.thigh·k·sin(p)      矢状交替摆动（L 相位 p、R 相位 p+π）
-//   knee  = k·(0.20 + 1.55·max(0, −sin(p−0.5)))  官方 RunE 膝曲线
-//   abduct = s·0.12·k                    小幅外展稳定（官方 RunE 髋 Y 分量 ~35%）
-//   bob = (1−|s|)·(0.01 + speed·0.0036)  起伏（落脚最低、过中点最高）
-// phase 由里程推进（每步 π，调用侧保证横移步距口径，见 Bot.STRAFE_STEP_LEN）
+// 程序化侧移步态的姿态量 —— 官方口径（assets-raw/sova-psa Q_Bow_RunE/WalkE 实测）：
+// 横移循环 = 腿链朝移动方向 yaw 后的「前进跑循环」——左右腿反相（一屈一伸交替）。
+// 膝曲线用官方 WalkE/RunE 双锚点按速度插值：走速以下全程 WalkE 深膝（起步拉出
+// 不再被 k=speed/5.4 缩成浅膝碎步——官方走速横移本身就是 88.7° 峰值的大幅深膝），
+// 走→跑速之间线性过渡，5.4 及以上 = 既有 RunE 验收口径不变：
+//   WalkE 膝 基础 28.1°/峰值 88.7°（摆动幅 60.6°）→ base 0.49 / swing 1.06 rad
+//   RunE  膝 基础 11.5°/峰值 ~106°            → base 0.20 / swing = GAIT.run.knee
+// 髋摆同插值（走 ~42° 全幅 → 跑 0.82rad）；躯干/盆骨不扭（正对瞄准方向），盆骨
+// 侧倾随步态。相位由里程推进（每步 π，调用侧保证横移步距口径，见 Bot.STRAFE_STEP_LEN）
+const STRAFE_WALKE = { thigh: 0.70, base: 0.49, swing: 1.06 }
 export function strafeStepPose({ speed, phase, lateralVel, moveSpeed = 5.4 }) {
-  const k = Math.min(1, speed / moveSpeed)
+  const t = Math.min(1, Math.max(0, (speed - 3.39) / (moveSpeed - 3.39)))
+  const thigh = STRAFE_WALKE.thigh + (GAIT.run.thigh - STRAFE_WALKE.thigh) * t
+  const base = STRAFE_WALKE.base + (0.20 - STRAFE_WALKE.base) * t
+  const swing = STRAFE_WALKE.swing + (GAIT.run.knee - STRAFE_WALKE.swing) * t
   const sgn = -Math.sign(lateralVel || 1) // 模型右 +X：向右移腿链朝右
   const leg = (p) => ({
-    thigh: GAIT.run.thigh * k * Math.sin(p),
-    knee: k * (0.20 + GAIT.run.knee * Math.max(0, -Math.sin(p - 0.5))),
+    thigh: thigh * Math.sin(p),
+    knee: base + swing * Math.max(0, -Math.sin(p - 0.5)),
   })
   const L = leg(phase)
   const R = leg(phase + Math.PI)
@@ -53,14 +54,16 @@ export function strafeStepPose({ speed, phase, lateralVel, moveSpeed = 5.4 }) {
     yaw: sgn * 0.90 + Math.cos(phase) * 0.12,
     thighL: L.thigh, thighR: R.thigh,
     kneeL: L.knee, kneeR: R.knee,
-    abductL: Math.cos(phase) * -0.12 * k,
-    abductR: Math.cos(phase) * 0.12 * k,
+    abductL: Math.cos(phase) * -0.12 * (0.75 + 0.25 * t),
+    abductR: Math.cos(phase) * 0.12 * (0.75 + 0.25 * t),
     bob: (1 - Math.abs(Math.cos(phase))) * (0.01 + speed * 0.0036),
     lean: leanInto(lateralVel),
   }
 }
 
-// 向移动方向微倾（与程序化假人 _stepLegs 同参数）；回正速率由调用侧平滑
+// 向移动方向微倾（与程序化假人 _stepLegs 同参数）；回正速率由调用侧平滑。
+// 上限对齐官方：Sova RunE/W 盆骨侧倾均值 -4.8°/+9.8°（镜像入移动方向），取
+// 全速 ~0.12rad≈6.9°（0.02×5.4=0.108 未触顶）
 export function leanInto(lateralVel) {
-  return Math.min(0.05, Math.max(-0.05, -lateralVel * 0.011))
+  return Math.min(0.12, Math.max(-0.12, -lateralVel * 0.02))
 }

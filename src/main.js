@@ -32,6 +32,7 @@ const audio = new AudioSys()
 const world = new World()
 const map = new MapBuilder(world, engine.scene)
 const fx = new FX(engine.scene, engine.camera, engine)
+engine.prewarm() // 特效材质预热：第一枪不卡着色器编译（焰/曳光/弹孔都是懒编译）
 // 抛壳落地"叮" / 头盔落地"哐"（强度=落地速度归一，AudioSys 内部再随机音高/响度；
 // 头盔带落点坐标做 HRTF 空间化——头盔弹在哪个缺口一听便知）
 fx.onShellBounce = (k) => audio.shellTink(k)
@@ -62,7 +63,7 @@ const state = {
 
 // ---- 武器系统 ----
 const weapons = new WeaponSystem({
-  camera: engine.camera, vmCamera: engine.vmCamera, world, bots, fx, audio, player,
+  camera: engine.camera, vmCamera: engine.vmCamera, world, bots, fx, audio, player, flash: flashes,
 })
 weapons.onShotFired = () => bots.registerShot()
 // 热浪扭曲喂料：WeaponSystem 每渲染帧报枪口屏幕位+热量，Engine 的 shimmer pass 消费

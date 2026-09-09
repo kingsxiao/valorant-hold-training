@@ -177,6 +177,23 @@ export const CONFIG = {
     // Phoenix Curveball：Fixed 路径导弹（无重力、左/右曲），cast→起爆 0.6s（v11.00）、
     // 最大致盲 1.5s（v5.01）。飞行速度无公开值：按对局观察 ~9m 落点 ÷ 0.6s ≈ 15m/s（README 已知边界）
     phoenix: { speed: 15, windup: 0.6, maxBlind: 1.5 },
+    // Yoru Blindside：Class 3 投掷物（2900uu/s=29m/s、重力 0.45×9.8=4.41，Deployment
+    // types 表）；飞行不可见也无声（v11.10 修"潜行中敌方可听"）——撞面才显形 +
+    // 0.6s 预备（v2.06）；2s 未撞面消散（未确认值）；最大致盲 1.5s（v11.08，同时并入
+    // 标准闪光衰减曲线 = 现有 blindDuration 模型）
+    yoru: { speed: 29, gravity: 4.41, maxAir: 2, windup: 0.6, maxBlind: 1.5, restitution: 0.42 },
+    // Breach Flashpoint：Placement 穿墙放置（部署距 35m / 穿墙深 10m，本图墙厚自动满足），
+    // 到位后 0.5s 预备（v1.07）；最大致盲 2.25s（v11.08）
+    breach: { windup: 0.5, maxBlind: 2.25 },
+    // Reyna Leer：近视（非白闪）——Missile 穿地形到固定 10m 部署距（0.55s，未确认值），
+    // 到位 0.4s 预备（v5.07）后施加近视 1.6s（看清瞳孔即持续命中，6m 视界，
+    // game files）；60HP 可击毁
+    reyna: { deployDist: 10, travel: 0.55, arrivalWindup: 0.4, nearsight: 1.6, visionRadius: 6, hp: 60, radius: 0.32 },
+    // Gekko Dizzy：Class 2 投掷（同 KAY/O 18m/s、g2.94）——0.65s 激活预备（未确认值）
+    // 后减速悬停，活跃 1s（v9.08）内对 45m 视线内目标 0.35s 锁定（v7.12）喷等离子：
+    // 溅射 2.5m，全屏遮蔽 2s = 1s 满效 + 1s 渐褪（game files；转身不可避——
+    // 只判 LOS 不判朝向）；20HP 可击毁
+    gecko: { speed: 18, gravity: 2.94, activationWindup: 0.65, acquireWindup: 0.35, active: 1, detect: 45, splash: 2.5, blindPotency: 1, blindFade: 1, hp: 20, radius: 0.34 },
   },
 
   graphics: {

@@ -43,6 +43,20 @@ export function kayoFuseAfterBounce(remainingSec) {
   return Math.min(remainingSec, CONFIG.flash.kayo.bounceFuse)
 }
 
+// Reyna Leer 近视命中条件（维基：看清"瞳孔"才生效——eye's center in field of view）：
+// 无遮挡 + 眼心在视野锥内。与白闪不同：无距离衰减（部署距固定 10m），命中后
+// 持续施加直到眼消失或玩家转开
+export function leerAffects(angleDeg, los) {
+  return !!los && angleDeg <= CONFIG.flash.fovHalf
+}
+
+// Gekko Dizzy 等离子致盲时长（game files）：总 2s = 1s 满效 + 1s 渐褪。
+// 转身不可避（等离子糊满屏幕），命中只需喷溅时 LOS——不做角度/距离衰减
+export function dizzyPlasmaBlind() {
+  const G = CONFIG.flash.gecko
+  return { potency: G.blindPotency, fade: G.blindFade, total: G.blindPotency + G.blindFade }
+}
+
 // 二次贝塞尔弧长表：Fixed 曲线导弹（Curveball）按恒定速度行进需要弧长参数化。
 // 返回 { point(u, out), len }——point 接受 0..len 的弧长，落到贝塞尔曲线上
 export function arcBezier(p0, p1, p2, samples = 48) {

@@ -79,23 +79,29 @@ export function matchRigBones(root) {
 
 // ---- 步态曲线（mesh 空间角，X 轴：+ 前摆 / − 后屈；相位 p：|sin/cos| 周期 = 一步）----
 // 官方动画实测校准（assets-raw/{jett,sova}-psa：Rocklan Drive Animations 目录的
-// 第三人称 .psa 骨骼曲线，解析见 psa_osc.py）：跑周期 0.6s / 走周期 0.8~0.87s；
-// 膝基础屈曲 跑 20~33°、走 29~63°，摆动峰值 跑 108~117°、走 88~103°；髋摆全幅
-// 跑 ~60°(Jett) / 走 ~42°；盆骨在 clip 内恒高（起伏由腿部几何涌现，轨道只留极小
-// 值）、盆骨侧摆 ~12°；LB 内脊柱无轨道（前倾由盆骨/UB 层承担，此处保留少量
-// 脊柱分摊补 kamae 上身的直立倾向）
+// 第三人称 .psa 骨骼曲线，腿部见 psa_osc.py、盆骨见 psa_pelvis.py）：
+// 跑周期 0.6s / 走周期 0.8~0.87s；膝基础屈曲 跑 20~33°、走 29~63°，摆动峰值
+// 跑 108~117°、走 88~103°；髋摆全幅 跑 ~60°(Jett) / 走 ~42°；LB 内脊柱无轨道
+// （前倾由盆骨承担：RunN 盆骨前倾 -7(Jett~-13.5)°、RunS 后仰 +12.8°——N/S 对比
+// 锁定 X=俯仰轴；E/W 横移侧倾 -4.8°/+9.8° 镜像——锁定 Z=侧倾轴）。
+// 盆骨三轴振荡（1×/步）：yaw ~11.5°（跑/走同）、roll 跑 10.1° / 走 5.65°（相位
+// sin(p+0.83)，相对膝曲线超前 2.47rad ≈ 本约定下与大腿同相）、pitch 振荡 ≤2.5°
+// 可忽略；盆骨高度起伏 跑 ≤3mm、走/横移恒 0（bob 只留防滑步的最小值）
 export const GAIT = {
-  walk: { thigh: 0.70, knee: 0.95, kneeBase: 0.50, foot: 0.26, bob: 0.012, hipsYaw: 0.055, lean: 0, neck: 0 },
-  run: { thigh: 0.82, knee: 1.55, kneeBase: 0.38, foot: 0.45, bob: 0.025, hipsYaw: 0.100, lean: 0.16, neck: -0.08 },
+  walk: { thigh: 0.70, knee: 0.95, kneeBase: 0.50, foot: 0.26, toe: 0.155, bob: 0.006, hipsYaw: 0.207, hipsRoll: 0.099, hipsPitch: 0.05, lean: 0, neck: 0 },
+  run: { thigh: 0.82, knee: 1.55, kneeBase: 0.38, foot: 0.45, toe: 0.13, bob: 0.012, hipsYaw: 0.201, hipsRoll: 0.176, hipsPitch: -0.15, lean: 0.05, neck: -0.08 },
 }
 
 // 单腿三关节角：大腿正弦摆动；膝 = 基础屈曲（官方走/跑全程不屈直）+ 后摆段踢腿
-// 折膝（脚跟离地）；脚 = 落脚前勾脚尖/蹬地压脚尖的小幅摆动
+// 折膝（脚跟离地）；脚 = 落脚前勾脚尖/蹬地压脚尖的小幅摆动；趾 = 蹬地屈伸（官方
+// L_Toe 2× 步频谐波主导：跑 7.5°/走 8.85°，峰值在膝摆动峰前 ~0.5rad = 蹬地瞬间，
+// 只屈不反关节）
 export function legAngles(p, c) {
   return {
     thigh: c.thigh * Math.sin(p),
     knee: -((c.kneeBase ?? 0.12) + c.knee * Math.max(0, -Math.sin(p - 0.5))),
     foot: THREE.MathUtils.clamp(c.foot * Math.sin(p + 2.4), -0.45, 0.55),
+    toe: -(c.toe ?? 0) * Math.max(0, -Math.sin(2 * (p + 1.6))),
   }
 }
 
@@ -121,7 +127,7 @@ export function bakeLocomotionClips({ hipsBone, legs, spineBones = [], neckBone 
     const tracks = []
     const q = new THREE.Quaternion(), rx = new THREE.Quaternion()
 
-    // 双腿（R 侧相位差 π：镜像同步摆动）
+    // 双腿（R 侧相位差 π：镜像同步摆动）；趾骨出蹬地轨道（链第 4 节，父级 = 脚）
     for (const leg of legs) {
       const flip = leg.side === 'R' ? Math.PI : 0
       const chain = [
@@ -129,10 +135,11 @@ export function bakeLocomotionClips({ hipsBone, legs, spineBones = [], neckBone 
         { bone: leg.knee, parentW: leg.bind.up, bindW: leg.bind.knee },
         { bone: leg.foot, parentW: leg.bind.knee, bindW: leg.bind.foot },
       ]
+      if (leg.bind.toe && leg.toe) chain.push({ bone: leg.toe, parentW: leg.bind.foot, bindW: leg.bind.toe })
       const vals = chain.map(() => [])
       for (let i = 0; i <= samples; i++) {
         const a = legAngles((times[i] / duration) * Math.PI * 2 + flip, c)
-        const angles = [a.thigh, a.knee, a.foot]
+        const angles = [a.thigh, a.knee, a.foot, a.toe ?? 0]
         for (let j = 0; j < chain.length; j++) {
           // 目标 mesh 姿态 = R_x(θ)·bind；父级 Δ 同轴相消 → 局部 = parentBind⁻¹·R_x(θ)·bind
           rx.setFromAxisAngle(_AX_X, angles[j])
@@ -145,12 +152,17 @@ export function bakeLocomotionClips({ hipsBone, legs, spineBones = [], neckBone 
       }
     }
 
-    // 髋：小幅盆骨反转（yaw）+ 步态起伏（每步一次触底 = walkPhase 与 |cos|=1 落脚同拍）
+    // 髋：官方盆骨三轴轨道（psa_pelvis.py 实测，见 GAIT 注）——yaw 摆动与大腿
+    // 摆同相；roll 侧摆相位 sin(p+0.83)（摆动腿侧下沉）；pitch 前倾为常量（跑前倾
+    // / 走微后仰，LB 脊柱零轨道）。合成 roll·pitch·yaw·bind：roll/pitch 在最外层
+    // 按 mesh 世界轴施加，不随 yaw 换轴；起伏 bob 取官方值减半（防滑步下限）
     const hq = [], hp = []
     for (let i = 0; i <= samples; i++) {
       const p = (times[i] / duration) * Math.PI * 2
-      rx.setFromAxisAngle(_AX_Y, c.hipsYaw * Math.sin(p))
-      q.copy(rx).multiply(hipsBindQ)
+      _Q1.setFromAxisAngle(_AX_Y, c.hipsYaw * Math.sin(p))
+      _Q2.setFromAxisAngle(_AX_X, c.hipsPitch ?? 0)
+      _Q3.setFromAxisAngle(_AX_Z, (c.hipsRoll ?? 0) * Math.sin(p + 0.83))
+      q.copy(_Q3).multiply(_Q2).multiply(_Q1).multiply(hipsBindQ)
       hq.push(q.x, q.y, q.z, q.w)
       const bob = -c.bob * (0.5 + 0.5 * Math.cos(2 * p))
       hp.push(hipsBindPos.x, hipsBindPos.y + bob, hipsBindPos.z)
@@ -302,6 +314,9 @@ export function bakeDeathClips({
 const _AX_X = new THREE.Vector3(1, 0, 0)
 const _AX_Y = new THREE.Vector3(0, 1, 0)
 const _AX_Z = new THREE.Vector3(0, 0, 1)
+const _Q1 = new THREE.Quaternion()
+const _Q2 = new THREE.Quaternion()
+const _Q3 = new THREE.Quaternion()
 
 // mesh 空间世界四元数（根到该骨骼的链乘；克隆体挂在恒等根下时即世界）
 function _worldQ(bone) {

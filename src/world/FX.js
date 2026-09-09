@@ -138,13 +138,32 @@ export class FX {
     this.scene = scene
     this.camera = camera
     this.vmFlash = engine?.vmFlashLight ?? null // vmScene 枪口焰点光（见 Engine）
+    this.vmScene = engine?.vmScene ?? null
+    // 第一人称枪口焰精灵（vmScene 通道）：世界场景那份焰有一半被后画的枪身像素
+    // 盖住（vm pass 清深度后叠加、永远盖在世界之上）——枪口火光只露出上缘。
+    // 这份与枪身同通道绘制，正好叠在枪口上，"火从枪口喷出"读法完整。
+    // 仅玩家开火驱动（muzzle 的 Vector3 分支）；机器人枪口焰/闪光弹爆闪走世界精灵。
+    // 点位与尺寸都在相机本地系（vmScene 世界系 == 相机本地系），FOV 55 与世界
+    // pass 的透视差由 muzzle() 里的 0.74 系数折算，两通道观感尺寸一致。
+    if (this.vmScene) {
+      this.vmFlashSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: Tex.flash(), color: 0xffffff, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }))
+      this.vmFlashSprite.visible = false
+      this.vmScene.add(this.vmFlashSprite)
+      this.vmFlashLife = 0 // 第一人称精灵寿命钟（玩家开火）——与世界份独立，
+      this.vmFlashBase = 0.9 // 机器人同窗开火不会吞掉玩家的枪口焰（互不抢占）
+    }
 
     // 曳光：细长拉伸盒 + 自定义着色器（几何沿 +Z，lookAt 后 +Z 指向目标）。
     // 着色器做两件 MeshBasicMaterial 做不到的事：
     //  1) 沿长度渐变：段头白热、段尾渐暗（真实曳光是拖尾衰减的光带，不是均匀亮棒）
     //  2) 锥形收尾：顶点按 z 收窄束径（尾 40% → 头 100%），头粗尾细
-    // 几何 z∈[0,1]（translate 后），z=1 为段头
-    const tGeo = new THREE.BoxGeometry(0.014, 0.014, 1)
+    // 几何 z∈[0,1]（translate 后），z=1 为段头。束径 0.021：自机曳光是开火反馈的
+    // 主视觉之一（Valorant 的弹道光带一眼可读），1.4cm 在亮背景/远距下细到不可见，
+    // 2.1cm 折算 10-20m 弹道约 2-5px 宽、加法混合下清晰成线且不喧宾夺主
+    const tGeo = new THREE.BoxGeometry(0.021, 0.021, 1)
     tGeo.translate(0, 0, 0.5)
     const tMat = new THREE.ShaderMaterial({
       uniforms: {
@@ -194,7 +213,7 @@ export class FX {
       scene.add(m)
       const glow = new THREE.Sprite(glowMat.clone())
       glow.visible = false
-      glow.scale.setScalar(0.075)
+      glow.scale.setScalar(0.095)
       scene.add(glow)
       const halo = new THREE.Sprite(haloMat.clone())
       halo.visible = false
@@ -229,7 +248,7 @@ export class FX {
     this.flash.scale.set(0.3, 0.3, 1)
     this.flash.visible = false
     scene.add(this.flash)
-    this.flashLife = 0
+    this.flashLife = 0 // 世界精灵寿命钟（机器人枪口焰/爆闪）
     this.flashBase = 0.9 // 当前焰基准不透明度（消音武器压低；update 按比例衰减）
     this.flashLight = new THREE.PointLight(0xffbe7a, 0, 11, 2)
     this.flashLight.castShadow = false
@@ -237,6 +256,16 @@ export class FX {
     this.lightLife = 0
     this.lightPeak = 0
     this.lightDur = 0.06
+
+    // 命中点光（单灯池化，last-wins）：墙面/硬表面命中瞬间的局部照明 pop——
+    // Valorant 打墙那一记"亮一下"的读感。与枪口焰灯分开持有：连发时枪口灯常驻
+    // 命中点，弹着点的照明不能被它吃掉。地面命中弱一档（闷"噗"的语言）
+    this.impactLight = new THREE.PointLight(0xffc9a0, 0, 8, 2)
+    this.impactLight.castShadow = false
+    scene.add(this.impactLight)
+    this.impactLife = 0
+    this.impactPeak = 0
+    this.impactDur = 0.09
 
     // 粒子：火花（加法）+ 烟尘（普通混合）
     this.sparks = new ParticleSys(scene, Tex.spark(), THREE.AdditiveBlending, MAX_SPARKS)
@@ -364,35 +393,46 @@ export class FX {
     d.life = 14
   }
 
-  // 枪口焰按武器风格参数化（默认=步枪）：
+  // 枪口焰按武器风格参数化（默认=步枪）。世界坐标是 Vector3 时为玩家开火：
+  // 焰精灵走 vmScene 通道（与枪身同 pass、叠在枪口上不被枪身像素遮住）；
+  // 普通坐标对象 = 机器人/爆闪：走世界精灵。两路各持独立寿命钟——同帧先后
+  // 或同时开火互不抢占（共享单钟会让后开火的一方吞掉先前的焰）。
   //  suppressed：贴消音器的暗小火苗 + 弱光（消音枪不该有照明弹般的火球）
   //  heavy：大口径（Sheriff）更大更亮的火球与更硬的照明
   // opacity=焰基准不透明度（update 按其比例衰减）；
   // lightPeak=照明峰值（绝对值）或 light=峰值倍率（×16，二者取先传者）
   muzzle(worldPos, { scale = 1, opacity = 0.9, lightPeak = null, light = 1, lightDur = 0.06, color = 0xffbe7a, flashColor } = {}) {
     const peak = lightPeak ?? 16 * light
-    if (worldPos) this.flash.position.copy(worldPos)
-    this.flash.visible = true
-    this.flashBase = opacity
-    this.flash.material.opacity = opacity
-    this.flash.material.rotation = vary() * Math.PI * 2
-    this.flash.material.color.setHex(flashColor ?? 0xffffff)
-    const s = (0.26 + vary() * 0.14) * scale
-    this.flash.scale.set(s, s, 1)
-    // +半帧：update 在本帧渲染前先扣整帧 dt（见 update 注释），补回平均损失
-    this.flashLife = 0.045 + 0.008
+    const player = !!(worldPos?.isVector3 && this.vmFlashSprite)
+    const sprite = player ? this.vmFlashSprite : this.flash
+    if (player) {
+      this.vmFlashLife = 0.045 + 0.008
+      this.vmFlashBase = opacity
+      // 点位在相机本地系（vmScene 世界系 == 相机本地系）：焰与枪口在屏上锁定，
+      // 不随开火后的镜头移动漂移
+      sprite.position.copy(this.camera.worldToLocal(worldPos.clone()))
+    } else {
+      this.flashLife = 0.045 + 0.008
+      this.flashBase = opacity
+      if (worldPos) this.flash.position.copy(worldPos)
+    }
+    sprite.visible = true
+    sprite.material.opacity = opacity
+    sprite.material.rotation = vary() * Math.PI * 2
+    sprite.material.color.setHex(flashColor ?? 0xffffff)
+    // 玩家份×0.74：vm pass 垂直 FOV 55° 比世界 pass 透视放大 ~1.36 倍，
+    // 折算后两通道同点位焰的屏幕尺寸一致（枪口不因换通道而突然变大）
+    const s = (player ? 0.20 + vary() * 0.10 : 0.26 + vary() * 0.14) * scale
+    sprite.scale.set(s, s, 1)
     if (worldPos) {
       this.flashLight.position.copy(worldPos)
       this.flashLight.color.setHex(color)
       this.lightPeak = peak
       this.lightDur = lightDur
       this.lightLife = lightDur + 0.008
-      // vmScene 通道同款闪光：枪口世界位换算到相机本地系（vmScene 世界系）。
-      // 距离尺度小一个量级（0.2-0.5m），峰值按平方衰减比例取 1.2。
-      // 仅玩家开火参与（WeaponSystem 传 Vector3；bot 擦身弹道传普通对象，
-      // 且 bot 枪口位映到相机系毫无意义）
-      if (this.vmFlash && worldPos.isVector3) {
-        this.vmFlash.position.copy(this.camera.worldToLocal(worldPos.clone()))
+      // vmScene 通道同款闪光点光：仅玩家开火参与（bot 枪口位映到相机系毫无意义）
+      if (this.vmFlash && player) {
+        this.vmFlash.position.copy(this.vmFlashSprite.position)
         this.vmFlash.color.setHex(color)
         this.vmPeak = 1.2 * (peak / 16)
       }
@@ -410,10 +450,16 @@ export class FX {
     this.vmPeak = peak
   }
 
-  // 墙面/硬表面命中：碎屑火花 + 尘雾。地面（ny>0.7）火花减半、尘雾翻倍——
-  // 与 surfaceHit 的地面闷"噗"音色同一套材质判定，音画一致
+  // 墙面/硬表面命中：碎屑火花 + 尘雾 + 命中点光。地面（ny>0.7）火花减半、
+  // 尘雾翻倍、照明弱一档——与 surfaceHit 的地面闷"噗"音色同一套材质判定，
+  // 音画一致
   impact(x, y, z, nx, ny, nz) {
     const floor = ny > 0.7
+    this.impactLight.position.set(x + nx * 0.07, y + ny * 0.07, z + nz * 0.07)
+    this.impactLight.color.setHex(0xffc9a0)
+    this.impactPeak = floor ? 2.4 : 4
+    this.impactDur = 0.09
+    this.impactLife = this.impactDur + 0.008 // +半帧出生补偿（瞬态族同法）
     const nSparks = floor ? 4 : 8
     for (let i = 0; i < nSparks; i++) {
       const sp = 1.2 + vary() * 2.6
@@ -536,10 +582,10 @@ export class FX {
         dir.y * (0.5 + vary() * 0.8) + 0.25 + vary() * 0.25,
         dir.z * (0.5 + vary() * 0.8) + (vary() - 0.5) * 0.3,
         {
-          life: 0.4 + vary() * 0.4 + heat * 0.3, size: 0.05,
-          sizeEnd: 0.18 + heat * 0.14,
+          life: 0.4 + vary() * 0.4 + heat * 0.3, size: 0.065,
+          sizeEnd: 0.2 + heat * 0.16,
           r: 0.78 - heat * 0.26, g: 0.77 - heat * 0.26, b: 0.75 - heat * 0.24,
-          alpha: 0.15 + heat * 0.17, drag: 2.2,
+          alpha: 0.2 + heat * 0.2, drag: 2.2,
         })
     }
   }
@@ -616,7 +662,7 @@ export class FX {
       gl.visible = true
       gl.position.copy(t.from).addScaledVector(_v, head)
       gl.material.opacity = fade * t.baseOp
-      gl.scale.setScalar((0.06 + 0.02 * t.width) * (0.7 + 0.3 * rush)) // 冲刺段光珠微缩=速度感
+      gl.scale.setScalar((0.075 + 0.024 * t.width) * (0.7 + 0.3 * rush)) // 冲刺段光珠微缩=速度感
       // halo：更大更淡的外层泛光（×0.35 透明度、×3 尺寸）——亮场景里的存在感
       const ha = t.halo
       ha.visible = true
@@ -630,13 +676,30 @@ export class FX {
       if (d.life < 3) d.mesh.material.opacity = Math.max(0, d.life / 3) * 0.95
       if (d.life <= 0) d.mesh.visible = false
     }
+    // 双焰精灵各自独立寿命钟（muzzle 里已 +半帧 0.008s 补偿出生相位折损：
+    // 火苗在 simStep 生成，本帧 renderFrame 的 update 先扣整帧 dt 才首次上屏，
+    // clamp 到 1 保证峰值不超基准）
     if (this.flashLife > 0) {
       this.flashLife -= dt
-      // 出生帧补偿：火苗在 simStep 生成，本帧 renderFrame 的 update 先扣掉整帧
-      // dt 才首次上屏 → 实际可见寿命 29-45ms 随出生相位抖动（亮度忽明忽暗）。
-      // muzzle() 里已 +半帧（0.008s），这里 clamp 到 1 保证峰值不超基准
-      this.flash.material.opacity = Math.min(1, Math.max(0, this.flashLife / 0.045)) * this.flashBase
+      if (this.flash.visible) {
+        this.flash.material.opacity = Math.min(1, Math.max(0, this.flashLife / 0.045)) * this.flashBase
+      }
       if (this.flashLife <= 0) this.flash.visible = false
+    }
+    if (this.vmFlashLife > 0) {
+      this.vmFlashLife -= dt
+      if (this.vmFlashSprite.visible) {
+        this.vmFlashSprite.material.opacity = Math.min(1, Math.max(0, this.vmFlashLife / 0.045)) * this.vmFlashBase
+      }
+      if (this.vmFlashLife <= 0) this.vmFlashSprite.visible = false
+    }
+    // 命中点光衰减（单灯池化：下一次命中直接顶替位置与峰值）
+    if (this.impactLife > 0) {
+      this.impactLife -= dt
+      const k = Math.min(1, Math.max(0, this.impactLife / this.impactDur))
+      this.impactLight.intensity = this.impactPeak * k
+    } else if (this.impactLight.intensity !== 0) {
+      this.impactLight.intensity = 0
     }
     // 动态光衰减（主场景灯 + vmScene 灯同步）
     if (this.lightLife > 0) {
@@ -724,7 +787,10 @@ export class FX {
     this.sparks.n = 0
     this.puffs.n = 0
     this.flashLife = 0; this.flash.visible = false
+    this.vmFlashLife = 0
+    if (this.vmFlashSprite) this.vmFlashSprite.visible = false
     this.lightLife = 0; this.flashLight.intensity = 0
+    this.impactLife = 0; this.impactLight.intensity = 0
     if (this.vmFlash) this.vmFlash.intensity = 0
   }
 }

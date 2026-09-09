@@ -537,6 +537,7 @@ export class AudioSys {
   flashCast(kind, pos, listener) {
     this.ensure()
     if (!this.ctx) return
+    if (kind === 'yoru') return // v11.10：敌方听不到飞行中的盲侧碎片——保持完全无声
     const out = this._spatial(pos, listener)
     if (kind === 'kayo') { // 抛掷破空 + 机关展开轻响（飞行途中无声——v3.06 已移除飞行音）
       this._noiseBurst(out, { dur: 0.16, freq: 700, freqEnd: 1600, q: 1, gain: 0.3 })
@@ -547,6 +548,16 @@ export class AudioSys {
       this._noiseBurst(out, { dur: 0.05, freq: 1000, q: 2, gain: 0.14, delay: 0.3 })
       this._hawkCry(out, 0.05, 1850, 0.26, 0.11)
       this._hawkCry(out, 0.36, 1600, 0.18, 0.07)
+    } else if (kind === 'breach') { // 穿墙放置：闷雷般的墙体震动 + 装置锁定咔哒
+      this._thump(out, { freq: 90, freqEnd: 42, dur: 0.22, gain: 0.5 })
+      this._noiseBurst(out, { dur: 0.1, freq: 500, freqEnd: 220, q: 1.2, gain: 0.22, delay: 0.02 })
+      this._osc(out, { type: 'square', freq: 320, freqEnd: 520, dur: 0.05, gain: 0.08, delay: 0.16 })
+    } else if (kind === 'reyna') { // 凝视之眼：魂雾升腾——气声上升 + 高频魂啸拖尾
+      this._noiseBurst(out, { dur: 0.4, freq: 500, freqEnd: 2400, q: 1.1, gain: 0.2 })
+      this._osc(out, { type: 'sawtooth', freq: 660, freqEnd: 1320, dur: 0.5, gain: 0.05, delay: 0.1 })
+    } else if (kind === 'gecko') { // Dizzy 出手：两声上扬生物啾叫
+      this._osc(out, { type: 'sine', freq: 880, freqEnd: 1560, dur: 0.09, gain: 0.16 })
+      this._osc(out, { type: 'sine', freq: 1180, freqEnd: 2100, dur: 0.11, gain: 0.14, delay: 0.12 })
     } else { // 火男点火出手：低频起燃 + 高频嘶响
       this._noiseBurst(out, { dur: 0.3, freq: 350, freqEnd: 1300, q: 1, gain: 0.3 })
       this._noiseBurst(out, { dur: 0.22, freq: 2600, q: 1.6, gain: 0.12, delay: 0.05 })
@@ -662,6 +673,14 @@ export class AudioSys {
       this._metal(out, 4800, 0.18, 0.1 * v, 0.03)
       this._noiseBurst(out, { dur: 0.07, freq: 2400, q: 1.2, gain: 0.08 * v, delay: 0.09 })
       this._noiseBurst(out, { dur: 0.07, freq: 2100, q: 1.2, gain: 0.06 * v, delay: 0.19 })
+    } else if (kind === 'yoru') { // 维度碎裂：玻璃脆响 + 低频暗涌（冷色的"裂开"感）
+      this._noiseBurst(out, { dur: 0.09, freq: 4200, q: 3, gain: 0.34 * v, delay: 0.004 })
+      this._metal(out, 2900, 0.22, 0.16 * v)
+      this._thump(out, { freq: 96, freqEnd: 34, dur: 0.3, gain: 0.5 * v, delay: 0.01 })
+    } else if (kind === 'breach') { // 双联冲击：主爆后 90ms 追一记闷雷（穿墙震动感）
+      this._thump(out, { freq: 120, freqEnd: 38, dur: 0.3, gain: 0.75 * v, delay: 0.09 })
+      this._noiseBurst(out, { dur: 0.3, freq: 600, freqEnd: 130, q: 0.8, gain: 0.5 * v, delay: 0.09 })
+      this._metal(out, 2200, 0.3, 0.2 * v)
     } else { // KAY/O：电子脆响叠加（机器道具的"咔-嗡"收束）
       this._osc(out, { type: 'square', freq: 1400, freqEnd: 300, dur: 0.05, gain: 0.22 * v, delay: 0.004 })
       this._noiseBurst(out, { dur: 0.03, freq: 3100, q: 4, gain: 0.3 * v, delay: 0.005 })
@@ -761,6 +780,118 @@ export class AudioSys {
         try { src.stop(); src2.stop(); tone.stop(); v.stop() } catch { /* 已停 */ }
       },
     }
+  }
+
+  // Yoru 盲侧碎片显形预备（撞面后 0.6s）：维度裂隙声——失谐双音上行 + 碎裂
+  // 高频嘶响，dur 传剩余预备时长，收尾压在起爆上（与 KAY/O 嗡鸣同构、音色更"裂"）
+  riftWindup(dur, pos, listener) {
+    this.ensure()
+    if (!this.ctx || dur <= 0.05) return
+    const out = this._spatial(pos, listener)
+    const t = this.ctx.currentTime
+    for (const [mul, type, gain] of [[1, 'sawtooth', 0.09], [1.013, 'sawtooth', 0.09], [2.02, 'triangle', 0.05]]) {
+      const o = this.ctx.createOscillator()
+      o.type = type
+      o.frequency.setValueAtTime(240 * mul, t)
+      o.frequency.exponentialRampToValueAtTime(1250 * mul, t + dur)
+      const g = this.ctx.createGain()
+      g.gain.setValueAtTime(0.0001, t)
+      g.gain.exponentialRampToValueAtTime(gain, t + Math.min(0.08, dur * 0.3))
+      g.gain.setValueAtTime(gain, t + dur * 0.85)
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+      o.connect(g).connect(out)
+      o.start(t); o.stop(t + dur + 0.02)
+    }
+    this._noiseBurst(out, { dur: dur * 0.9, freq: 2600, freqEnd: 6800, q: 2.2, gain: 0.07, type: 'highpass' })
+  }
+
+  // Reyna 凝视之眼悬停循环：失谐正弦双音低鸣 + 0.4Hz 拍频（魂雾里"睁着的眼"）
+  leerHum(listener) {
+    const v = this._movingVoice(listener)
+    if (!v) return null
+    const t = this.ctx.currentTime
+    const oscs = []
+    for (const [f, g] of [[310, 0.05], [318, 0.05], [636, 0.02]]) {
+      const o = this.ctx.createOscillator()
+      o.type = 'sine'; o.frequency.value = f
+      const og = this.ctx.createGain(); og.gain.value = g
+      o.connect(og).connect(v.input)
+      o.start(t)
+      oscs.push(o)
+    }
+    return {
+      setPos: v.setPos,
+      stop: () => {
+        try { for (const o of oscs) o.stop(); v.stop() } catch { /* 已停 */ }
+      },
+    }
+  }
+
+  // Gekko Dizzy 悬停循环：活泼啾鸣 LFO（5Hz 颤音调制的正弦短音群）+ 轻微扑翼气声
+  dizzyFlight(listener) {
+    const v = this._movingVoice(listener)
+    if (!v) return null
+    const t = this.ctx.currentTime
+    const o = this.ctx.createOscillator()
+    o.type = 'sine'
+    o.frequency.setValueAtTime(950, t)
+    o.frequency.linearRampToValueAtTime(1250, t + 0.5)
+    const lfo = this.ctx.createOscillator(); lfo.frequency.value = 5
+    const lfoG = this.ctx.createGain(); lfoG.gain.value = 0.045
+    const g = this.ctx.createGain(); g.gain.value = 0.05
+    lfo.connect(lfoG).connect(g.gain)
+    o.connect(g).connect(v.input)
+    const air = this.ctx.createBufferSource()
+    air.buffer = this._noise; air.loop = true
+    const airF = this.ctx.createBiquadFilter(); airF.type = 'bandpass'; airF.frequency.value = 1200; airF.Q.value = 1.4
+    const airG = this.ctx.createGain(); airG.gain.value = 0.05
+    air.connect(airF).connect(airG).connect(v.input)
+    o.start(t); lfo.start(t); air.start(t)
+    return {
+      setPos: v.setPos,
+      stop: () => { try { o.stop(); lfo.stop(); air.stop(); v.stop() } catch { /* 已停 */ } },
+    }
+  }
+
+  // 等离子糊屏：黏稠"啪叽"——下滑方波 + 带通甩溅 + 湿润低频
+  plasmaSplat(pos, listener) {
+    this.ensure()
+    if (!this.ctx) return
+    const out = this._spatial(pos, listener)
+    this._osc(out, { type: 'square', freq: 1400, freqEnd: 220, dur: 0.12, gain: 0.2 })
+    this._noiseBurst(out, { dur: 0.3, freq: 1900, freqEnd: 320, q: 1.1, gain: 0.34, delay: 0.01 })
+    this._thump(out, { freq: 150, freqEnd: 55, dur: 0.18, gain: 0.3, delay: 0.02 })
+    this._osc(out, { type: 'sine', freq: 420, freqEnd: 160, dur: 0.4, gain: 0.07, delay: 0.1 })
+  }
+
+  // 可击毁道具受击（Leer/Dizzy）：脆响按剩余血量变调（快碎时音高发紧）
+  propHit(pos, listener, hpFrac = 0.5) {
+    this.ensure()
+    if (!this.ctx) return
+    const out = this._spatial(pos, listener)
+    const f = 1800 + (1 - hpFrac) * 900
+    this._noiseBurst(out, { dur: 0.04, freq: f, q: 3, gain: 0.3 })
+    this._osc(out, { type: 'triangle', freq: f * 0.5, freqEnd: f * 0.3, dur: 0.06, gain: 0.1, delay: 0.01 })
+  }
+
+  // 可击毁道具被打碎：魂晶碎裂——金属余音 + 玻璃散落 + 下滑魂啸
+  propDestroyed(pos, listener) {
+    this.ensure()
+    if (!this.ctx) return
+    const out = this._spatial(pos, listener)
+    this._metal(out, 3400, 0.3, 0.22)
+    this._noiseBurst(out, { dur: 0.22, freq: 5200, freqEnd: 1600, q: 2, gain: 0.26, type: 'highpass', delay: 0.02 })
+    this._osc(out, { type: 'sawtooth', freq: 900, freqEnd: 260, dur: 0.35, gain: 0.07, delay: 0.03 })
+    this._thump(out, { freq: 130, freqEnd: 50, dur: 0.14, gain: 0.25 })
+  }
+
+  // Dizzy 耗尽坠成休眠泡泡：下滑啾声 + 软着陆扑通
+  globuleDrop(pos, listener) {
+    this.ensure()
+    if (!this.ctx) return
+    const out = this._spatial(pos, listener)
+    this._osc(out, { type: 'sine', freq: 1300, freqEnd: 500, dur: 0.22, gain: 0.1 })
+    this._thump(out, { freq: 180, freqEnd: 80, dur: 0.08, gain: 0.16, delay: 0.24 })
   }
 
   // 暂停/恢复：挂起整个 AudioContext（音频时钟随游戏时钟一起冻结——长循环音

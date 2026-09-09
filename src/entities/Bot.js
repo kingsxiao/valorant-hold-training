@@ -4,7 +4,8 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { CONFIG } from '../core/Config.js'
 import { groundStep, accelFor } from '../core/GroundMotion.js'
 import { peekFacingYaw, leanInto, strafeRampW, strafeStepPose } from '../core/PeekPose.js'
-import { matchRigBones, bakeLocomotionClips } from '../core/GaitBake.js'
+import { matchRigBones, bakeLocomotionClips, bakeDeathClips } from '../core/GaitBake.js'
+import { solveGunAim, pickAimTarget, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK } from '../core/WeaponAim.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
 import { raySphere } from '../world/World.js'
@@ -13,7 +14,8 @@ import { raySphere } from '../world/World.js'
 //  - 分段人形：头盔+发光面罩 / 护甲(3D 弹匣袋+袋盖+腰带) / 圆柱渐变四肢 / 手套 / VALORANT 横移步态
 //  - 全部 PBR：颜色+粗糙度+法线贴图（程序化生成，纹理单例共享，材质按 bot 克隆）
 //  - 命中区域球体（头/胸/腹/腿）与视觉对齐；移动模型与玩家一致
-//  - 命中反馈：受击泛红闪 + 踉跄后仰（爆头更强）；死亡后仰倒地 + 侧倒 + 淡出消散
+//  - 命中反馈：受击泛红闪 + 踉跄后仰（爆头更强）；死亡后仰塌倒 + 侧倒，尸体
+//    与掉枪整局留存（corpse 模式：定格零开销）——池复用/回合结束/地图重建才回收
 //  - 接触阴影；支持 agent.glb 骨骼模型整体替换（SkeletonUtils 克隆）：
 //    idle/walk/run 按实际移速加权混合，clip 播放头由步态相位锁定驱动（速率恒
 //    等于实际移速不滑步）；单 clip 老模型（BrainStem）静止时相位停走=冻结
@@ -24,7 +26,14 @@ import { raySphere } from '../world/World.js'
 //    玩家不扭腰（横移时上身压向 idle，持枪不甩臂），双腿镜像外展滑步 + 脚尖
 //    微朝移动方向 + 并腿屈膝起伏（与程序化假人同套 VALORANT 步态口径），见
 //    _stepStrafeGait；腿骨链不齐的老模型 pull 退回顺跑向（防滑步穿帮）
-const STEP_LEN = 1.15 // 一步的位移（m）：步态相位锁相基准
+//  - 挂官方枪（Vandal/Phantom 池，kamae 双 WeaponPoint 中点架枪位）：世界空间
+//    解瞄准四元数——pull 对枪/站定枪口追玩家眼、cross 顺跑向携枪（_stepGun）；
+//    受击踉跄/开火后坐走脊柱骨骼覆盖（_applyUpperFlinch 共轭精确合成）；
+//    死亡为骨骼化塌倒（bakeDeathClips 烘焙：盆骨后仰下沉+腿折叠+撒手）+
+//    撒手掉枪弹道（WeaponAim.stepDroppedGun：抛落翻滚落地摆平）
+const STEP_LEN = 1.55 // 一步的位移（m）：步态相位锁相基准。官方动画实测（assets-raw/psa_*：
+                      // 跑周期 0.6s@5.4m/s → 1.62m/步、走周期 ~0.85s@3.39m/s → 1.44m/步）取中值
+const STRAFE_STEP_LEN = 1.15 // 横移步距保持既有调校口径（pull 出场节奏 1 步/1.15m 已验收）
 const _v = new THREE.Vector3()
 const _up = new THREE.Vector3(0, 1, 0)
 const _axX = new THREE.Vector3(1, 0, 0)
@@ -33,6 +42,19 @@ const _q1 = new THREE.Quaternion()
 const _q2 = new THREE.Quaternion()
 const _q3 = new THREE.Quaternion()
 const _q4 = new THREE.Quaternion()
+const _gv1 = new THREE.Vector3() // 挂枪：双 WeaponPoint 世界位置/中点
+const _gv2 = new THREE.Vector3()
+const _gaim = new THREE.Vector3() // 挂枪瞄准目标
+const _gq1 = new THREE.Quaternion()
+const _gq2 = new THREE.Quaternion()
+const _gq3 = new THREE.Quaternion()
+const _gq4 = new THREE.Quaternion()
+const _gscl = new THREE.Vector3() // decompose 的 scale 占位
+const _ikA = new THREE.Vector3() // 左手 IK：肩/肘/腕世界位置 + 目标
+const _ikB = new THREE.Vector3()
+const _ikC = new THREE.Vector3()
+const _ikT = new THREE.Vector3()
+const _ikDir = new THREE.Vector3()
 const _chainW = new THREE.Quaternion() // 腿链覆盖：髋世界 → 逐骨下传的父级世界
 const _curW = new THREE.Quaternion()
 
@@ -40,6 +62,7 @@ export class Bot {
   static customTemplate = null   // 用户 GLB 模板（UserAssets 注入）
   static customAnimations = null // 模板动画 clips
   static customTemplates = null  // 多英雄模板池 [{root, clips}]（agent-*.glb，每 bot 随机一名）
+  static weaponTemplates = null  // 官方枪模板池 {vandal, phantom}（main 注入归一化件克隆，每 bot 随机一把）
   static _baseMats = null        // 基础材质（纹理共享，逐 bot clone）
   static realShadows = false     // 真实阴影开启时隐藏 blob 接触阴影（防双重投影）
 
@@ -66,6 +89,9 @@ export class Bot {
     this.flinch = 0      // 受击踉跄相位（0~1+，衰减）
     this.flinchAmp = 0   // 本次踉跄后仰幅度
     this.deathRoll = 0   // 死亡侧倒角
+    this.breath = 0      // 程序化假人 idle 呼吸相位（mixer 假人有 kamae 待机自带）
+    this.breathW = 0     // 呼吸权重（静止淡入 / 移动快速淡出，防与步态叠加）
+    this._yBase = 0      // 步态/急停的高度基线（呼吸偏移在其上绝对合成，防累积）
 
     // 命中区域：{ y, r, zone }
     this.zones = [
@@ -269,6 +295,64 @@ export class Bot {
       }))
     }
     this._strafeRig = rig ? { hips: rig.hips, legs: rigLegs } : null
+    // 死亡塌倒烘焙 + 受击脊柱覆盖层的 bind 基准（mixer 首次 update 前的
+    // kamae 绑定姿态）：盆骨父级/自身世界四元数、盆骨世界高、脊柱/颈世界基准
+    this._rigExtra = null
+    this.deathClip = null
+    this.gun = null
+    this._drop = null
+    if (rig) {
+      const spineBindW = rig.spine.map(b => b.getWorldQuaternion(new THREE.Quaternion()))
+      const neckBindW = rig.neck ? rig.neck.getWorldQuaternion(new THREE.Quaternion()) : null
+      this._rigExtra = { spine: rig.spine, neck: rig.neck, spineBindW, neckBindW }
+      this.deathClip = bakeDeathClips({
+        hipsBone: rig.hips,
+        hipsParentW: rig.hips.parent.getWorldQuaternion(new THREE.Quaternion()),
+        hipsBindW: rig.hips.getWorldQuaternion(new THREE.Quaternion()),
+        hipsBindY: rig.hips.getWorldPosition(new THREE.Vector3()).y,
+        legs: rigLegs,
+        spineBones: rig.spine, spineBindW,
+        neckBone: rig.neck, neckBindW,
+        arms: rig.arms ?? [],
+      })
+      // 挂官方枪（Vandal/Phantom 池随机一把）：kamae 双手架枪位——R 后手/L 前手
+      // 两根 WeaponPoint。holder 挂 mesh 下、逐帧世界空间解瞄准（_stepGun），
+      // 枪口追目标 = 本体持枪对枪形态；材质逐 bot 克隆（受击闪红/死亡淡出含枪）
+      const wtpl = Bot.weaponTemplates
+      const wkeys = wtpl ? Object.keys(wtpl) : []
+      if (wkeys.length && rig.weaponL && rig.weaponR) {
+        const gun = wtpl[wkeys[(Math.random() * wkeys.length) | 0]].clone(true)
+        let gi = 0
+        gun.traverse(o => {
+          if (!o.isMesh) return
+          o.castShadow = true
+          o.frustumCulled = false
+          o.material = Array.isArray(o.material) ? o.material.map(m => m.clone()) : o.material.clone()
+          for (const m0 of (Array.isArray(o.material) ? o.material : [o.material])) {
+            this.mats['gun' + gi++] = m0
+            m0.userData.em ??= m0.emissive?.getHex() ?? 0   // 受击闪红后按原始值恢复
+            m0.userData.emI ??= m0.emissiveIntensity ?? 1
+            this._ownMats.push(m0)
+          }
+        })
+        const holder = new THREE.Group()
+        gun.position.set(0, -0.02, 0) // 微下沉：握把落向后手
+        holder.add(gun)
+        holder.updateMatrixWorld(true)
+        const bb = new THREE.Box3().setFromObject(gun)
+        const muzzle = bb.getCenter(new THREE.Vector3())
+        muzzle.z = bb.min.z // 枪口 = -Z 端（UserAssets.normalizeViewmodel 约定）
+        const muzzleLocal = holder.worldToLocal(muzzle)
+        this.gun = {
+          holder, gun,
+          boneL: rig.weaponL, boneR: rig.weaponR,
+          armL: rig.arms?.find(a => a.side === 'L') ?? null, // 左手两骨 IK 链（肩/肘）
+          muzzleLocal,
+          aimQ: new THREE.Quaternion(), kick: 0, init: false,
+        }
+        g.add(holder)
+      }
+    }
     // 动画：idle/walk/run 多 clip 按移速加权混合；单 clip 老模型回退为
     // "移动时播放走路段、静止时冻结在当前帧"（避免原地踏步）
     // 注意不能 stopAllAction()/uncacheRoot() —— 会把属性还原回 T-pose 绑定姿态
@@ -304,6 +388,11 @@ export class Bot {
       this.anim.walk.timeScale = 0
       if (idle && idle !== walk) this.anim.idle = mk(idle)
       if (run) { this.anim.run = mk(run); this.anim.run.timeScale = 0 }
+      if (this.deathClip) { // 死亡塌倒 clip：常态零权重，startDeath 时接管
+        this.deathAction = this.mixer.clipAction(this.deathClip)
+        this.deathAction.play()
+        this.deathAction.setEffectiveWeight(0)
+      }
       this._animAcc = 0
       this._setAnimWeights(0)
       this.mixer.update(0)
@@ -335,7 +424,7 @@ export class Bot {
 
   // 骨骼动画权重：idle ↔ walk ↔ run 按移速平滑过渡。
   // clip 播放头由步态相位直接驱动（walkPhase → time，周期 2×STEP_LEN/参考速度：
-  // 原地 clip ≈1.9m/s、run ≈5.2m/s）——播放速率恒等于实际移速（不滑步），且
+  // walk ≈3.39m/s、run ≈5.4m/s 官方口径）——播放速率恒等于实际移速（不滑步），且
   // 走/跑/侧移三套步态同相（混合中落脚帧一致）、站定相位停走 = 冻结在当前帧
   // （单 clip 老模型的冻结语义），恢复移动不跳相位。timeScale 恒 0：mixer.update
   // 不再自行推进播放头（否则会在两次锁定之间漂移）
@@ -362,23 +451,140 @@ export class Bot {
     if (this._animAcc >= 1 / 60) {
       this.mixer.update(this._animAcc)
       this._animAcc = 0
-      this._snapshotLegClips()
+      this._snapshotClipPose()
     }
   }
 
-  _snapshotLegClips() {
+  // 每次 mixer.update 后快照被程序化覆盖的骨骼 clip 原值——侧移腿覆盖与受击
+  // 脊柱覆盖都以它为混合基准（未跑 update 的帧沿用最近快照，≤16ms 滞后一致）
+  _snapshotClipPose() {
     for (const leg of this._strafeRig?.legs ?? []) {
       for (const b of [leg.up, leg.knee, leg.foot, leg.toe]) {
         (b.userData._clipQ ??= new THREE.Quaternion()).copy(b.quaternion)
       }
     }
+    const ex = this._rigExtra
+    if (ex) {
+      for (const b of ex.spine) (b.userData._clipQ ??= new THREE.Quaternion()).copy(b.quaternion)
+      if (ex.neck) (ex.neck.userData._clipQ ??= new THREE.Quaternion()).copy(ex.neck.quaternion)
+    }
   }
 
-  // GLB 横移步态（无畏契约持枪横移形态）：pull 波面向玩家横移时用程序化侧移
-  // 覆盖腿骨骼——躯干正对玩家不扭腰（上身动画已被压向 idle，见 step），双腿
-  // 镜像外展滑步 + 脚尖微朝移动方向 + 并腿屈膝起伏 + 向移动方向侧倾。
-  // 姿态量来自 core/PeekPose.strafeStepPose（与程序化假人同套口径）；cross 波
-  // /站定 w=0 → 腿还原为 clip 快照、起伏/侧倾归零
+  // 挂枪步进：枪托锚定 + 手线定向。锚点=后手(R)沿「后手→前手(L)」连线前移
+  // 0.365m（=0.425 半枪长 − 0.06 托底后置：托底板恰抵肩窝、枪口恰落在前手），
+  // 朝向沿手线——kamae 本就是双手架枪姿势，枪轴与手线重合 = 双手天然贴枪、
+  // 枪身不穿躯干（旋转轴即枪轴，不绕胸腔扫）。pull 对枪/站定时瞄准目标向玩家
+  // 眼位混合 50%（枪压向玩家的压迫感，半量不破坏贴手）。holder 挂 mesh 下，
+  // 局部 = mesh⁻¹·world
+  _stepGun(dt, player, stopped) {
+    const G = this.gun
+    if (!G) return
+    G.boneR.updateWorldMatrix(true, false)
+    G.boneR.matrixWorld.decompose(_gv1, _gq1, _gscl)
+    G.boneL.updateWorldMatrix(true, false)
+    G.boneL.matrixWorld.decompose(_gv2, _gq2, _gscl)
+    _gv2.sub(_gv1) // 手线向量（后手 → 前手 = 枪口向）
+    if (_gv2.lengthSq() < 1e-6) return
+    _gv2.normalize()
+    _gv1.addScaledVector(_gv2, 0.365)
+    const moving = Math.abs(this.velX) > 0.4
+    _gaim.copy(_gv1).addScaledVector(_gv2, 4) // 手线远点（默认目标）
+    if (pickAimTarget({ style: this.peek?.style, stopped, moving }) === 'player') {
+      _gaim.lerp(_v.set(player.pos.x, player.pos.y + player.eyeHeight, player.pos.z), 0.5)
+    }
+    solveGunAim(_gv1, _gaim, _gq3)
+    if (!G.init) { G.aimQ.copy(_gq3); G.init = true } // 出场首帧直接落位不甩枪
+    else G.aimQ.slerp(_gq3, Math.min(1, dt * 14))
+    _gq4.copy(this.mesh.quaternion).invert()
+    G.holder.quaternion.copy(_gq4).multiply(G.aimQ)
+    G.holder.position.copy(_gv1).sub(this.mesh.position).applyQuaternion(_gq4)
+    G.gun.position.z = G.kick > 0 ? kickPose(G.kick).gunZ : 0
+    this._stepHandIK()
+  }
+
+  // 左手两骨 IK：肩-肘链把 L_Hand 钉在护木握点（紧随 _stepGun）。握点 = 前手
+  // 在枪轴线段上的投影——瞄准把枪转到大角度时手沿护木滑动（真实持枪动作），
+  // 目标恒贴着当前手 → 恒在臂展内（固定握点会被瞄准旋转摆出 0.69m > 0.56m
+  // 臂展，钳制也追不上）。解算的旋转增量为零起点（极向量=当前上臂方向），
+  // Δ_world 用共轭落到骨局部——⚠ 方向向量全部来自 matrixWorld = 场景系，父级
+  // 四元数必须前乘 meshQ 升到场景系（_boneWorldQ 只给 mesh 系，差一个 bot
+  // 朝向/侧倾，共轭会被拧错方向）
+  _stepHandIK() {
+    const G = this.gun
+    const arm = G?.armL
+    if (!arm) return
+    arm.up.updateWorldMatrix(true, false)
+    arm.up.matrixWorld.decompose(_ikA, _gq1, _gscl)   // 肩
+    arm.fore.updateWorldMatrix(true, false)
+    arm.fore.matrixWorld.decompose(_ikB, _gq2, _gscl) // 肘
+    arm.hand.updateWorldMatrix(true, false)
+    arm.hand.matrixWorld.decompose(_ikC, _gq3, _gscl) // 腕（kamae 前手）
+    // 枪轴线：过 holder 世界原点、方向 = holder 世界 -Z（枪口向）
+    _gq4.copy(this.mesh.quaternion).multiply(G.holder.quaternion)
+    _ikT.copy(G.holder.position).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
+    _ikDir.set(0, 0, -1).applyQuaternion(_gq4)
+    // 投影求握点：手到枪轴的最近点，钳在 [枪中心, 枪口内收 0.10]
+    const t = THREE.MathUtils.clamp(_gv1.copy(_ikC).sub(_ikT).dot(_ikDir), 0, -G.muzzleLocal.z - 0.1)
+    _ikT.addScaledVector(_ikDir, t)
+    const sol = solveTwoBoneIK({ shoulder: _ikA, elbow: _ikB, hand: _ikC, target: _ikT })
+    if (!sol) return
+    // 肩骨：Δ_world = R(abDirCur → dirAb)，共轭到锁骨系（场景系）
+    const clavW = this._boneWorldQ(arm.up.parent, _chainW).premultiply(this.mesh.quaternion)
+    _gq1.setFromUnitVectors(sol.abDirCur, sol.dirAb)
+    arm.up.quaternion.premultiply(_gq2.copy(clavW).invert().multiply(_gq1).multiply(clavW))
+    // 肘骨：段方向 = L_Hand 在肘骨系的位置方向（常量），经新肩世界 Q 传播后
+    // 转向 dirCb（指向握点）
+    _gq3.copy(clavW).multiply(arm.up.quaternion) // 新肩世界 Q（场景系）
+    _ikDir.copy(arm.hand.position).normalize()
+      .applyQuaternion(_gq4.copy(_gq3).multiply(arm.fore.quaternion))
+    _gq1.setFromUnitVectors(_ikDir, sol.dirCb)
+    arm.fore.quaternion.premultiply(_gq2.copy(_gq3).invert().multiply(_gq1).multiply(_gq3))
+  }
+
+  // 枪口世界坐标（开火 FX 用）：holder 系枪口偏移 → 世界。掉枪中 holder 已是
+  // scene 直接子级，其局部即世界
+  muzzleWorld(out) {
+    if (!this.gun) return null
+    const { holder, muzzleLocal } = this.gun
+    out.copy(muzzleLocal).applyQuaternion(holder.quaternion).add(holder.position)
+    if (!this._drop) out.applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
+    return out
+  }
+
+  // 开火后坐（main 的 onBotFire 注入）：枪身后顶 + 脊柱微仰，衰减在 step 的
+  // 踉跄分支统一推进
+  kickFire() { if (this.gun) this.gun.kick = 1 }
+
+  // 骨骼化受击踉跄/开火后坐的脊柱层：clip 快照上叠加 mesh 空间后仰角（共轭到
+  // 骨局部精确合成，角度随冲击/衰减曲线归零时自动回到快照）。无脊柱链返回
+  // false → 调用方退回整体刚体后仰（老模型/程序化假人路径）
+  _applyUpperFlinch(theta) {
+    const ex = this._rigExtra
+    if (!ex || !ex.spine.length || theta <= 0) return false
+    const n = ex.spine.length
+    let parentW = this._boneWorldQ(ex.spine[0].parent, _chainW)
+    for (let i = 0; i < n; i++) {
+      // 目标世界 = R_x(θ/n)·W_当前（mesh 空间后仰分摊到每节脊柱）；
+      // 局部 = parentW⁻¹·R_x(θ)·parentW·q（共轭，自上而下父级用本帧已写值）
+      _q1.setFromAxisAngle(_axX, theta / n)
+      _q2.copy(parentW).invert().multiply(_q1).multiply(parentW)
+      ex.spine[i].quaternion.copy(ex.spine[i].userData._clipQ ?? ex.spine[i].quaternion).premultiply(_q2)
+      _curW.copy(parentW).multiply(ex.spine[i].quaternion)
+      parentW = _curW
+    }
+    if (ex.neck) {
+      _q1.setFromAxisAngle(_axX, theta * 0.4)
+      _q2.copy(parentW).invert().multiply(_q1).multiply(parentW)
+      ex.neck.quaternion.copy(ex.neck.userData._clipQ ?? ex.neck.quaternion).premultiply(_q2)
+    }
+    return true
+  }
+
+  // GLB 横移步态（官方口径）：pull 波面向玩家横移时用程序化姿态覆盖腿骨骼——
+  // 腿链 yaw 朝移动方向 + 左右腿反相的深膝跑循环（官方 Q_Bow_RunE 实测：
+  // 横移循环 = 侧向的前进跑，非双脚同触地的开合滑步），躯干/盆骨保持正对玩家
+  // （上身动画已被压向 idle，见 step）。姿态量来自 core/PeekPose.strafeStepPose；
+  // cross 波/站定 w=0 → 腿还原为 clip 快照、起伏/侧倾归零
   _stepStrafeGait(speed, w, dt) {
     const rig = this._strafeRig
     if (!rig) return
@@ -390,7 +596,9 @@ export class Bot {
     this.lean += (leanTarget - this.lean) * Math.min(1, dt * leanRate)
     this.mesh.rotation.z = this.lean
     if (w > 0) {
-      const pose = strafeStepPose({ speed, phase: this.walkPhase, lateralVel: lx })
+      // 横移相位保持 1 步/1.15m 的出场节奏（全局 STEP_LEN 1.55 是走/跑官方口径，
+      // 拉出横移若跟着变会慢 26%，节奏感尽失——见 STRAFE_STEP_LEN）
+      const pose = strafeStepPose({ speed, phase: this.walkPhase * STEP_LEN / STRAFE_STEP_LEN, lateralVel: lx })
       this._applyLegPose(pose, w)
       this.mesh.position.y = pose.bob * w
     } else {
@@ -432,10 +640,12 @@ export class Bot {
     for (let i = 0; i < rig.legs.length; i++) {
       const leg = rig.legs[i]
       const abduct = i === 0 ? pose?.abductL : pose?.abductR
-      const yaw = pose?.feetYaw ?? 0
-      this._poseLegBone(leg.up, leg.bind.up, _chainW, yaw, abduct ?? 0, 0, w, _curW)
-      this._poseLegBone(leg.knee, leg.bind.knee, _curW, yaw, 0, -(pose?.knee ?? 0), w, _curW)
-      this._poseLegBone(leg.foot, leg.bind.foot, _curW, yaw, 0, 0, w, _curW)
+      const thigh = i === 0 ? pose?.thighL : pose?.thighR
+      const knee = i === 0 ? pose?.kneeL : pose?.kneeR
+      const yaw = pose?.yaw ?? 0
+      this._poseLegBone(leg.up, leg.bind.up, _chainW, yaw, abduct ?? 0, thigh ?? 0, w, _curW)
+      this._poseLegBone(leg.knee, leg.bind.knee, _curW, yaw, 0, -(knee ?? 0), w, _curW)
+      this._poseLegBone(leg.foot, leg.bind.foot, _curW, yaw, 0, 0, w, null)
       this._poseLegBone(leg.toe, leg.bind.toe, _curW, yaw, 0, 0, w, null)
     }
   }
@@ -469,7 +679,9 @@ export class Bot {
       const wLat = Math.min(1, Math.abs(lx) / sp)      // 横向权重：纯侧移 = 1
       const wFore = 1 - wLat
       const aLat = Math.min(0.36, 0.12 + speed * 0.058)
-      const aFore = Math.min(0.62, 0.18 + speed * 0.085)
+      // 前摆幅随 STEP_LEN 1.55 加大：不滑步要求 2·L·sin(a) ≥ 步距（5.4m/s 全速
+      // 需 ~55°，此处 0.92rad≈52.7° 覆盖 91%，与官方循环的轻微滑步率一致）
+      const aFore = Math.min(0.92, 0.22 + speed * 0.13)
       // 镜像侧摆：步距张开-并拢交替（s=±1 为落脚支撑，s=0 双腿交叠过中点）
       legL.rotation.z = -s * aLat * wLat
       legR.rotation.z = s * aLat * wLat
@@ -480,14 +692,14 @@ export class Bot {
       legL.rotation.y = hipYaw
       legR.rotation.y = hipYaw
       // 步态起伏：落脚张开时最低（重心压上支撑步）、并腿过中点最高
-      this.mesh.position.y = (1 - Math.abs(s)) * (0.01 + speed * 0.0036)
-      this._foreW = wFore // 前倾只跟前进步态走：侧移对枪（wFore≈0）上身立直
+      this._yBase = (1 - Math.abs(s)) * (0.01 + speed * 0.0036)
+      this._foreW = wFore // 前倾只跟前进分量走：侧移对枪（wFore≈0）上身立直
     } else {
       // 急停即刻站定：快速收步 + 高度归零（counter-strafe 是硬停，不做漂浮缓动）
       const k = 1 - Math.min(1, dt * 22)
       legL.rotation.x *= k; legL.rotation.y *= k; legL.rotation.z *= k
       legR.rotation.x *= k; legR.rotation.y *= k; legR.rotation.z *= k
-      this.mesh.position.y *= k
+      this._yBase *= k
       this._foreW = 0
     }
 
@@ -503,6 +715,17 @@ export class Bot {
     const foreRate = Math.abs(foreTarget) > Math.abs(this.foreLean) ? 7 : 16
     this.foreLean += (foreTarget - this.foreLean) * Math.min(1, dt * foreRate)
     this.mesh.rotation.x = this.foreLean
+
+    // idle 呼吸：静止时微起伏+微俯仰（本体待机不是石膏像）。权重随静止淡入、
+    // 移动快速淡出（不与步态起伏叠加）；幅度 6mm/0.3° 在对枪距离上不可察觉，
+    // 只给静止假人一点"活着"的质感。高度在 _yBase 上绝对合成（加法会被
+    // 慢衰减累积成 31mm 的大起伏）
+    const breathTarget = speed > 0.3 ? 0 : 1
+    this.breathW += (breathTarget - this.breathW) * Math.min(1, dt * (breathTarget ? 1.2 : 6))
+    this.breath += dt * Math.PI * 2 / 3.4 // ~3.4s 呼吸周期
+    const br = this.breathW * (0.5 - 0.5 * Math.cos(this.breath))
+    this.mesh.position.y = this._yBase + br * 0.006
+    this.mesh.rotation.x += br * 0.005
 
     // counter-strafe 卸力：高速跑过/拉出的 Bot 减速到近停时触发一次短促下沉
     // （重心急停的重量感）。摩擦模型下速度逐 tick 递减（单 tick 降幅 ~0.3 m/s），
@@ -524,6 +747,8 @@ export class Bot {
     this.blob.visible = false
     this.visibleNow = false
     this.firstVisibleAt = -1
+    if (this.gun) this.scene.remove(this.gun.holder) // 掉落的枪随尸体一起收
+    this._drop = null
   }
 
   place(x, z, mode) {
@@ -554,9 +779,13 @@ export class Bot {
     this.firstVisibleAt = -1
     this.reactRecorded = false // 反应样本每次出场只记一条（防多段击杀重复计数）
     this.flinch = 0 // 复用的 Bot 不带旧受击踉跄
+    this.breath = vary() * Math.PI * 2 // 呼吸相位随机（多假人不同步）
+    this.breathW = 0
+    this._yBase = 0
     this.hitFlash = 0
     this._restoreEmissive() // 也不带旧受击红光（如被击杀后立刻复用）
     if (this.mixer) { // 骨骼假人归位站姿，不带上一条的残留步态
+      if (this.deathAction) this.deathAction.stop() // 先停死亡 clip，update(0) 才是干净重摆
       this.anim.walk.time = 0
       if (this.anim.run) this.anim.run.time = 0
       this._setAnimWeights(0)
@@ -564,8 +793,18 @@ export class Bot {
       this._animAcc = 0
       // mixer 复位已把腿骨骼重写为干净姿态 → 立即刷新 clip 快照（程序化侧移
       // 覆盖的混合基准），上一条的步态覆盖不带到新一条命
-      this._snapshotLegClips()
+      this._snapshotClipPose()
     }
+    if (this.gun) { // 上一条命掉在地上的枪收回手上（_stepGun 下一帧精确摆正）
+      this.mesh.add(this.gun.holder)
+      this.gun.holder.position.set(0, 1.2, -0.25)
+      this.gun.holder.quaternion.identity()
+      this.gun.gun.position.set(0, -0.02, 0)
+      this.gun.kick = 0
+      this.gun.init = false
+    }
+    this._drop = null
+    this._skelDeath = false
   }
 
   setOpacity(o) {
@@ -600,6 +839,7 @@ export class Bot {
   }
 
   startDeath() {
+    const vx = this.velX // 死亡瞬间的动量 → 掉枪的抛出初速
     this.mode = 'dying'
     this.deathT = 0
     this._landed = false
@@ -610,6 +850,36 @@ export class Bot {
     // 否则击杀瞬间的受击红光会贯穿整个倒地动画与重生
     this.hitFlash = 0
     this._restoreEmissive()
+    if (this.mixer && this.deathAction) {
+      // 骨骼化塌倒（无畏契约击杀表现：盆骨后仰折叠拍地 + 撒手）：kamae/步态
+      // 全停，死亡 clip 从头接管
+      const A = this.anim
+      if (A) {
+        A.walk.setEffectiveWeight(0)
+        if (A.idle) A.idle.setEffectiveWeight(0)
+        if (A.run) A.run.setEffectiveWeight(0)
+      }
+      this.deathAction.reset()
+      this.deathAction.setEffectiveWeight(1)
+      this.deathAction.play()
+      this._skelDeath = true
+    } else {
+      this._skelDeath = false
+    }
+    // 撒手掉枪：保持世界姿态抛落（弹道/翻滚/落地摆平在 step 的 dying 分支）
+    if (this.gun) {
+      this.scene.attach(this.gun.holder)
+      this._drop = {
+        p: this.gun.holder.position.clone(),
+        q: this.gun.holder.quaternion.clone(),
+        v: new THREE.Vector3(vx * 0.7 + (vary() - 0.5) * 1.2, 1.5 + vary() * 0.9, (vary() - 0.5) * 1.0),
+        axis: new THREE.Vector3(vary() - 0.5, 0, vary() - 0.5).normalize(),
+        spin: 4 + vary() * 5,
+        restY: 0.05,
+        landed: false,
+      }
+      this.gun.kick = 0
+    }
   }
 
   // 对枪获胜（玩家没打中）不再有独立的 won 模式：Bot 保持 peek 横移跑向
@@ -631,19 +901,41 @@ export class Bot {
     if (this.mode === 'dying') {
       this.deathT += dt
       const t = Math.min(1, this.deathT / CONFIG.bot.deathTime)
-      // 后仰倒地（ease-out 加速起步）+ 随机侧倒 + 轻微下沉
-      const e = 1 - Math.pow(1 - t, 3)
-      this.mesh.rotation.x = e * (Math.PI / 2) * 0.95
-      this.mesh.rotation.z = this.deathRoll * e
-      this.mesh.position.y = -e * 0.05
-      this.blobMat.opacity = Math.max(0, 1 - t * 1.4)
+      if (this._skelDeath) {
+        // 骨骼化塌倒：死亡 clip 接管盆骨/腿/脊柱/手臂（128Hz 平滑推进）；
+        // mesh 只收敛走跑残留的高度偏移，不做刚体旋转
+        this.mixer.update(dt)
+        this.mesh.position.y *= 1 - Math.min(1, dt * 22)
+      } else {
+        // 刚体后仰倒地（程序化假人/无烘焙老模型）：ease-out + 随机侧倒 + 下沉
+        const e = 1 - Math.pow(1 - t, 3)
+        this.mesh.rotation.x = e * (Math.PI / 2) * 0.95
+        this.mesh.rotation.z = this.deathRoll * e
+        this.mesh.position.y = -e * 0.05
+      }
+      // 掉枪弹道：抛落翻滚 → 落地摆平（枪平躺在地，随尸体一起留存/回收）
+      if (this._drop && this.gun) {
+        if (!this._drop.landed) {
+          this._drop = stepDroppedGun(this._drop, dt)
+          this.gun.holder.position.copy(this._drop.p)
+          this.gun.holder.quaternion.copy(this._drop.q)
+        } else {
+          this.gun.holder.quaternion.slerp(settleFlatQ(this.gun.holder.quaternion, _q1), Math.min(1, dt * 10))
+        }
+      }
       // 触地闷响：ease-out 立方在 t≈0.63 转 angle 已达 ~95%=机体拍地帧，只响一次
       if (!this._landed && this.deathT > CONFIG.bot.deathTime * 0.63) {
         this._landed = true
         this.onDeathLand?.()
       }
-      if (this.deathT > 0.75) this.setOpacity(Math.max(0, 1 - (this.deathT - 0.75) / 0.45))
-      if (this.deathT > 1.2) this.hide()
+      if (this.deathT > 1.2) {
+        // 本体击杀表现：尸体与掉枪整局留存——定格在最终姿势（corpse 不 step：
+        // 零 CPU，静态网格），不淡出不 hide；直到池复用（place 重置）或回合
+        // 结束（dispose）/地图重建（onMapRebuilt）才回收
+        this.mode = 'corpse'
+        this.active = false
+        this.corpseAt = this.now()
+      }
       return
     }
 
@@ -705,6 +997,7 @@ export class Bot {
       this.walkPhase += speed * dt * Math.PI / STEP_LEN
       this._stepAnim(speed * (1 - w), dt)
       this._stepStrafeGait(speed, w, dt)
+      this._stepGun(dt, ctx.player, stopped)
     } else if (speed > 0.3) {
       // 无动画的自定义模型兜底：至少保留位移节奏的起伏
       this.walkPhase += speed * dt * Math.PI / STEP_LEN
@@ -713,12 +1006,18 @@ export class Bot {
       this.mesh.position.y *= 1 - Math.min(1, dt * 22)
     }
 
-    // 受击踉跄：正弦冲击曲线 → 后仰 + 微沉（不影响朝向/命中判定）
-    if (this.flinch > 0) {
+    // 受击踉跄 + 开火后坐：正弦冲击曲线 → 后仰 + 微沉（不影响朝向/命中判定）。
+    // 骨骼假人走脊柱覆盖（更贴本体：上身局部后仰，腿不动），无脊柱链的老模型/
+    // 程序化假人退回整体刚体后仰
+    if (this.flinch > 0 || (this.gun && this.gun.kick > 0)) {
       this.flinch = Math.max(0, this.flinch - dt * 5)
-      const k = Math.sin(Math.min(1, this.flinch) * Math.PI)
-      this.mesh.rotation.x = k * this.flinchAmp
-      this.mesh.position.y -= k * 0.025
+      if (this.gun) this.gun.kick = Math.max(0, this.gun.kick - dt * 7)
+      const k = this.flinch > 0 ? Math.sin(Math.min(1, this.flinch) * Math.PI) : 0
+      if (k > 0) this.mesh.position.y -= k * 0.025
+      const theta = k * this.flinchAmp + kickPose(this.gun?.kick ?? 0).spine
+      if (theta > 0 && !this._applyUpperFlinch(theta)) {
+        this.mesh.rotation.x = k * this.flinchAmp
+      }
     }
 
     _v.copy(this.prevPos).lerp(this.pos, ctx.alpha ?? 1)

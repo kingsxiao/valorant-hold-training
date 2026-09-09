@@ -11,11 +11,15 @@ export const MODE_INFO = { label: '架枪对枪', desc: 'Bot 侧面跑过/横向
 const rand = (a, b) => a + Math.random() * (b - a)
 
 // 池调度纯逻辑：池未满 → null（新建，每只 Bot 构造时随机抽一名英雄，cap 只
-// 覆盖全英雄池）；池满 → 从休眠 Bot 中随机挑一只复用（出场英雄波次轮换）。
-// cap=1（单模板/程序化假人）时随机区间收缩为唯一一只 = 原「复用第一只」行为
-export function pickIdleBot(idle, poolSize, cap, random = Math.random) {
+// 覆盖全英雄池）；池满 → 优先从休眠 Bot 中随机挑一只复用（出场英雄波次轮换）；
+// 休眠全无但有尸体（本体击杀表现：尸体整局留存）→ 回收最老的一具顶替出场，
+// 池大小保持稳定。cap=1（单模板/程序化假人）时随机区间收缩为唯一一只 = 原
+// 「复用第一只」行为
+export function pickIdleBot(idle, corpses = [], poolSize, cap, random = Math.random) {
   if (poolSize < cap) return null
-  return idle[Math.floor(random() * idle.length)]
+  if (idle.length) return idle[Math.floor(random() * idle.length)]
+  if (!corpses.length) return null
+  return corpses.reduce((oldest, b) => (b.corpseAt < oldest.corpseAt ? b : oldest))
 }
 
 export class BotManager {
@@ -65,11 +69,13 @@ export class BotManager {
 
   _bot() {
     // 池随英雄模板数建满（每只 Bot 构造时随机抽一名英雄 → 4 只覆盖全池）；满后
-    // 从休眠 Bot 中随机挑一只复用 —— 出场英雄波次轮换，不整局锁死一名。单模板/
-    // 程序化假人 cap=1，退化为「复用唯一一只」（原行为）
+    // 从休眠 Bot 中随机挑一只复用 —— 出场英雄波次轮换，不整局锁死一名。尸体
+    // （corpse 模式）不占 idle：休眠全无时回收最老尸体（尸体留存优先、池不膨胀）。
+    // 单模板/程序化假人 cap=1，退化为「复用唯一一只」（原行为）
     const cap = Bot.customTemplates?.length || 1
-    const idle = this.bots.filter(x => !x.active && x.mode !== 'dying')
-    let b = pickIdleBot(idle, this.bots.length, cap)
+    const idle = this.bots.filter(x => !x.active && x.mode !== 'dying' && x.mode !== 'corpse')
+    const corpses = this.bots.filter(x => x.mode === 'corpse')
+    let b = pickIdleBot(idle, corpses, this.bots.length, cap)
     if (!b) {
       b = new Bot(this.scene, this.world); b.manager = this; this.bots.push(b)
       // Bot 脚步声（空间化 HRTF）：墙后 Bot 拉出/跑过的方位信息——与步态
@@ -306,11 +312,12 @@ export class BotManager {
   }
 
   // 地图重建（缺口左右切换）后：场上 Bot 的横移线还是旧缺口的，
-  // 就地回收并重排下一波——不走完旧线（会从已封死的墙段里穿出来）
+  // 就地回收并重排下一波——不走完旧线（会从已封死的墙段里穿出来）。
+  // 尸体也一并回收（躺在旧缺口坐标，新墙可能穿过它）
   onMapRebuilt() {
     for (const slot of this.hold?.slots ?? []) { slot.bot = null; slot.nextAt = 0 }
     for (const b of this.bots) {
-      if (b.active && b.mode === 'peek') b.hide()
+      if ((b.active && b.mode === 'peek') || b.mode === 'corpse') b.hide()
     }
   }
 

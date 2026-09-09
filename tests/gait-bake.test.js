@@ -2,7 +2,7 @@
 // 骨名映射（UE/Mixamo 双口径 + 辅助骨排除）与程序化 walk/run clip 烘焙
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
-import { RIG_MATCH, matchRigBones, legAngles, bakeLocomotionClips } from '../src/core/GaitBake.js'
+import { RIG_MATCH, matchRigBones, legAngles, bakeLocomotionClips, GAIT } from '../src/core/GaitBake.js'
 
 const m = (re, s) => re.test(s)
 
@@ -35,6 +35,38 @@ describe('RIG_MATCH 骨名映射（UE + Mixamo 双口径）', () => {
     expect(m(RIG_MATCH.leg.L.toe[1], 'mixamorig:LeftToeBase')).toBe(true)
     expect(RIG_MATCH.spine.some(re => m(re, 'mixamorig:Spine2'))).toBe(true)
     expect(m(RIG_MATCH.neck[0], 'mixamorig:Neck')).toBe(true)
+  })
+})
+
+describe('RIG_MATCH 手臂/挂枪骨映射（挂枪锚点 + 死亡撒手轨道）', () => {
+  it('UE 四英雄骨名命中（Jett/Sage/Sova/Phoenix 实测名），辅助骨排除', () => {
+    expect(m(RIG_MATCH.arm.L.up[0], 'L_Shoulder_054')).toBe(true)
+    expect(m(RIG_MATCH.arm.L.fore[0], 'L_Elbow_055')).toBe(true)
+    expect(m(RIG_MATCH.arm.L.hand[0], 'L_Hand_056')).toBe(true)
+    expect(m(RIG_MATCH.arm.R.up[0], 'R_Shoulder_092')).toBe(true)
+    expect(m(RIG_MATCH.arm.R.fore[0], 'R_Elbow_093')).toBe(true)
+    expect(m(RIG_MATCH.weapon.L[0], 'L_WeaponPoint_061')).toBe(true)
+    expect(m(RIG_MATCH.weapon.R[0], 'R_WeaponPoint_099')).toBe(true)
+    // Twst/Pad/IK/end 辅助骨全部排除
+    for (const re of RIG_MATCH.arm.L.up) { expect(m(re, 'L_Shoulder_Twst1_085')).toBe(false); expect(m(re, 'L_ShoulderPad_089')).toBe(false) }
+    for (const re of RIG_MATCH.arm.L.fore) expect(m(re, 'L_Elbow_Ndl_080')).toBe(false)
+    for (const re of RIG_MATCH.arm.L.hand) expect(m(re, 'L_Hand_IKpv_IUE_0177')).toBe(false)
+    for (const re of RIG_MATCH.weapon.L) expect(m(re, 'L_WeaponPoint_end_062')).toBe(false)
+  })
+
+  it('Mixamo 口径兼容（LeftArm/LeftForeArm/LeftHand）', () => {
+    expect(m(RIG_MATCH.arm.L.up[1], 'mixamorig:LeftArm')).toBe(true)
+    expect(m(RIG_MATCH.arm.L.fore[1], 'mixamorig:LeftForeArm')).toBe(true)
+    expect(m(RIG_MATCH.arm.L.hand[1], 'mixamorig:LeftHand')).toBe(true)
+  })
+
+  it('matchRigBones 可选增强：arms/weapon 缺失不拖垮腿链（返回空数组/null）', () => {
+    const { root } = buildFakeRig()
+    const rig = matchRigBones(root)
+    expect(rig).toBeTruthy()
+    expect(rig.arms).toEqual([])
+    expect(rig.weaponL).toBeNull()
+    expect(rig.weaponR).toBeNull()
   })
 })
 
@@ -82,15 +114,34 @@ describe('matchRigBones', () => {
 })
 
 describe('legAngles 步态曲线', () => {
-  const c = { thigh: 0.5, knee: 0.55, foot: 0.22 }
-  it('膝恒为负（只屈不反关节）且含基础微屈；大腿正弦限幅', () => {
+  const c = { thigh: 0.5, knee: 0.55, kneeBase: 0.5, foot: 0.22 }
+  it('膝恒为负（只屈不反关节）且含基础屈曲；大腿正弦限幅', () => {
     for (let i = 0; i < 64; i++) {
       const a = legAngles((i / 64) * Math.PI * 2, c)
-      expect(a.knee).toBeLessThanOrEqual(-0.12 + 1e-9)
+      expect(a.knee).toBeLessThanOrEqual(-c.kneeBase + 1e-9)
       expect(Math.abs(a.thigh)).toBeLessThanOrEqual(c.thigh + 1e-9)
       expect(a.foot).toBeGreaterThanOrEqual(-0.45 - 1e-9)
       expect(a.foot).toBeLessThanOrEqual(0.55 + 1e-9)
     }
+  })
+
+  it('官方动画实测校准锁死：膝峰值/基础屈曲/髋摆（assets-raw psa 解析口径）', () => {
+    // 官方：跑膝基础屈曲 20~33°、峰值 108~117°；走基础 29~63°、峰值 88~103°；
+    // 髋摆全幅 跑~60° / 走~42°。烘焙曲线取：跑 0.38+1.55rad=21.8°+110.6°、
+    // 走 0.50+0.95rad=28.6°+83.0°、髋 跑 0.82rad(47°) / 走 0.70rad(40°)
+    expect(GAIT.run.kneeBase + GAIT.run.knee).toBeCloseTo(1.93, 5)   // ≈110.6°
+    expect(GAIT.walk.kneeBase + GAIT.walk.knee).toBeCloseTo(1.45, 5) // ≈83.1°
+    expect(GAIT.run.kneeBase).toBeCloseTo(0.38, 5)
+    expect(GAIT.walk.kneeBase).toBeCloseTo(0.50, 5)
+    expect(GAIT.run.thigh).toBeCloseTo(0.82, 5)
+    expect(GAIT.walk.thigh).toBeCloseTo(0.70, 5)
+    // 跑/走膝基础屈曲与峰值跨度不越出官方实测区间
+    const runPk = (GAIT.run.kneeBase + GAIT.run.knee) * 180 / Math.PI
+    const walkPk = (GAIT.walk.kneeBase + GAIT.walk.knee) * 180 / Math.PI
+    expect(runPk).toBeGreaterThanOrEqual(108)
+    expect(runPk).toBeLessThanOrEqual(117)
+    expect(walkPk).toBeGreaterThanOrEqual(83)
+    expect(walkPk).toBeLessThanOrEqual(103)
   })
 })
 
@@ -105,12 +156,13 @@ describe('bakeLocomotionClips 烘焙', () => {
     return { hipsBone: hips, legs: rigLegs, spineBones: spine, neckBone: neck }
   }
 
-  it('返回 walk/run 双 clip，周期与 timeScale 锁相基准对齐（2×1.15/速度）', () => {
+  it('返回 walk/run 双 clip，周期与官方步频锁相基准对齐（2×1.55/速度）', () => {
     const baked = bakeLocomotionClips(make())
     expect(baked.walk.name).toBe('walk')
     expect(baked.run.name).toBe('run')
-    expect(baked.walk.duration).toBeCloseTo((2 * 1.15) / 1.9, 9)
-    expect(baked.run.duration).toBeCloseTo((2 * 1.15) / 5.2, 9)
+    // 官方口径：走 ≈3.39m/s（周期 ~0.9s）、跑 5.4m/s（周期 ~0.57s，官方 clip 0.6s）
+    expect(baked.walk.duration).toBeCloseTo((2 * 1.55) / 3.39, 9)
+    expect(baked.run.duration).toBeCloseTo((2 * 1.55) / 5.4, 9)
   })
 
   it('轨道按骨名绑定：双腿三节 + 髋四元数/位移；数值有限且单位四元数', () => {

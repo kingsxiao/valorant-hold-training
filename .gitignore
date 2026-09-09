@@ -10,3 +10,6 @@ coverage/
 .DS_Store
 *.log
 *.jpeg
+.video_agent/
+.v2c/
+__pycache__/

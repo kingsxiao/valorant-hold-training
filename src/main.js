@@ -122,7 +122,13 @@ weapons.onAmmoChange = () => hud.setAmmo(weapons.weapon)
 bots.onBotFire = (bot) => {
   const dx = player.pos.x - bot.pos.x, dz = player.pos.z - bot.pos.z
   const d = Math.max(0.001, Math.hypot(dx, dz))
-  const from = { x: bot.pos.x + dx / d * 0.55, y: 1.31, z: bot.pos.z + dz / d * 0.55 }
+  bot.kickFire?.() // 开火后坐：枪身后顶 + 脊柱微仰
+  // 枪口位：挂官方枪的 Bot 从真实枪口取（曳光/枪口焰从枪管末端出来）；
+  // 程序化假人（内置枪固定在胸前）沿用朝向偏移近似
+  const mz = bot.muzzleWorld?.(new THREE.Vector3())
+  const from = mz
+    ? { x: mz.x, y: mz.y, z: mz.z }
+    : { x: bot.pos.x + dx / d * 0.55, y: 1.31, z: bot.pos.z + dz / d * 0.55 }
   fx.muzzle(from)
   fx.muzzleSmoke(from, { x: dx / d, y: 0.05, z: dz / d }, 0.25)
   // 敌方曳光红调（玩家曳光暖黄）：对枪瞬间一眼分清哪条弹道是谁的
@@ -412,7 +418,12 @@ loadUserAssets().then(({ agent, agentAnimations, agents, viewmodel, viewmodels, 
   const vmMap = {}
   for (const id of ['vandal', 'phantom']) if (viewmodels?.[id]) vmMap[id] = viewmodels[id]
   if (!Object.keys(vmMap).length && viewmodel) vmMap.vandal = vmMap.phantom = viewmodel // 旧单模型
-  if (Object.keys(vmMap).length) { weapons.setCustomViewmodel(vmMap); changed = true }
+  if (Object.keys(vmMap).length) {
+    // Bot 挂枪模板先克隆存走——setCustomViewmodel 会把原件原位改造成第一人称
+    // 枪模（pivot 重包裹 + 取景参数），克隆件保持归一化（枪口 -Z/0.85m/居中）
+    Bot.weaponTemplates = Object.fromEntries(Object.entries(vmMap).map(([k, v]) => [k, v.clone(true)]))
+    weapons.setCustomViewmodel(vmMap); changed = true
+  }
   // 手部方案（2026-09-03 定稿）：glove.glb 五指手套双手实例为主路径——五指独立
   // 骨骼可逐指贴合真实握枪姿势（合并指的 hands.glb 做不到逐指）；建模袖臂仍取
   // hands.glb（placeArmsIK 两骨 IK + 解剖学定尺精确衔接手套腕口）。

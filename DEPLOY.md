@@ -199,3 +199,48 @@ Blender 安装：官方源 `download.blender.org` 对 CN 网络常 HTTP/2 中断
 同一 Drive 文件夹里的其余武器（Sheriff/Classic/Ghost 等本训练器的手枪槽、或新槽位）
 走完全相同的配方即可；材质/网格名是官方代号（Vandal=GN_AK、Phantom=GN_Carbine+Tritium
 氚光自发光），可用于识别与特效挂点。
+
+## 附：官方第三人称动画（.psa）获取与解析（2026-09-09）
+
+走/跑/横移步态 1:1 校准的数据源与方法。官方动画资产（Unreal ActorX .psa，按英雄
+分组、每英雄 Complex/First Person/Simple 三套）在模型来源同一个 Rocklan Drive 文件夹
+的 `Animations/Agent Animations/<英雄>/Simple` 下（根 folder id 见上文模型附录）。
+
+### 关键文件命名（TP_条件_英雄名_S0_…）
+
+- `X_Knives_Run/Walk{N,E,S,W,NE,…}_LB`：移动循环（LB=下半身，UB=上半身叠加）。
+  Jett 的 X=大招飞刀态；**Jett 的 RunE/WalkE 腿轨道与 RunN/WalkN 逐字节相同**（导出复用），
+  方向性循环以 **Sova `Q_Bow_Run/Walk*`** 为准（全套 8 向、真正的方向差异）。
+- `X_Aim{N,E,…}_LB/UB`：2 帧静态瞄准偏移 pose，不是循环。
+- `Face_Idle / Face_Death / Face_HitReact`：整身待机（kamae）/死亡/受击。
+
+### .psa 格式（本导出变体，与经典 ActorX 有差异）
+
+- chunk：`ANIMHEAD`(32B 空头) → `BONENAMES`(每骨 120B：name[64]+parent i32@+64，
+  但本导出 parent 全坏=0，需按名建链) → `ANIMINFO`(168B：totalbones@128、
+  keyquotum@140、tracktime@148、animrate@152；**时长 = tracktime/animrate**，
+  tracktime 实为帧数×[1/animrate]，如 RunN 37/61.667=0.6s) → `ANIMKEYS`(每 key 32B)
+  → `SCALEKEYS`(空)。
+- keys 为 **frame-major**：第 f 帧第 b 骨 = base+(f·totalbones+b)·32；每 key =
+  pos(12B)+quat(x,y,z,w)(16B)+pad(4B)。单位 cm；四元数复合 **world = parent⊗local**；
+  R 侧骨局部四元数带镜像约定（整腿链式 FK 不可靠，量指标用单骨局部数据最稳）。
+- 解析器：`assets-raw/psa_osc.py`（局部四元数振荡分析，产出官方口径）、
+  `assets-raw/psa_analyze.py`/`jett-psa/psa_parse.py`（FK 轨迹）。原始 .psa 在
+  `assets-raw/{jett,sova}-psa/`。
+
+### 官方实测口径（已锁进 GaitBake/PeekPose + 测试）
+
+- 周期：跑 0.6s（3.33 步/s）、走 0.8~0.867s。→ STEP_LEN=1.55m（5.4m/s→3.48 步/s、
+  3.39m/s→2.19 步/s，与官方 ±5% 内）。
+- 膝：跑基础屈曲 20~33°、摆动峰值 108~117°；走基础 29~63°、峰值 88~103°；
+  横移（RunE）基础 11.5°、峰值 ~106°。左右腿反相（相位差 ~180°）。
+- 髋摆全幅：跑 ~60°(Jett)/走 ~42°；盆骨 clip 内恒高（起伏由腿部几何涌现）、
+  侧摆 ~12°；LB 内脊柱无轨道（前倾走盆骨/UB 层）。
+- 横移循环本质 = 腿链朝移动方向 yaw 后的前进跑循环（交替深膝），不是双脚同触地
+  的开合滑步 → strafeStepPose 已按此重写（leg-chain yaw 0.90rad + GAIT.run 曲线
+  按速度缩放），躯干/盆骨保持正对玩家。
+- 原地导出根位移被剥离：脚相对骨盆行程仅 ~46cm，步幅必须用「周期×官方速度」推，
+  不能从脚轨迹读。
+- 视频回归参照：/tmp/val-rep.mp4（回放模式第三人称，原片 hoc1i5fI0ko 40-75s）；
+  浏览器实测脚本 `scripts/verify-gait.mjs`（playwright-core + 系统 Chrome 独立
+  profile，真实点击开局保指针锁定；MCP 浏览器被并行会话占用时的替代路径）。

@@ -47,42 +47,40 @@ describe('strafeRampW 横移步态权重（clip→程序化侧移淡入）', () 
   })
 })
 
-describe('strafeStepPose 程序化侧移步态（与程序化假人同套 VALORANT 口径）', () => {
-  it('镜像外展：abductL = −s·a、abductR = +s·a，步距开合随相位交替', () => {
-    const ph0 = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 })    // s=1：左腿 −a、右腿 +a
-    const ph1 = strafeStepPose({ speed: 5.4, phase: Math.PI, lateralVel: 1 }) // s=−1：互换
-    const a = Math.min(0.36, 0.12 + 5.4 * 0.058)
-    expect(ph0.abductL).toBeCloseTo(-a)
-    expect(ph0.abductR).toBeCloseTo(a)
-    expect(ph1.abductL).toBeCloseTo(a)
-    expect(ph1.abductR).toBeCloseTo(-a)
-    expect(a).toBeCloseTo(0.36) // 全速外展封顶 0.36
+describe('strafeStepPose 程序化侧移步态（官方横移循环口径）', () => {
+  it('官方 RunE 结构：腿链朝移动方向 yaw≈0.90，左右腿反相深膝循环（一屈一伸）', () => {
+    const p0 = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 })
+    expect(p0.yaw).toBeCloseTo(-0.90 + 0.12)                       // 向右移腿链朝右
+    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: -1 }).yaw).toBeCloseTo(0.90 + 0.12)
+    expect(p0.thighR).toBeCloseTo(-p0.thighL)                      // 反相：一前一后
+    const half = strafeStepPose({ speed: 5.4, phase: Math.PI, lateralVel: 1 })
+    expect(p0.kneeR).toBeCloseTo(half.kneeL)                       // R 腿取 p+π 相位
   })
 
-  it('外展幅度随移速增长并封顶：1 m/s ≈ 0.178、全速 0.36', () => {
-    expect(strafeStepPose({ speed: 1, phase: 0, lateralVel: 1 }).abductR).toBeCloseTo(0.12 + 0.058)
+  it('矢状摆动/膝曲线复用官方跑曲线按速度缩放：k=1 等价 GAIT.run（膝峰值 ~106°）', () => {
+    const p = strafeStepPose({ speed: 5.4, phase: 2.0, lateralVel: 1 })
+    expect(p.thighL).toBeCloseTo(0.82 * Math.sin(2.0))             // 官方髋摆 0.82rad
+    expect(p.kneeL).toBeCloseTo(0.20 + 1.55 * Math.max(0, -Math.sin(2.0 - 0.5))) // 官方膝曲线
+    const slow = strafeStepPose({ speed: 1.35, phase: 2.0, lateralVel: 1 })
+    expect(slow.kneeL).toBeCloseTo(p.kneeL * (1.35 / 5.4))         // k 线性缩放
+    expect(slow.thighL).toBeCloseTo(p.thighL * (1.35 / 5.4))
   })
 
-  it('脚尖微朝移动方向（含步内反摆）：feetYaw = −sign(lx)·0.26 + s·0.12', () => {
-    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 }).feetYaw).toBeCloseTo(-0.26 + 0.12)
-    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: -1 }).feetYaw).toBeCloseTo(0.26 + 0.12)
-    expect(strafeStepPose({ speed: 5.4, phase: Math.PI / 2, lateralVel: 1 }).feetYaw).toBeCloseTo(-0.26) // s=0
+  it('小幅外展稳定（±0.12·k·s，官方 RunE 髋 Y 分量 ~35% 的量级）', () => {
+    const p0 = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 })   // s=1
+    expect(p0.abductL).toBeCloseTo(-0.12)
+    expect(p0.abductR).toBeCloseTo(0.12)
+    const ph = strafeStepPose({ speed: 5.4, phase: Math.PI / 2, lateralVel: 1 }) // s=0
+    expect(ph.abductL).toBeCloseTo(0)
+    expect(ph.abductR).toBeCloseTo(0)
   })
 
-  it('屈膝：支撑步（|s|=1）近伸直 0.06，并腿过中点（s=0）最深、随速度加强', () => {
-    const support = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 })
-    const passing = strafeStepPose({ speed: 5.4, phase: Math.PI / 2, lateralVel: 1 })
-    expect(support.knee).toBeCloseTo(0.06)
-    expect(passing.knee).toBeCloseTo(0.06 + 0.4) // 全速过中点
-    expect(strafeStepPose({ speed: 1.35, phase: Math.PI / 2, lateralVel: 1 }).knee).toBeCloseTo(0.06 + 0.4 * (1.35 / 5.4))
-  })
-
-  it('重心起伏：落脚最低（|s|=1 → 0）、并腿过中点最高（0.01+speed·0.0036）', () => {
+  it('重心起伏：落脚最低（|s|=1 → 0）、过中点最高（0.01+speed·0.0036）', () => {
     expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 }).bob).toBeCloseTo(0)
     expect(strafeStepPose({ speed: 5.4, phase: Math.PI / 2, lateralVel: 1 }).bob).toBeCloseTo(0.01 + 5.4 * 0.0036)
   })
 
-  it('侧倾向移动方向且 ±0.05 限幅（与程序化假人 _stepLegs 同参数）', () => {
+  it('侧倾向移动方向且 ±0.05 限幅', () => {
     expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 5.4 }).lean).toBeCloseTo(-0.05)
     expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: -5.4 }).lean).toBeCloseTo(0.05)
     expect(strafeStepPose({ speed: 1.5, phase: 0, lateralVel: 1.5 }).lean).toBeCloseTo(-1.5 * 0.011)
@@ -138,28 +136,40 @@ describe('出场风格防连击（两种姿势交替）', () => {
   })
 })
 
-// —— 池调度：英雄池下波次轮换出场英雄（不整局锁死一名），单模板退化为原行为 ——
+// —— 池调度：英雄池下波次轮换出场英雄（不整局锁死一名），单模板退化为原行为；
+// —— 尸体留存（corpse 模式）下：休眠全无 → 回收最老尸体，池大小保持稳定 ——
 describe('pickIdleBot 池调度（英雄池轮换）', () => {
   const bots = (n) => Array.from({ length: n }, (_, i) => ({ i, active: false, mode: 'idle' }))
 
   it('池未满 → null（新建：每只构造时随机抽英雄，4 只覆盖全英雄池）', () => {
-    expect(pickIdleBot(bots(1), 1, 4)).toBeNull()
-    expect(pickIdleBot(bots(3), 3, 4)).toBeNull()
+    expect(pickIdleBot(bots(1), [], 1, 4)).toBeNull()
+    expect(pickIdleBot(bots(3), [], 3, 4)).toBeNull()
   })
 
-  it('池满 → 从休眠 Bot 随机挑一只（边界随机数取首/末/中间）', () => {
+  it('池满 → 从休眠 Bot 随挑一只（边界随机数取首/末/中间）', () => {
     const idle = bots(4)
-    expect(pickIdleBot(idle, 4, 4, () => 0)).toBe(idle[0])
-    expect(pickIdleBot(idle, 4, 4, () => 0.5)).toBe(idle[2])
-    expect(pickIdleBot(idle, 4, 4, () => 0.999)).toBe(idle[3])
+    expect(pickIdleBot(idle, [], 4, 4, () => 0)).toBe(idle[0])
+    expect(pickIdleBot(idle, [], 4, 4, () => 0.5)).toBe(idle[2])
+    expect(pickIdleBot(idle, [], 4, 4, () => 0.999)).toBe(idle[3])
   })
 
   it('单模板（cap=1，程序化假人/agent.glb）→ 唯一一只 = 原「复用第一只」行为', () => {
     const only = bots(1)
-    expect(pickIdleBot(only, 1, 1, () => 0.999)).toBe(only[0])
+    expect(pickIdleBot(only, [], 1, 1, () => 0.999)).toBe(only[0])
   })
 
-  it('池满但全在忙（活跃/濒死）→ undefined→ falsy → 调用侧新建（与原 find 落空同路）', () => {
-    expect(pickIdleBot([], 4, 4)).toBeFalsy()
+  it('池满但全在忙（活跃/濒死/尸体皆无）→ falsy → 调用侧新建（与原 find 落空同路）', () => {
+    expect(pickIdleBot([], [], 4, 4)).toBeFalsy()
+  })
+
+  it('休眠全无但有尸体 → 回收最老的一具（corpseAt 最小）；休眠非空不受尸体影响', () => {
+    const corpses = [
+      { i: 0, mode: 'corpse', corpseAt: 30 },
+      { i: 1, mode: 'corpse', corpseAt: 12 },
+      { i: 2, mode: 'corpse', corpseAt: 25 },
+    ]
+    expect(pickIdleBot([], corpses, 4, 4)).toBe(corpses[1])
+    const idle = [{ i: 9, active: false, mode: 'idle' }]
+    expect(pickIdleBot(idle, corpses, 4, 4, () => 0.9)).toBe(idle[0]) // 尸体不抢休眠的轮换
   })
 })

@@ -5,7 +5,7 @@ import { CONFIG } from '../core/Config.js'
 import { groundStep, accelFor } from '../core/GroundMotion.js'
 import { peekFacingYaw, leanInto, strafeRampW, strafeStepPose } from '../core/PeekPose.js'
 import { matchRigBones, bakeLocomotionClips, bakeDeathClips, smoothW } from '../core/GaitBake.js'
-import { locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip, crouchWalkStepFor, CROUCH_WALK_SPEED } from '../core/Locomotion.js'
+import { locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip, crouchWalkStepFor, CROUCH_WALK_SPEED, jumpFallBlend, JUMP_FALL_AFTER } from '../core/Locomotion.js'
 import { solveGunAim, pickAimTarget, gunBobPose, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK, deriveGunHoldPoints, solveGripMount } from '../core/WeaponAim.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
@@ -36,8 +36,7 @@ import { raySphere } from '../world/World.js'
 const STEP_LEN = 1.55 // 一步的位移（m）：步态相位锁相基准。官方动画实测（assets-raw/psa_*：
                       // 跑周期 0.6s@5.4m/s → 1.62m/步、走周期 ~0.85s@3.39m/s → 1.44m/步）取中值
 const JUMP_LAUNCH = 0.15   // 起跳蹬伸时长（JumpN 前 0.15s 是预备蹲，弧线在其后）
-const JUMP_FALL_AFTER = 0.35 // 滞空 0.35s 后从 JumpN 空中段切 Falling 循环保持
-                             // （JumpN 尾段是落地走出，长滞空不能定格在那里）
+// 滞空换层常数（JUMP_FALL_AFTER/JUMP_FALL_FADE）在 Locomotion.js（jumpFallBlend）
 const JUMP_V0 = 7.098      // 起跳竖直初速（m/s）：本体社区逐帧推导值（r/VALORANT
                            // "Valorant Physics, Derived"：跳高 1.2m = v0²/2g）
 const JUMP_G = 21          // 空中重力（m/s²）：同源推导值；滞空 = 2·v0/g ≈ 0.676s
@@ -1454,11 +1453,13 @@ export class Bot {
         const arc = this._stepJump(dt)
         const active = !!this._jump
         const landed = active ? this._jump.landed : true
-        // 滞空段姿态源：JumpN 空中段 → 滞空超时切 Falling 循环（长滞空保持，
-        // JumpN 尾段是落地走出不能定格）
-        const airFall = active && !landed && (this._jump.t - JUMP_LAUNCH) > JUMP_FALL_AFTER && !!this.anim.fall
-        if (this.anim.jump) this.anim.jump.setEffectiveWeight(active && !landed && !airFall ? 1 : 0)
-        if (this.anim.fall) this.anim.fall.setEffectiveWeight(airFall ? 1 : 0)
+        // 滞空段姿态源：JumpN 空中段 → Falling 循环平滑 crossfade（布尔瞬切
+        // 会让两套空中姿态硬跳一帧）
+        const airT = active ? Math.max(0, this._jump.t - JUMP_LAUNCH) : 0
+        const airFall = airT > JUMP_FALL_AFTER && !!this.anim.fall
+        const fallBlend = airFall ? jumpFallBlend(airT) : 0
+        if (this.anim.jump) this.anim.jump.setEffectiveWeight(active && !landed ? 1 - fallBlend : 0)
+        if (this.anim.fall) this.anim.fall.setEffectiveWeight(fallBlend)
         if (__jl) {
           if (active) __jl.setEffectiveWeight(1)
           else __jl.setEffectiveWeight(Math.max(0, __jl.getEffectiveWeight() - dt * 3))

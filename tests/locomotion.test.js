@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import fs from 'node:fs'
-import { buildClip, buildLocomotion, locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip, crouchWalkStepFor, CROUCH_WALK_SPEED } from '../src/core/Locomotion.js'
+import { buildClip, buildLocomotion, locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip, crouchWalkStepFor, CROUCH_WALK_SPEED, jumpFallBlend, JUMP_FALL_AFTER, JUMP_FALL_FADE } from '../src/core/Locomotion.js'
 
 // 假骨架：UE 风格带 _NNNN 后缀骨名（与英雄 GLB 同构）
 function fakeHeroSkeleton(suffixes) {
@@ -274,5 +274,21 @@ describe('turn 8 向集与 stopAdd 支架（TP_Core 停步挑战）', () => {
     expect(Object.keys(built.turn).sort()).toEqual(['E135','E180','E45','E90','W135','W180','W45','W90'])
     expect(built.turn.E90.duration).toBeCloseTo(1, 3)
     expect(built.stopAdd.blendMode).toBe(THREE.AdditiveAnimationBlendMode)
+  })
+})
+
+describe('jumpFallBlend 滞空换层混合比', () => {
+  it('FALL_AFTER 起淡入、+FADE 完成（smoothstep），域外钳制', () => {
+    expect(jumpFallBlend(0)).toBe(0)
+    expect(jumpFallBlend(JUMP_FALL_AFTER)).toBe(0)
+    const mid = jumpFallBlend(JUMP_FALL_AFTER + JUMP_FALL_FADE / 2)
+    expect(mid).toBeGreaterThan(0.45)
+    expect(mid).toBeLessThan(0.55)
+    expect(jumpFallBlend(JUMP_FALL_AFTER + JUMP_FALL_FADE)).toBe(1)
+    expect(jumpFallBlend(JUMP_FALL_AFTER + 10)).toBe(1)
+  })
+  it('常数口径：淡入起点 0.35s（蹬伸 0.15 + 0.2 空中）、淡入窗 0.18s', () => {
+    expect(JUMP_FALL_AFTER).toBeCloseTo(0.35, 3)
+    expect(JUMP_FALL_FADE).toBeCloseTo(0.18, 3)
   })
 })

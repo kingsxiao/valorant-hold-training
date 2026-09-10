@@ -99,6 +99,16 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
 export const CROUCH_WALK_SPEED = 2.7
 const CROUCH_WALK_DUR = 0.9333 // 官方蹲走循环时长（s）
 
+// 滞空换层混合比（纯函数，Bot 跳跃块与单测共用）：JumpN 空中段 → Falling 循
+// 环的 crossfade 权重。airT = 滞空时间（s）；FALL_AFTER 起淡入、+FADE_S 完成
+// ——布尔瞬切会让两套空中姿态硬跳一帧
+export const JUMP_FALL_AFTER = 0.35
+export const JUMP_FALL_FADE = 0.18
+export function jumpFallBlend(airT) {
+  const x = Math.min(1, Math.max(0, (airT - JUMP_FALL_AFTER) / JUMP_FALL_FADE))
+  return x * x * (3 - 2 * x) // smoothstep
+}
+
 // 蹲走锁相步幅（纯函数，Bot/BotManager 与单测共用）：步幅 = 速度×循环时长/2
 // ——相位按此步幅锁相时，clip 播放速率自动等于 移速/天然速率（任意移速近零
 // 滑步；2.7m/s 时播放 1.53×，步频 3.2 步/s ≈ 走路同档）

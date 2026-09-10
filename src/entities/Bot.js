@@ -1502,9 +1502,10 @@ export class Bot {
       // 跳跃滞空中静音（本体跳 peek 空中无脚步声），落地帧补一声落地闷响
       const kPrev = Math.floor(this.walkPhase / Math.PI)
       this.walkPhase += speed * dt * Math.PI / STEP_LEN
-      if (this._jump) {
-        // 空中：脚步静音
-      } else if (speed > 0.5 && Math.floor(this.walkPhase / Math.PI) > kPrev) {
+      // 本体音频口径：跳跃滞空/蹲走拉出均无脚步声（蹲走无声正是其战术价值；
+      // 2.7m/s 蹲走 < 跑步声触发阈 3.2 的语义同源）
+      const footSilent = !!this._jump || (this._crouchWW ?? 0) > 0.5
+      if (!footSilent && speed > 0.5 && Math.floor(this.walkPhase / Math.PI) > kPrev) {
         this.onFootstep?.(speed)
       }
       this._stepAnim(speed, dt)

@@ -1404,7 +1404,9 @@ export class Bot {
     // 五五混合会吃掉蹲姿的根高沉降）
     const cwNow = !!(this.peek?.crouchWalk && this.peek?.phase === 'out' && this.anim?.crouchWalk)
     this._crouching = !!(stopped && this._crouchPlanned && this.anim?.crouchIdle && !this._jump)
-    this._crouchW = smoothW(this._crouchW ?? 0, (this._crouching || cwNow) ? 1 : 0, dt)
+    // 起立放缓（fall 3.5/s vs 默认 7）：蹲走拉出的低姿轮廓多保持 ~0.15s，头部
+    // 抬升速度减半（过渡更平滑）
+    this._crouchW = smoothW(this._crouchW ?? 0, (this._crouching || cwNow) ? 1 : 0, dt, 14, 3.5)
     // 停步挑战的官方转身/支架选型（先算好，mixer 分支消费）：急停且朝向差够大
     // → 出「转身踏步」clip（E=右转/W=左转，角度最近档）；朝向已对 → 出「急停
     // 支架」加法层。走路/移动中不触发（stopped 才算）；跳跃中全部让位
@@ -1441,7 +1443,7 @@ export class Bot {
       // 幅，跑步机近零滑步），侧别跟横移方向；蹲姿权重复用 _crouchW（idle 退
       // 缩 + 命中区 ×0.70 同源）
       const cwActive = !!(this.peek?.crouchWalk && this.peek?.phase === 'out' && this.anim.crouchWalk && !this._jump)
-      this._crouchWW = smoothW(this._crouchWW ?? 0, cwActive ? 1 : 0, dt)
+      this._crouchWW = smoothW(this._crouchWW ?? 0, cwActive ? 1 : 0, dt, 14, 3.5)
       if (this.anim.crouchWalk) {
         // 步幅 = clip 属性常量（0.84）：移速只改步频（任意移速近零滑步）
         this._cwPhase = (this._cwPhase ?? 0) + speed * dt * Math.PI / CROUCH_WALK_STEP

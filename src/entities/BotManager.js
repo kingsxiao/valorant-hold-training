@@ -191,7 +191,9 @@ export class BotManager {
         const jiggleAt = Math.random() < CONFIG.training.pullJiggleChance
           ? startX + dir * rand(0.5, 0.72) * Math.abs(holdX - startX)
           : 0
-        b.peek = { style: 'pull', startX, holdX, endX: startX, dir, phase: 'out', holdUntil: 0, jiggleAt }
+        b.peek = { style: 'pull', startX, holdX, endX: startX, dir, phase: 'out', holdUntil: 0, jiggleAt,
+        jumpPlanned: Math.random() < CONFIG.training.jumpChance,
+        jumpAt: rand(0.35, 0.6), jumped: false }
       }
       b.place(startX, this.map.peekLineZ, 'peek')
       b.slot = slot
@@ -212,6 +214,12 @@ export class BotManager {
         // → leave（向 exitX 撤离：常规缩回原掩体；判负后改为跑向对面掩体）
         if (pk.phase === 'out') {
           activeBot.moveToward(pk.dir * speed, dt)
+          // 跳 peek（拉出中概率跳）
+          const spanOut = Math.abs(pk.holdX - pk.startX)
+          if (pk.jumpPlanned && !pk.jumped && spanOut > 0.01) {
+            const prog = Math.abs(activeBot.pos.x - pk.startX) / spanOut
+            if (prog > pk.jumpAt && !pk.jiggleAt) { pk.jumped = true; activeBot.startJump() }
+          }
           const target = pk.jiggleAt || pk.holdX
           const reached = pk.dir > 0 ? activeBot.pos.x >= target : activeBot.pos.x <= target
           if (reached) {
@@ -238,6 +246,11 @@ export class BotManager {
         const span = Math.abs(pk.endX - pk.startX)
         if (span > 0.01) {
           const prog = Math.abs(activeBot.pos.x - pk.startX) / span
+          // 跳 peek：波次掷定的中途跳（起跳→抛物线→落地恢复）
+          if (pk.jumpPlanned && !pk.jumped && prog > pk.jumpAt) {
+            pk.jumped = true
+            activeBot.startJump()
+          }
           if (!pk.stopped && !pk.resolved && prog > pk.stopAt && Math.random() < CONFIG.training.peekStopChance) {
             pk.stopped = true
             pk.stopUntil = this.now() + rand(0.15, 0.35)

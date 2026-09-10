@@ -35,6 +35,9 @@ import { raySphere } from '../world/World.js'
 //    撒手掉枪弹道（WeaponAim.stepDroppedGun：抛落翻滚落地摆平）
 const STEP_LEN = 1.55 // 一步的位移（m）：步态相位锁相基准。官方动画实测（assets-raw/psa_*：
                       // 跑周期 0.6s@5.4m/s → 1.62m/步、走周期 ~0.85s@3.39m/s → 1.44m/步）取中值
+const JUMP_LAUNCH = 0.15   // 起跳蹬伸时长（JumpN 前 0.15s 是预备蹲，弧线在其后）
+const JUMP_V0 = 3.2        // 起跳竖直初速（m/s）：跳高 ~0.52m
+const JUMP_G = 9.8         // 空中重力（m/s²）：滞空 ~0.65s
 const CROUCH_ZONE_DROP = 0.30 // 蹲姿命中区下沉比：官方根高 79.6/114.1cm（CrouchIdle vs RunN
                               // 实测），头/胸/腹/腿区高度按 1−0.30·蹲姿权重缩放，半径不变
 const STRAFE_STEP_LEN = 1.15 // 横移步距保持既有调校口径（pull 出场节奏 1 步/1.15m 已验收）
@@ -480,6 +483,18 @@ export class Bot {
         a.play()
         a.setEffectiveWeight(0)
         this.anim.crouchIdle = a
+      }
+      // 跳 peek：JumpN（起跳蹬伸→空中收腿，LoopOnce 保持）+ JumpLand（落地恢复）
+      if (official?.jump) {
+        for (const [key, clip] of Object.entries(official.jump)) {
+          if (!clip) continue
+          const a = this.mixer.clipAction(clip)
+          a.loop = THREE.LoopOnce
+          a.clampWhenFinished = true
+          a.play()
+          a.setEffectiveWeight(0)
+          this.anim[key === 'jumpN' ? 'jump' : 'jumpLand'] = a
+        }
       }
       // 急停支架（加法层叠在 kamae 上）：播完定格（clampWhenFinished）= 支架保持
       if (official?.stopAdd) {
@@ -1067,6 +1082,9 @@ export class Bot {
       this.anim?.stopAdd?.stop()
       this._turnKey = null; this._turnW = 0; this._braceW = 0
       this._crouchPlanned = false; this._crouching = false; this._crouchW = 0; this._zoneYK = 1
+      this._jump = null
+      if (this.anim.jump) this.anim.jump.setEffectiveWeight(0)
+      if (this.anim.jumpLand) this.anim.jumpLand.setEffectiveWeight(0)
       this.anim.walk.time = 0
       if (this.anim.run) this.anim.run.time = 0
       if (this.anim.strafe) {
@@ -1125,6 +1143,38 @@ export class Bot {
       decelDrag: M.groundDecelDrag,
     }, dt)
     this.pos.x += this.velX * dt
+  }
+
+  // 跳 peek：播 JumpN（蹬伸→空中收腿），弧线由 mesh.y 偏移驱动（命中区随
+  // mesh 自动跟随）；落地切 JumpLand 恢复。跳跃期间钉地/蹲/转身/支架全部让位
+  startJump() {
+    if (this._jump || this.mode !== 'peek' || !this.anim?.jump) return
+    this.anim.jump.reset()
+    this.anim.jump.play()
+    this._jump = { t: 0, landed: false }
+  }
+
+  // 跳跃相位推进（纯过程量，Bot.step 的 mixer 分支消费）：返回本 tick 的弧线
+  // 偏移（mesh.y 加成）；落地切 JumpLand，恢复完成后清 _jump（返回 null）
+  _stepJump(dt) {
+    if (!this._jump) return 0
+    this._jump.t += dt
+    const jt = this._jump.t
+    let arc = 0
+    if (jt > JUMP_LAUNCH) {
+      const tt = jt - JUMP_LAUNCH
+      arc = Math.max(0, JUMP_V0 * tt - 0.5 * JUMP_G * tt * tt)
+    }
+    if (!this._jump.landed && jt > JUMP_LAUNCH + 2 * JUMP_V0 / JUMP_G) {
+      // 落地：切 JumpLand（压缩→回站），弧线归零
+      this._jump.landed = true
+      if (this.anim.jumpLand) { this.anim.jumpLand.reset(); this.anim.jumpLand.play() }
+    }
+    if (this._jump.landed && jt > JUMP_LAUNCH + 2 * JUMP_V0 / JUMP_G + 0.667) {
+      this._jump = null // 恢复完成：交回走跑混合
+      return 0
+    }
+    return arc
   }
 
   startDeath() {
@@ -1316,15 +1366,15 @@ export class Bot {
     // 蹲姿对枪（BotManager 在急停时按 crouchChance 掷定）：蹲下压低命中区，
     // 逼玩家下压准星——本体对枪蹲。蹲姿优先：蹲下时不出转身踏步/支架（腿部
     // 五五混合会吃掉蹲姿的根高沉降）
-    this._crouching = !!(stopped && this._crouchPlanned && this.anim?.crouchIdle)
+    this._crouching = !!(stopped && this._crouchPlanned && this.anim?.crouchIdle && !this._jump)
     this._crouchW = smoothW(this._crouchW ?? 0, this._crouching ? 1 : 0, dt)
     this._zoneYK = 1 - CROUCH_ZONE_DROP * this._crouchW
     // 停步挑战的官方转身/支架选型（先算好，mixer 分支消费）：急停且朝向差够大
     // → 出「转身踏步」clip（E=右转/W=左转，角度最近档）；朝向已对 → 出「急停
-    // 支架」加法层。走路/移动中不触发（stopped 才算）
+    // 支架」加法层。走路/移动中不触发（stopped 才算）；跳跃中全部让位
     let turnKey = null
-    if (stopped && this.anim?.turn && !this._crouching) turnKey = pickTurnClip(dy)
-    const braceTarget = stopped && this.anim?.stopAdd && !turnKey && !this._crouching ? 1 : 0
+    if (stopped && this.anim?.turn && !this._crouching && !this._jump) turnKey = pickTurnClip(dy)
+    const braceTarget = stopped && this.anim?.stopAdd && !turnKey && !this._crouching && !this._jump ? 1 : 0
 
     // 移动表现：程序化假人 = VALORANT 横移步态；骨骼假人播放混合动画，pull 波
     // 横移时腿由程序化侧移覆盖、上身动画速度压向 0（退到 idle：持枪横移不甩臂）
@@ -1350,6 +1400,28 @@ export class Bot {
           a.setEffectiveWeight(key === turnKey ? this._turnW : 0)
         }
         this._turnKey = turnKey
+      }
+      // 跳跃：空中 JumpN 独占腿部（走/跑/idle 压零防五五混合），落地 JumpLand
+      // 恢复（权重 ~0.33s 淡出交接回走跑）；弧线偏移加在 mesh.y 上（命中区随
+      // mesh 自动跟随）
+      const __jl = this.anim.jumpLand
+      if (this._jump || (__jl && __jl.getEffectiveWeight() > 0.01)) {
+        const arc = this._stepJump(dt)
+        const active = !!this._jump
+        const landed = active ? this._jump.landed : true
+        if (this.anim.jump) this.anim.jump.setEffectiveWeight(active && !landed ? 1 : 0)
+        if (__jl) {
+          if (active) __jl.setEffectiveWeight(1)
+          else __jl.setEffectiveWeight(Math.max(0, __jl.getEffectiveWeight() - dt * 3))
+        }
+        if (this.anim.idle) this.anim.idle.setEffectiveWeight(0)
+        this.anim.walk.setEffectiveWeight(0)
+        if (this.anim.run) this.anim.run.setEffectiveWeight(0)
+        if (this.anim.strafe) for (const s of ['E', 'W']) {
+          this.anim.strafe[s].walk.setEffectiveWeight(0)
+          this.anim.strafe[s].run.setEffectiveWeight(0)
+        }
+        if (arc) this.mesh.position.y += arc
       }
       if (this.anim.crouchIdle) {
         this.anim.crouchIdle.setEffectiveWeight(this._crouchW)
@@ -1384,7 +1456,7 @@ export class Bot {
       _v.copy(this.prevPos).lerp(this.pos, ctx.alpha ?? 1)
       this.mesh.position.x = _v.x
       this.mesh.position.z = _v.z
-      this._stepFootPin(dt) // 官方曲线支撑脚钉地（防全速滑步）
+      if (!this._jump) this._stepFootPin(dt) // 跳跃中双脚离地，钉地让位
       // 官方曲线垂直根运动重建：导出剥离根位移时把盆骨的支撑期下落也剥掉了
       // （实测 runN 全周期脚在 0.45~0.96m = 悬空跑）——身体高度跟随「最低脚贴地」
       // 目标，跑步固有的周期起伏随之回归；钉地 IK 与它配合：一个管水平钉位，

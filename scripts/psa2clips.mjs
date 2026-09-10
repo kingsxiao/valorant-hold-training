@@ -133,6 +133,13 @@ const SRC = {
   crouch: {
     idle: 'assets-raw/core-psa/TP_Core_CrouchIdle_LB.psa',
   },
+  // 跳 peek：JumpN=预备蹲(0.13s)→蹬伸(峰值 0.63s)→空中收腿保持（3.2s，过截
+  // 断）；抛物线本体走引擎（clip 无弧线）——由 Bot 的 mesh.y 弧线偏移驱动，
+  // 命中区随 mesh 自动跟随；JumpLand=落地压缩→回站（0.667s 一次）
+  jump: {
+    jumpN: 'assets-raw/core-psa/TP_Core_JumpN_LB.psa',
+    jumpLand: 'assets-raw/core-psa/TP_Core_JumpLand_LB.psa',
+  },
   // 停步转身踏步（E=向右 / W=向左 × 45/90/135/180°，全部 1.0s）：clip 本体不带
   // 根旋转（Splitter/Pelvis Y 转角≈0）——本体引擎程序化转根，腿只出「转身踏步」
   // 步型；我们同样保持 yaw lerp 权威、clip 只出腿

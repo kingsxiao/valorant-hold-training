@@ -5,7 +5,7 @@ import { CONFIG } from '../core/Config.js'
 import { groundStep, accelFor } from '../core/GroundMotion.js'
 import { peekFacingYaw, leanInto, strafeRampW, strafeStepPose } from '../core/PeekPose.js'
 import { matchRigBones, bakeLocomotionClips, bakeDeathClips, smoothW } from '../core/GaitBake.js'
-import { locoWeights, stepFootPinState } from '../core/Locomotion.js'
+import { locoWeights, stepFootPinState, sampleIkAnchor } from '../core/Locomotion.js'
 import { solveGunAim, pickAimTarget, gunBobPose, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK, deriveGunHoldPoints, solveGripMount } from '../core/WeaponAim.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
@@ -349,11 +349,10 @@ export class Bot {
         // 微下沉：握把落向后手。⚠ 只减 y——归一化模板根节点带居中偏移
         //（normalizeViewmodel 的 vm.position = −center），set 会把整枪平移出位
         gun.position.y -= 0.02
-        // 枪体双手握点（挂入场景图前推导，gun 局部 → holder 系 = +gun.position）：
-        // grip=后握把（钉后手）、fore=护木（左手 IK 目标）
+        // 枪体双手握点：derive 在「根变换已生效的摆放系」采样（顶点经 matrixWorld
+        // 已含 gun.position 平移）→ 返回值即 holder 系，直接作挂枪钉位/左手 IK 目标。
+        // grip=后握把（钉后手）、fore=护木
         const hold = deriveGunHoldPoints(gun) ?? { grip: new THREE.Vector3(0, 0, 0.18), fore: new THREE.Vector3(0, 0, -0.18) }
-        hold.grip.add(gun.position)
-        hold.fore.add(gun.position)
         holder.add(gun)
         holder.updateMatrixWorld(true)
         const bb = new THREE.Box3().setFromObject(gun)
@@ -365,6 +364,7 @@ export class Bot {
           boneL: rig.weaponL, boneR: rig.weaponR,
           armL: rig.arms?.find(a => a.side === 'L') ?? null, // 左手两骨 IK 链（肩/肘）
           hold,
+          gunBase: gun.position.clone(),
           muzzleLocal,
           aimQ: new THREE.Quaternion(), kick: 0, init: false,
         }
@@ -757,6 +757,30 @@ export class Bot {
   // mixer 只在 60Hz 门控里写骨骼，缺这一步 IK 会在自家输出上累积（快照反馈坑，
   // 与站定微动同款教训）。摆动腿不受影响（官方曲线原样）；站定时双脚入锚 =
   // 钉住站姿（自然）。烘焙近似路径数学上已防滑（步幅=大腿摆幅覆盖），不启用。
+  // 钉地锚的数据源：当前权重最大的步态动作（walk/run × N/横移侧）的官方 IK
+  // 目标曲线。混合期跟大权重走（锚点随混合平滑过渡）；无 ik 数据的 clip 返回
+  // null（回退入锚捕获）。返回共享对象，勿持有
+  _ikAnchorSource() {
+    const A = this.anim
+    if (!A) return null
+    const cands = [A.walk, A.run]
+    if (A.strafe) cands.push(A.strafe[this._strafeSide ?? 'E'].walk, A.strafe[this._strafeSide ?? 'E'].run)
+    let best = null, bestW = -1
+    for (const a of cands) {
+      if (!a?.getClip().userData.ik) continue
+      const w = a.getEffectiveWeight()
+      if (w > bestW) { bestW = w; best = a }
+    }
+    if (!best || bestW <= 0.01) return null
+    const clip = best.getClip()
+    this._ikSrc = this._ikSrc ??= {}
+    this._ikSrc.ik = clip.userData.ik
+    this._ikSrc.duration = clip.duration
+    this._ikSrc.n = clip.userData.ik.n
+    this._ikSrc.t = best.time
+    return this._ikSrc
+  }
+
   _stepFootPin(dt) {
     const rig = this._strafeRig
     if (!rig || !this._officialLo) return
@@ -776,10 +800,26 @@ export class Bot {
       this._loMinY = Math.min(this._loMinY, _fpFoot.y - this.mesh.position.y)
       if (this._pinOff) continue // 调试/曲线比对：只量高度不钉地
       // 2) 支撑判定 + 权重坡（迟滞带防边界抖动，语义锁在 Locomotion.stepFootPinState
-      //    单测）；入锚沿记录锚点（IK 把脚拉回世界落点）
+      //    单测）；锚点优先取官方 IK 目标曲线（本体的脚部落地就是引擎把踝约束到
+      //    该曲线：支撑期它随盆骨系后退 ≈ 体速 → 世界系静止，实测 ±2cm，天生
+      //    落地）；无数据回退入锚沿捕获（采样当时脚位）
       const was = st.has
       stepFootPinState(st, _fpFoot.y, dt)
-      if (st.has && !was) st.anchor.copy(_fpFoot)
+      const ikSrc = this._ikAnchorSource()
+              // ⚠ psa 的 IK 目标骨命名与脚反号（L_IK_FootTarget 的 Y 侧偏为正、
+        // 曲线落地窗与 R 脚支撑窗重合——实测 L 目标曲线跟随右脚）
+        if (ikSrc && sampleIkAnchor(ikSrc.ik, ikSrc.duration, ikSrc.n, ikSrc.t, leg.side === 'L' ? 'R' : 'L', _fpAnchor)) {
+        // ik 曲线活在 psa 根骨空间（UE 轴向：前=+X、侧=+Y、上=+Z——L/R 目标
+        // 的 Y 符号分侧可证）。实测该空间支撑期目标世界静止 ±2cm。骨矩阵链带
+        // UE 常量节点旋转会把锚甩飞——按轴映射直接落到 mesh 系（前=−Z、上=+Y）
+        // 再升世界；侧轴符号以「世界系支撑期静止」为准
+        // mesh 原点不在地面（贴地跟踪下 mesh.y≈-0.7）：psa 地面在 mesh 局部
+        // 高度 = -mesh.y，锚高 = 地面偏移 + psaZ
+        st.anchor.set(_fpAnchor.y, -this.mesh.position.y + _fpAnchor.z, -_fpAnchor.x)
+          .applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
+      } else if (st.has && !was) {
+        st.anchor.copy(_fpFoot)
+      }
       if (st.w <= 0) continue
       // 3) IK 目标：锚点优先，但跑动支撑期身体位移（~1.3m）远超腿的可达锥
       //    （~0.99m）——锚点被拉远超过 0.25m 后按越距把目标滑回 clip 脚位（0.5m
@@ -971,7 +1011,7 @@ export class Bot {
       this.mesh.add(this.gun.holder)
       this.gun.holder.position.set(0, 1.2, -0.25)
       this.gun.holder.quaternion.identity()
-      this.gun.gun.position.set(0, -0.02, 0)
+      this.gun.gun.position.copy(this.gun.gunBase) // 含模板根节点居中偏移，不能 set 硬编码
       this.gun.kick = 0
       this.gun.init = false
     }

@@ -22,7 +22,11 @@ export function buildClip(jsonClip, skeletonRoot, name = 'loco') {
     if (t.p) tracks.push(new THREE.VectorKeyframeTrack(`${boneName}.position`, jsonClip.times, t.p))
   }
   if (!tracks.length) return null
-  return new THREE.AnimationClip(name, jsonClip.duration, tracks)
+  const clip = new THREE.AnimationClip(name, jsonClip.duration, tracks)
+  // 官方 IK 目标锚曲线（盆骨局部，脚部落地的本体数据）：不进 mixer（GLB 无对应
+  // 骨也不需要），Bot._stepFootPin 按 action.time 采样作钉地锚
+  if (jsonClip.ik) clip.userData.ik = { L: jsonClip.ik.L, R: jsonClip.ik.R, n: jsonClip.n }
+  return clip
 }
 
 // 池条目用：core 集（TP_Core 共享移动循环，四英雄同款——本体移动就用它）+
@@ -44,6 +48,22 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
     : null
   if (strafe && (!strafe.E.walk || !strafe.E.run)) return { walk, run, strafe: null }
   return { walk, run, strafe }
+}
+
+// 官方 IK 目标锚采样（纯函数，Bot._stepFootPin 与单测共用）：在 clip 的 ik
+// 曲线（L/R 各 n×3 帧，盆骨局部空间）上按动作播放头 t 线性插值。返回 out
+// （Vector3，盆骨局部），无数据返回 null
+export function sampleIkAnchor(ik, duration, n, t, side, out) {
+  if (!ik?.[side] || ik[side].length < 3) return null
+  const f = Math.min(n - 1, Math.max(0, (t / duration) * (n - 1)))
+  const i = Math.min(n - 2, Math.floor(f)), k = f - i
+  const a = ik[side]
+  out.set(
+    a[i * 3] + (a[i * 3 + 3] - a[i * 3]) * k,
+    a[i * 3 + 1] + (a[i * 3 + 4] - a[i * 3 + 1]) * k,
+    a[i * 3 + 2] + (a[i * 3 + 5] - a[i * 3 + 2]) * k,
+  )
+  return out
 }
 
 // 走/跑/横移的动画权重分配（纯函数，Bot._setAnimWeights 与单测共用）：

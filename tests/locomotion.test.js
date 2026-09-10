@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import fs from 'node:fs'
-import { buildClip, buildLocomotion, locoWeights, stepFootPinState } from '../src/core/Locomotion.js'
+import { buildClip, buildLocomotion, locoWeights, stepFootPinState, sampleIkAnchor } from '../src/core/Locomotion.js'
 
 // 假骨架：UE 风格带 _NNNN 后缀骨名（与英雄 GLB 同构）
 function fakeHeroSkeleton(suffixes) {
@@ -89,6 +89,58 @@ describe('buildLocomotion 池条目集', () => {
     const phx = buildLocomotion(locoJson, 'phoenix', root) // 未知英雄 → 同 core 集
     expect(phx.walk.duration).toBe(jett.walk.duration)
     expect(buildLocomotion({}, 'jett', root)).toBeNull() // 无数据 → null
+  })
+
+  it('buildClip 挂官方 IK 目标锚曲线到 clip.userData（不进 mixer 轨道）', () => {
+    const root = fakeHeroSkeleton([['Pelvis', '9'], ['L_Hip', '9']])
+    const clip = buildClip({ duration: 0.6, times: [0, 0.6], ik: { L: [1, 2, 3, 4, 5, 6] }, tracks: [{ b: 'Pelvis', q: [0, 0, 0, 1, 0, 0, 0, 1] }] }, root, 'x')
+    expect(clip.userData.ik).toEqual({ L: [1, 2, 3, 4, 5, 6], n: undefined })
+    expect(clip.tracks.map(t => t.name)).toEqual(['Pelvis_9.quaternion']) // ik 不产生轨道
+  })
+})
+
+describe('sampleIkAnchor 官方落地锚采样', () => {
+  const locoJson = JSON.parse(fs.readFileSync('public/models/locomotion.json', 'utf8'))
+  it('线性插值：段内按 t 比例混合相邻帧；首尾钳制；无数据 null', () => {
+    const ik = { L: [0, 0, 0, 1, 0, 0] } // 2 帧
+    const out = { set(x, y, z) { this.x = x; this.y = y; this.z = z; return this } }
+    expect(sampleIkAnchor(ik, 0.6, 2, 0.3, 'L', out)).toBe(out)
+    expect(out.x).toBeCloseTo(0.5, 9)
+    sampleIkAnchor(ik, 0.6, 2, -1, 'L', out); expect(out.x).toBe(0)   // 首钳制
+    sampleIkAnchor(ik, 0.6, 2, 9, 'L', out); expect(out.x).toBe(1)    // 尾钳制
+    expect(sampleIkAnchor({}, 0.6, 2, 0, 'L', out)).toBeNull()
+    expect(sampleIkAnchor({ L: [1, 2] }, 0.6, 2, 0, 'L', out)).toBeNull() // 数据不齐
+  })
+
+  it('locomotion.json 官方锚的落地性：跑步支撑窗内锚世界漂移 <0.15m（锁 TP_Core 数据质量）', () => {
+    const c = locoJson.core.runN
+    const STEP = 1.55, rate = (2 * STEP) / c.duration // 锁相世界推进速率
+    for (const side of ['L', 'R']) {
+      const anchors = []
+      for (let f = 0; f < c.n; f++) {
+        anchors.push(rate * (f / (c.n - 1)) * c.duration + c.ik[side][f * 3]) // 世界 x
+      }
+      // 最优连续 1/3 周期窗（≈支撑期长）内最小漂移：官方曲线必须提供一段
+      // 世界系可落地窗（锚随盆骨后退 ≈ 体速互相抵消）。支撑窗可跨循环边界——
+      // 补一段 +周期位移的环绕副本
+      const win = Math.floor(c.n / 3)
+      const ext = anchors.concat(anchors.map(a => a + rate * c.duration))
+      let best = Infinity
+      for (let i = 0; i + win <= ext.length; i++) {
+        const seg = ext.slice(i, i + win)
+        best = Math.min(best, Math.max(...seg) - Math.min(...seg))
+      }
+      expect(best).toBeLessThan(0.15)
+    }
+  })
+
+  it('psa IK 目标骨命名与脚反号：L 目标的侧偏为正、R 为负（换侧采样的依据）', () => {
+    for (const key of ['runN', 'walkN']) {
+      const c = locoJson.core[key]
+      const mid = 3 * Math.floor(c.n / 2)
+      expect(c.ik.L[mid + 1]).toBeGreaterThan(0)  // L 目标 Y（侧偏）>0
+      expect(c.ik.R[mid + 1]).toBeLessThan(0)
+    }
   })
 })
 

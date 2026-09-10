@@ -54,6 +54,11 @@ function parsePsa(path) {
 }
 
 const WANTED = ['Splitter', 'Pelvis', 'L_Hip', 'L_Knee', 'L_Foot', 'L_Toe', 'R_Hip', 'R_Knee', 'R_Foot', 'R_Toe']
+// 官方脚部落地的本体方法：UE AnimGraph 脚部 IK 把踝约束到 IK 目标曲线——目标
+// 局部空间 ≈ 盆骨空间（parent 字段坏无法确证，但「支撑期锚点在世界系静止」
+// 的实测只对盆骨空间成立，±2cm）。支撑期目标随盆骨系后退 ≈ 体速 → 世界系
+// 静止（实测 RunN 支撑窗内漂移 ±2cm）= 天生落地锚
+const IK_BONES = { L: 'L_IK_FootTarget', R: 'R_IK_FootTarget' }
 
 function clipFrom(path) {
   const { names, frames, duration } = parsePsa(path)
@@ -69,8 +74,15 @@ function clipFrom(path) {
     if (pVar) t.p = p.flat().map(v => +(v * 0.01).toFixed(5))
     if (qVar || pVar) tracks.push(t)
   }
+  const ik = {}
+  for (const [side, bone] of Object.entries(IK_BONES)) {
+    const bi = names.indexOf(bone)
+    if (bi < 0) continue
+    ik[side] = frames.map(f => [f[bi].p[0] * 0.01, f[bi].p[1] * 0.01, f[bi].p[2] * 0.01])
+      .flat().map(v => +v.toFixed(5))
+  }
   const times = frames.map((_, i) => +((i / (frames.length - 1)) * duration).toFixed(4))
-  return { duration: +duration.toFixed(4), n: frames.length, times, tracks }
+  return { duration: +duration.toFixed(4), n: frames.length, times, tracks, ik }
 }
 
 const SRC = {

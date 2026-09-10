@@ -365,11 +365,17 @@ main.applyWeaponSkin 克隆替换（敌我同步换肤）。
   `Death_Land_{Back,Front}Splat_Big`（P2 死亡方向性素材）、RunAdd*_UB（跑动
   上身叠加）、各武器 IdlePose/Aim*_UB。Drive 纯 HTML 列目录法逐级取文件 ID：
   `embeddedfolderview?id=<ID>#list` 正则抽 `flip-entry`。
-- **遗留半步**：TP_Core 的 FK 腿曲线扫幅 0.73m ≈ 步幅 45%——本体引擎是 UE
-  AnimGraph 的脚部 IK 把踝约束到 `L_IK_FootTarget` 曲线（两套装里都有，pos.x
-  局部扫幅 1.15-1.35m = 全步幅）。下一轮把该曲线导出进 locomotion.json，运行时
-  `锚 = 盆骨矩阵 · targetLocal(phase)` 作钉地锚：锚随盆骨后退的速率≈体速，
-  世界系近似静止 = 官方同款落地，钉地 IK 修正量即官方修正量。
+- **官方脚部 IK 锚（130 轮已接入）**：`L/R_IK_FootTarget` 曲线已导出进
+  locomotion.json（`core.*.ik`，盆骨根空间），运行时钉地锚直接采样该曲线
+  （Locomotion.sampleIkAnchor，主导作权重选曲线）。三个实现要点：
+  ①**目标骨命名与脚反号**——L_IK_FootTarget 跟随右脚（侧偏符号 + 落地窗对齐
+  双重验证），采样按对侧取；②**空间映射别乘骨矩阵**——GLB 骨链带 UE 常量节点
+  旋转会把锚甩飞，按轴映射（psa 前+X/侧+Y/上+Z → mesh −Z/+X/+Y，上轴另加
+  -mesh.y 地面偏移：mesh 原点不在地面）；③锚 世界系支撑期静止 ±2-4cm（脚本
+  与运行时双重实测），测试锁「最优支撑窗漂移 <0.15m」。
+  物理边界：TP_Core FK 腿曲线扫幅 0.73m ≈ 步幅 45%——锚钉住前 ~0.1s 后腿 reach
+  用尽，按 give 混合平滑交回 clip；这与 ripped 数据一致（FK 不带跑步机），残余
+  滑步是数据上限而非实现缺陷。
 
 ### verify-official-loco 双重积分 bug（所有旧台架数字都在 2× 速度）
 

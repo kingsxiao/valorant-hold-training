@@ -13,6 +13,7 @@
   table { border-collapse: collapse; margin: 8px 0; }
   td, th { border: 1px solid #444; padding: 4px 10px; font-size: 13px; }
   .ask { background: #223; border: 1px solid #456; border-radius: 6px; padding: 12px; margin: 12px 0; }
+  .note { background: #181818; border-left: 3px solid #6af; padding: 8px 12px; margin: 8px 0; font-size: 13px; color: #ccc; }
 </style>
 </head>
 <body>
@@ -26,9 +27,12 @@
 </div>
 
 <h2>A 组 · Turn E/W 转身踏步（与本体录像对照判旋向）</h2>
-<p>判读：E 帧 = 右转约定（从右肩位跨步转入面向），W 帧 = 镜像左转。与本体录像
-右转/左转中段帧比对——E 与本体右转一致则维持，相反则
-<code>Locomotion.pickTurnClip</code> 返回值 'E'/'W' 互换（一行）。</p>
+<div class="note">
+  <b>判读方法</b>：打开任一官方第三人称录像，找到角色原地右转 90° 的中段帧
+  （约转过 45° 时暂停），观察：<br>
+  ① 哪条腿在前（跨步腿）；② 身体旋向（顺时针/逆时针）。<br>
+  与本项目 E 帧（右转约定）比对——一致则维持，镜像则换向（一行）。
+</div>
 <div class="strip">
   <figure><img src="turn-frames/E-1.png"><figcaption>E 25%</figcaption></figure>
   <figure><img src="turn-frames/E-2.png"><figcaption>E 50%</figcaption></figure>
@@ -39,11 +43,19 @@
   <figure><img src="turn-frames/W-2.png"><figcaption>W 50%</figcaption></figure>
   <figure><img src="turn-frames/W-3.png"><figcaption>W 75%</figcaption></figure>
 </div>
+<div class="note">
+  <b>结论</b>：E/W 两向踏步型互为镜像（已确认），方向约定（E=右转/W=左转）
+  为命名推定 + 单测锁定。与本体录像比对后不符则
+  <code>Locomotion.pickTurnClip</code> 返回值 'E'/'W' 互换（一行）。
+</div>
 
 <h2>B 组 · 蹲走速度档位（slow 1.76 vs fast 2.7）</h2>
-<p>slow = clip 天然速率（近零滑步、步频 1.9 步/s）；fast = 本体 50% 跑速口径
-（步频 3.2 步/s ≈ 走路同档）。回填：设置→训练→「蹲走拉出速度」滑条试玩后，
-把默认值写回 <code>Config.training.crouchWalkSpeed</code>。</p>
+<div class="note">
+  <b>判读方法</b>：设置→训练→「蹲走拉出速度」滑条实时切换两档试玩，观感定夺
+  后把默认值写回 <code>Config.training.crouchWalkSpeed</code>。<br>
+  slow = clip 天然速率（近零滑步、步频 1.9 步/s）；<br>
+  fast = 本体 50% 跑速口径（步频 3.2 步/s ≈ 走路同档）。
+</div>
 <div class="strip">
   <figure><img src="crouch-frames/slow-1.png"><figcaption>slow 1</figcaption></figure>
   <figure><img src="crouch-frames/slow-2.png"><figcaption>slow 2</figcaption></figure>
@@ -58,7 +70,10 @@
 </div>
 
 <h2>C 组 · 跳 peek（JumpN 蹬伸 → 抛物线 → JumpLand）</h2>
-<p>回填：跳高 1.2m（本体社区推导口径）观感；嫌高调 <code>Bot.js JUMP_V0/JUMP_G</code>。</p>
+<div class="note">
+  <b>回填</b>：跳高 1.2m（本体社区逐帧推导口径）观感；嫌高调
+  <code>Bot.js JUMP_V0/JUMP_G</code>。
+</div>
 <div class="strip">
   <figure><img src="jump-frames/jump-1.png"><figcaption>jump 1</figcaption></figure>
   <figure><img src="jump-frames/jump-2.png"><figcaption>jump 2</figcaption></figure>

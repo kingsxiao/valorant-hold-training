@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Bot 移动动作 · 真人回填对照页</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", sans-serif; background: #111; color: #eee; margin: 24px; }
+  h1 { font-size: 20px; } h2 { font-size: 16px; margin: 24px 0 8px; color: #8ef; }
+  .strip { display: flex; gap: 8px; flex-wrap: wrap; }
+  .strip figure { margin: 0; text-align: center; }
+  .strip img { width: 300px; border: 1px solid #444; border-radius: 4px; }
+  .strip figcaption { font-size: 12px; color: #aaa; }
+  table { border-collapse: collapse; margin: 8px 0; }
+  td, th { border: 1px solid #444; padding: 4px 10px; font-size: 13px; }
+  .ask { background: #223; border: 1px solid #456; border-radius: 6px; padding: 12px; margin: 12px 0; }
+</style>
+</head>
+<body>
+<h1>Bot 移动动作 · 真人回填对照页</h1>
+
+<div class="ask">
+  <b>待回填三项</b>（对照后把结论写回 ACTION_ACCEPTANCE.md 对应节）：
+  ① Turn E/W 旋向对照（下表 A 组帧 vs 本体转身录像）；
+  ② 蹲走速度档位观感（B 组 slow/fast 连拍，选默认档）；
+  ③ 跳高 1.2m 观感（C 组跳 peek 帧）。
+</div>
+
+<h2>A 组 · Turn E/W 转身踏步（与本体录像对照判旋向）</h2>
+<p>判读：E 帧 = 右转约定（从右肩位跨步转入面向），W 帧 = 镜像左转。与本体录像
+右转/左转中段帧比对——E 与本体右转一致则维持，相反则
+<code>Locomotion.pickTurnClip</code> 返回值 'E'/'W' 互换（一行）。</p>
+<div class="strip">
+  <figure><img src="turn-frames/E-1.png"><figcaption>E 25%</figcaption></figure>
+  <figure><img src="turn-frames/E-2.png"><figcaption>E 50%</figcaption></figure>
+  <figure><img src="turn-frames/E-3.png"><figcaption>E 75%</figcaption></figure>
+</div>
+<div class="strip">
+  <figure><img src="turn-frames/W-1.png"><figcaption>W 25%</figcaption></figure>
+  <figure><img src="turn-frames/W-2.png"><figcaption>W 50%</figcaption></figure>
+  <figure><img src="turn-frames/W-3.png"><figcaption>W 75%</figcaption></figure>
+</div>
+
+<h2>B 组 · 蹲走速度档位（slow 1.76 vs fast 2.7）</h2>
+<p>slow = clip 天然速率（近零滑步、步频 1.9 步/s）；fast = 本体 50% 跑速口径
+（步频 3.2 步/s ≈ 走路同档）。回填：设置→训练→「蹲走拉出速度」滑条试玩后，
+把默认值写回 <code>Config.training.crouchWalkSpeed</code>。</p>
+<div class="strip">
+  <figure><img src="crouch-frames/slow-1.png"><figcaption>slow 1</figcaption></figure>
+  <figure><img src="crouch-frames/slow-2.png"><figcaption>slow 2</figcaption></figure>
+  <figure><img src="crouch-frames/slow-3.png"><figcaption>slow 3</figcaption></figure>
+  <figure><img src="crouch-frames/slow-4.png"><figcaption>slow 4</figcaption></figure>
+</div>
+<div class="strip">
+  <figure><img src="crouch-frames/fast-1.png"><figcaption>fast 1</figcaption></figure>
+  <figure><img src="crouch-frames/fast-2.png"><figcaption>fast 2</figcaption></figure>
+  <figure><img src="crouch-frames/fast-3.png"><figcaption>fast 3</figcaption></figure>
+  <figure><img src="crouch-frames/fast-4.png"><figcaption>fast 4</figcaption></figure>
+</div>
+
+<h2>C 组 · 跳 peek（JumpN 蹬伸 → 抛物线 → JumpLand）</h2>
+<p>回填：跳高 1.2m（本体社区推导口径）观感；嫌高调 <code>Bot.js JUMP_V0/JUMP_G</code>。</p>
+<div class="strip">
+  <figure><img src="jump-frames/jump-1.png"><figcaption>jump 1</figcaption></figure>
+  <figure><img src="jump-frames/jump-2.png"><figcaption>jump 2</figcaption></figure>
+  <figure><img src="jump-frames/jump-3.png"><figcaption>jump 3</figcaption></figure>
+  <figure><img src="jump-frames/jump-4.png"><figcaption>jump 4</figcaption></figure>
+</div>
+
+<h2>回填入口速查</h2>
+<table>
+  <tr><th>参数</th><th>现值</th><th>调整入口</th></tr>
+  <tr><td>跳高/滞空</td><td>1.2m / 0.676s（社区逐帧推导）</td><td>Bot.js JUMP_V0 / JUMP_G</td></tr>
+  <tr><td>蹲走移速</td><td>2.7m/s = 50% 跑速（设置滑条可调）</td><td>Config.training.crouchWalkSpeed</td></tr>
+  <tr><td>蹲姿命中区</td><td>逐区 cr（胸 0.55/腹 0.61/腿 1.72/小腿 5.05）+ 头部骨跟随</td><td>Bot.js zones cr</td></tr>
+  <tr><td>Turn 旋向</td><td>E=右转/W=左转（命名推定）</td><td>Locomotion.pickTurnClip 返回值互换</td></tr>
+</table>
+</body>
+</html>

@@ -71,6 +71,7 @@ const _fpFoot = new THREE.Vector3()
 const _fpAnchor = new THREE.Vector3()
 const _IDENTITY = new THREE.Quaternion()
 const _ZAXIS = new THREE.Vector3(0, 0, 1) // 枪轴滚转轴（holder 局部 Z = 枪管向）
+const _headC = new THREE.Vector3() // 蹲姿头部区：Head 骨世界位暂存
 
 export class Bot {
   static customTemplate = null   // 用户 GLB 模板（UserAssets 注入）
@@ -108,16 +109,16 @@ export class Bot {
     this._yBase = 0      // 步态/急停的高度基线（呼吸偏移在其上绝对合成，防累积）
 
     // 命中区域：{ y, r, zone }
-    // cr = 蹲姿高度比（蹲满时的高度/站姿高度，官方蹲姿 clip 骨位实测）：
-    // 胸 Spine2 0.761/1.141=0.67、腹 Pelvis 0.762/1.02=0.75、腿维持 0.70（蹲姿
-    // 腿部折叠的逐区测量受地面跟踪反馈干扰，保守取统一值）；头部区不走 cr，
-    // 蹲姿时跟随 Head 骨真实渲染位
+    // cr = 蹲姿高度比（蹲/站世界系稳态 16 帧均值实测，规避地面跟踪反馈）：
+    // 官方蹲姿是「收拢球」——头 0.51、盆骨 0.64、膝 1.21、踝 1.11（腿折叠上收）。
+    // 胸 Spine2 0.628/1.141=0.55、腹 Spine1 0.639/1.041=0.61、膝 1.212/0.55=1.72、
+    // 踝 1.111/0.22=5.05；头部区不走 cr，蹲姿时按权重插值跟随 Head 骨真实渲染位
     this.zones = [
       { y: 1.63, r: 0.13, zone: 'head', cr: 0.70 },
-      { y: 1.3, r: 0.21, zone: 'body', cr: 0.67 },
-      { y: 0.95, r: 0.2, zone: 'body', cr: 0.75 },
-      { y: 0.55, r: 0.16, zone: 'leg', cr: 0.70 },
-      { y: 0.22, r: 0.14, zone: 'leg', cr: 0.70 },
+      { y: 1.3, r: 0.21, zone: 'body', cr: 0.55 },
+      { y: 0.95, r: 0.2, zone: 'body', cr: 0.61 },
+      { y: 0.55, r: 0.16, zone: 'leg', cr: 1.72 },
+      { y: 0.22, r: 0.14, zone: 'leg', cr: 5.05 },
     ]
 
     this._buildMesh()
@@ -1585,17 +1586,19 @@ export class Bot {
     if (this.invulnerable) return null
     const cw = this._crouchW ?? 0
     // 蹲姿头部区跟随 Head 骨：官方蹲姿躯干前倾/下沉时头部既降又前移（实测
-    // mesh 局部偏移 ~0.4m），线性缩放模型盖不住——直接用渲染头位做命中中心
-    let headOverride = null
-    if (cw > 0.01 && this._headBone) {
+    // mesh 局部偏移 ~0.4m），线性缩放模型盖不住——按蹲姿权重在「站姿正上轴位」
+    // 与「渲染头位（骨原点 +0.06 颅心）」间插值，蹲/起全程连续
+    let headBoneW = null
+    if (this._headBone) {
       this._headBone.updateWorldMatrix(true, false)
       const he = this._headBone.matrixWorld.elements
-      headOverride = { x: he[12], y: he[13] + 0.06, z: he[14] } // 骨原点微上移 ≈ 颅心
+      headBoneW = _headC.set(he[12], he[13] + 0.06, he[14])
     }
     let bestT = maxT, bestZone = null
     for (const z of this.zones) {
-      if (headOverride && z.zone === 'head') {
-        _v.set(headOverride.x, headOverride.y, headOverride.z)
+      _v.set(0, z.y, 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
+      if (z.zone === 'head' && headBoneW) {
+        _v.lerp(headBoneW, cw)
       } else {
         // 逐区蹲姿高度插值：站姿 1 → 蹲姿 cr，随蹲姿权重平滑过渡
         const yk = 1 + ((z.cr ?? 1) - 1) * cw

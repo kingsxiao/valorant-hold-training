@@ -1194,9 +1194,10 @@ export class Bot {
       arc = Math.max(0, JUMP_V0 * tt - 0.5 * JUMP_G * tt * tt)
     }
     if (!this._jump.landed && jt > JUMP_LAUNCH + 2 * JUMP_V0 / JUMP_G) {
-      // 落地：切 JumpLand（压缩→回站），弧线归零
+      // 落地：切 JumpLand（压缩→回站），弧线归零；落地闷响（强脚步口径）
       this._jump.landed = true
       if (this.anim.jumpLand) { this.anim.jumpLand.reset(); this.anim.jumpLand.play() }
+      this.onFootstep?.(5.4)
     }
     if (this._jump.landed && jt > JUMP_LAUNCH + 2 * JUMP_V0 / JUMP_G + 0.667) {
       this._jump = null // 恢复完成：交回走跑混合
@@ -1494,8 +1495,15 @@ export class Bot {
       // 步态相位随位移推进（每 STEP_LEN 米 = π）——官方/烘焙 clip 播放头
       // （_setAnimWeights 相位锁定）与侧移姿态都由它驱动；mixer 假人统一在这里
       // 推进（不含 _stepStrafeGait：骨链不齐的老模型 rig=null 提前返回，相位也
-      // 不能停）
+      // 不能停）。脚步声：跨 π = 走满一步的落脚瞬间触发（与程序化假人同口径）；
+      // 跳跃滞空中静音（本体跳 peek 空中无脚步声），落地帧补一声落地闷响
+      const kPrev = Math.floor(this.walkPhase / Math.PI)
       this.walkPhase += speed * dt * Math.PI / STEP_LEN
+      if (this._jump) {
+        // 空中：脚步静音
+      } else if (speed > 0.5 && Math.floor(this.walkPhase / Math.PI) > kPrev) {
+        this.onFootstep?.(speed)
+      }
       this._stepAnim(speed, dt)
       this._stepStrafeGait(speed, w, dt)
       // 先落位再钉地（顺序是钉地成败的关键）：IK 用本帧最终 mesh 位姿解算——

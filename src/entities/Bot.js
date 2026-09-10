@@ -38,8 +38,9 @@ const STEP_LEN = 1.55 // 一步的位移（m）：步态相位锁相基准。官
 const JUMP_LAUNCH = 0.15   // 起跳蹬伸时长（JumpN 前 0.15s 是预备蹲，弧线在其后）
 const JUMP_FALL_AFTER = 0.35 // 滞空 0.35s 后从 JumpN 空中段切 Falling 循环保持
                              // （JumpN 尾段是落地走出，长滞空不能定格在那里）
-const JUMP_V0 = 3.2        // 起跳竖直初速（m/s）：跳高 ~0.52m
-const JUMP_G = 9.8         // 空中重力（m/s²）：滞空 ~0.65s
+const JUMP_V0 = 7.098      // 起跳竖直初速（m/s）：本体社区逐帧推导值（r/VALORANT
+                           // "Valorant Physics, Derived"：跳高 1.2m = v0²/2g）
+const JUMP_G = 21          // 空中重力（m/s²）：同源推导值；滞空 = 2·v0/g ≈ 0.676s
 const CROUCH_ZONE_DROP = 0.30 // 蹲姿命中区下沉比：官方根高 79.6/114.1cm（CrouchIdle vs RunN
                               // 实测），头/胸/腹/腿区高度按 1−0.30·蹲姿权重缩放，半径不变
 const STRAFE_STEP_LEN = 1.15 // 横移步距保持既有调校口径（pull 出场节奏 1 步/1.15m 已验收）
@@ -1463,7 +1464,9 @@ export class Bot {
           this.anim.strafe[s].walk.setEffectiveWeight(0)
           this.anim.strafe[s].run.setEffectiveWeight(0)
         }
-        if (arc) this.mesh.position.y += arc
+        this._jumpArcY = arc // 弧线在 mesh.y 定格后追加（见下），此处先存
+      } else {
+        this._jumpArcY = 0
       }
       if (this.anim.crouchIdle) {
         this.anim.crouchIdle.setEffectiveWeight(this._crouchW)
@@ -1498,6 +1501,7 @@ export class Bot {
       _v.copy(this.prevPos).lerp(this.pos, ctx.alpha ?? 1)
       this.mesh.position.x = _v.x
       this.mesh.position.z = _v.z
+      if (this._jumpArcY) this.mesh.position.y += this._jumpArcY // 跳跃弧线（命中区随 mesh）
       if (!this._jump) this._stepFootPin(dt) // 跳跃中双脚离地，钉地让位
       // 官方曲线垂直根运动重建：导出剥离根位移时把盆骨的支撑期下落也剥掉了
       // （实测 runN 全周期脚在 0.45~0.96m = 悬空跑）——身体高度跟随「最低脚贴地」

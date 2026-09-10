@@ -239,8 +239,8 @@ describe('turn 8 向集与 stopAdd 支架（TP_Core 停步挑战）', () => {
       expect(bones).toContain('Splitter')
       expect(bones).toContain('L_Knee')
     }
-    expect(CROUCH_WALK_STEP).toBeCloseTo(0.84, 6)
-    expect(CROUCH_WALK_SPEED).toBeCloseTo(1.76, 6)
+    expect(CROUCH_WALK_STEP).toBeCloseTo(1.26, 6)
+    expect(CROUCH_WALK_SPEED).toBeCloseTo(2.7, 6)
   })
 
   it('jump 三段集：JumpN 3.23s / JumpLand 0.667s / Falling 滞空循环 2.567s', () => {

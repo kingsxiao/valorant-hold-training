@@ -36,6 +36,8 @@ import { raySphere } from '../world/World.js'
 const STEP_LEN = 1.55 // 一步的位移（m）：步态相位锁相基准。官方动画实测（assets-raw/psa_*：
                       // 跑周期 0.6s@5.4m/s → 1.62m/步、走周期 ~0.85s@3.39m/s → 1.44m/步）取中值
 const JUMP_LAUNCH = 0.15   // 起跳蹬伸时长（JumpN 前 0.15s 是预备蹲，弧线在其后）
+const JUMP_FALL_AFTER = 0.35 // 滞空 0.35s 后从 JumpN 空中段切 Falling 循环保持
+                             // （JumpN 尾段是落地走出，长滞空不能定格在那里）
 const JUMP_V0 = 3.2        // 起跳竖直初速（m/s）：跳高 ~0.52m
 const JUMP_G = 9.8         // 空中重力（m/s²）：滞空 ~0.65s
 const CROUCH_ZONE_DROP = 0.30 // 蹲姿命中区下沉比：官方根高 79.6/114.1cm（CrouchIdle vs RunN
@@ -489,6 +491,13 @@ export class Bot {
         for (const [key, clip] of Object.entries(official.jump)) {
           if (!clip) continue
           const a = this.mixer.clipAction(clip)
+          if (key === 'fall') {
+            // Falling 滞空循环：自然重复（不合入 LoopOnce 组）
+            a.play()
+            a.setEffectiveWeight(0)
+            this.anim.fall = a
+            continue
+          }
           a.loop = THREE.LoopOnce
           a.clampWhenFinished = true
           a.play()
@@ -1409,7 +1418,11 @@ export class Bot {
         const arc = this._stepJump(dt)
         const active = !!this._jump
         const landed = active ? this._jump.landed : true
-        if (this.anim.jump) this.anim.jump.setEffectiveWeight(active && !landed ? 1 : 0)
+        // 滞空段姿态源：JumpN 空中段 → 滞空超时切 Falling 循环（长滞空保持，
+        // JumpN 尾段是落地走出不能定格）
+        const airFall = active && !landed && (this._jump.t - JUMP_LAUNCH) > JUMP_FALL_AFTER && !!this.anim.fall
+        if (this.anim.jump) this.anim.jump.setEffectiveWeight(active && !landed && !airFall ? 1 : 0)
+        if (this.anim.fall) this.anim.fall.setEffectiveWeight(airFall ? 1 : 0)
         if (__jl) {
           if (active) __jl.setEffectiveWeight(1)
           else __jl.setEffectiveWeight(Math.max(0, __jl.getEffectiveWeight() - dt * 3))

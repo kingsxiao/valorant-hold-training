@@ -231,6 +231,16 @@ describe('stepFootPinState 脚钉地状态机（迟滞 + 权重坡）', () => {
 
 describe('turn 8 向集与 stopAdd 支架（TP_Core 停步挑战）', () => {
   const locoJson = JSON.parse(fs.readFileSync('public/models/locomotion.json', 'utf8'))
+  it('jump 三段集：JumpN 3.23s / JumpLand 0.667s / Falling 滞空循环 2.567s', () => {
+    expect(locoJson.jump.jumpN.duration).toBeCloseTo(3.2333, 3)
+    expect(locoJson.jump.jumpLand.duration).toBeCloseTo(0.6667, 3)
+    expect(locoJson.jump.fall.duration).toBeCloseTo(2.5667, 3)
+    for (const c of Object.values(locoJson.jump)) {
+      expect(c.tracks.map(t => t.b)).toContain('Splitter')
+      expect(c.tracks.map(t => t.b)).toContain('L_Knee')
+    }
+  })
+
   it('结构锁值：官方时长（转身 1s / 支架 0.667s）、根骨轨道、stopAdd 含上身支架骨', () => {
     expect(Object.keys(locoJson.turn).sort()).toEqual(['E135','E180','E45','E90','W135','W180','W45','W90'])
     for (const c of Object.values(locoJson.turn)) {

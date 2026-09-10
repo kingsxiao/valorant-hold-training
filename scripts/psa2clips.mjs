@@ -139,6 +139,9 @@ const SRC = {
   jump: {
     jumpN: 'assets-raw/core-psa/TP_Core_JumpN_LB.psa',
     jumpLand: 'assets-raw/core-psa/TP_Core_JumpLand_LB.psa',
+    // 滞空段姿态续接：JumpN 蹬伸段播完后（滞空 >0.35s）切 Falling 循环保持
+    // 空中收腿姿态（根高 112-119cm 全程悬空），落地仍切 JumpLand
+    fall: 'assets-raw/core-psa/TP_Core_Falling_LB.psa',
   },
   // 停步转身踏步（E=向右 / W=向左 × 45/90/135/180°，全部 1.0s）：clip 本体不带
   // 根旋转（Splitter/Pelvis Y 转角≈0）——本体引擎程序化转根，腿只出「转身踏步」

@@ -32,6 +32,7 @@ export class BotManager {
       delayMin: CONFIG.training.peekDelayMinMs,
       delayMax: CONFIG.training.peekDelayMaxMs,
       speedMult: 1.0,
+      crouchWalkSpeed: 2.7,
       aimTimeMs: CONFIG.bot.aimTimeMs,
       roundSeconds: CONFIG.training.roundSeconds,
       rampUp: false, // 渐进难度：随击杀数缩短延迟/提升横移速度
@@ -217,7 +218,7 @@ export class BotManager {
         // → leave（向 exitX 撤离：常规缩回原掩体；判负后改为跑向对面掩体）
         if (pk.phase === 'out') {
           // 蹲走拉出：速度锁官方蹲走天然速率 1.76（近零滑步），非全局跑速
-          activeBot.moveToward(pk.dir * (pk.crouchWalk ? CROUCH_WALK_SPEED : speed), dt)
+          activeBot.moveToward(pk.dir * (pk.crouchWalk ? (this.params.crouchWalkSpeed ?? CROUCH_WALK_SPEED) : speed), dt)
           // 跳 peek（拉出中概率跳）
           const spanOut = Math.abs(pk.holdX - pk.startX)
           if (pk.jumpPlanned && !pk.jumped && spanOut > 0.01) {

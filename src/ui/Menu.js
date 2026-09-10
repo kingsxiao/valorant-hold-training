@@ -102,6 +102,7 @@ export class Menu {
       delayMin: CONFIG.training.peekDelayMinMs,
       delayMax: CONFIG.training.peekDelayMaxMs,
       speedMult: 1.0,
+      crouchWalkSpeed: 2.7,
       aimTimeMs: CONFIG.bot.aimTimeMs,
       volume: 0.7,
       showFps: true,
@@ -132,12 +133,14 @@ export class Menu {
     const NUM = { // 与 build() 里滑条 min/max 一一对应
       sens: [0.05, 1.5], roundSeconds: [0, 180], delayMin: [200, 2000],
       delayMax: [500, 5000], speedMult: [0.4, 1.3], aimTimeMs: [250, 1200],
+      crouchWalkSpeed: [1.4, 2.7],
       volume: [0, 1], resScale: [0.5, 2],
     }
     const DEF = {
       sens: CONFIG.mouse.defaultSens, roundSeconds: 60,
       delayMin: CONFIG.training.peekDelayMinMs, delayMax: CONFIG.training.peekDelayMaxMs,
       speedMult: 1, aimTimeMs: CONFIG.bot.aimTimeMs, volume: 0.7, resScale: 1,
+      crouchWalkSpeed: 2.7,
     }
     for (const [k, [min, max]] of Object.entries(NUM)) {
       const v = Number(c[k])
@@ -206,6 +209,7 @@ export class Menu {
         <div class="slider-row"><label>Bot 出现最小延迟</label><input type="range" data-key="delayMin" min="200" max="2000" step="100"><span class="val"></span></div>
         <div class="slider-row"><label>Bot 出现最大延迟</label><input type="range" data-key="delayMax" min="500" max="5000" step="100"><span class="val"></span></div>
         <div class="slider-row"><label>Bot 横移速度</label><input type="range" data-key="speedMult" min="0.4" max="1.3" step="0.05"><span class="val"></span></div>
+        <div class="slider-row"><label>蹲走拉出速度</label><input type="range" data-key="crouchWalkSpeed" min="1.4" max="2.7" step="0.1"><span class="val"></span></div>
         <div class="slider-row"><label>击杀时限</label><input type="range" data-key="aimTimeMs" min="250" max="1200" step="50"><span class="val"></span></div>
         <div class="slider-row"><label>音量</label><input type="range" data-key="volume" min="0" max="1" step="0.05"><span class="val"></span></div>
       </div>
@@ -452,6 +456,7 @@ export class Menu {
         delayMin: v => v + 'ms',
         delayMax: v => v + 'ms',
         speedMult: v => Math.round(v * 100) + '%',
+        crouchWalkSpeed: v => v.toFixed(1) + 'm/s',
         aimTimeMs: v => v + 'ms',
         volume: v => Math.round(v * 100) + '%',
         resScale: v => Math.round(v * 100) + '%',

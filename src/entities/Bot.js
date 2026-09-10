@@ -5,7 +5,7 @@ import { CONFIG } from '../core/Config.js'
 import { groundStep, accelFor } from '../core/GroundMotion.js'
 import { peekFacingYaw, leanInto, strafeRampW, strafeStepPose } from '../core/PeekPose.js'
 import { matchRigBones, bakeLocomotionClips, bakeDeathClips, smoothW } from '../core/GaitBake.js'
-import { locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip, CROUCH_WALK_STEP } from '../core/Locomotion.js'
+import { locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip, crouchWalkStepFor, CROUCH_WALK_SPEED } from '../core/Locomotion.js'
 import { solveGunAim, pickAimTarget, gunBobPose, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK, deriveGunHoldPoints, solveGripMount } from '../core/WeaponAim.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
@@ -1432,7 +1432,9 @@ export class Bot {
       const cwActive = !!(this.peek?.crouchWalk && this.peek?.phase === 'out' && this.anim.crouchWalk && !this._jump)
       this._crouchWW = smoothW(this._crouchWW ?? 0, cwActive ? 1 : 0, dt)
       if (this.anim.crouchWalk) {
-        this._cwPhase = (this._cwPhase ?? 0) + speed * dt * Math.PI / CROUCH_WALK_STEP
+        // 步幅按当前配置移速派生（速度档位可调，任意速度近零滑步）
+        const cwSpeed = this.manager?.params?.crouchWalkSpeed ?? CROUCH_WALK_SPEED
+        this._cwPhase = (this._cwPhase ?? 0) + speed * dt * Math.PI / crouchWalkStepFor(cwSpeed)
         const cwSide = this.velX * Math.cos(this.mesh.rotation.y) >= 0 ? 'E' : 'W'
         const cwPh = ((this._cwPhase % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
         for (const [s, a] of Object.entries(this.anim.crouchWalk)) {

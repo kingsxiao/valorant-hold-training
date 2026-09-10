@@ -94,12 +94,17 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
   return { walk, run, strafe, death, turn, stopAdd, runAdd, crouchIdle, crouchWalk, jump }
 }
 
-// 蹲走拉出的锁相参数（纯常量，BotManager/Bot 与单测共用）：速度取本体蹲走
-// 移速口径 = 50% 跑速（5.4）≈ 2.7m/s；步幅相位 = 速度×循环时长/2（0.9333s）
-// =1.26m——相位锁相自动把 clip 播放提到 1.53×（步频加快=数据上限的换向代价），
-// 支撑脚保持近零滑步
-export const CROUCH_WALK_STEP = 1.26
+// 蹲走拉出移速口径：本体蹲走 = 50% 跑速（5.4）≈ 2.7m/s（Config 可调，试玩
+// 档位）
 export const CROUCH_WALK_SPEED = 2.7
+const CROUCH_WALK_DUR = 0.9333 // 官方蹲走循环时长（s）
+
+// 蹲走锁相步幅（纯函数，Bot/BotManager 与单测共用）：步幅 = 速度×循环时长/2
+// ——相位按此步幅锁相时，clip 播放速率自动等于 移速/天然速率（任意移速近零
+// 滑步；2.7m/s 时播放 1.53×，步频 3.2 步/s ≈ 走路同档）
+export function crouchWalkStepFor(speed) {
+  return (speed * CROUCH_WALK_DUR) / 2
+}
 
 // 停步转身选型（纯函数）：deltaYaw = 朝向差（最短角，rad，正=左转）。
 // 命名约定：E=向右转（yaw 减）、W=向左转（yaw 增），角度取最近档。

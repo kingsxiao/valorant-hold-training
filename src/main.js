@@ -248,6 +248,7 @@ menu.applyAll = () => {
   bots.params.delayMin = Math.min(cfg.delayMin, cfg.delayMax)
   bots.params.delayMax = Math.max(cfg.delayMin, cfg.delayMax)
   bots.params.speedMult = cfg.speedMult
+  bots.params.crouchWalkSpeed = cfg.crouchWalkSpeed
   bots.params.aimTimeMs = cfg.aimTimeMs
   bots.params.roundSeconds = cfg.roundSeconds
   bots.params.rampUp = !!cfg.rampUp

@@ -6,7 +6,7 @@ import { groundStep, accelFor } from '../core/GroundMotion.js'
 import { peekFacingYaw, leanInto, strafeRampW, strafeStepPose } from '../core/PeekPose.js'
 import { matchRigBones, bakeLocomotionClips, bakeDeathClips, smoothW } from '../core/GaitBake.js'
 import { locoWeights, stepFootPinState } from '../core/Locomotion.js'
-import { solveGunAim, pickAimTarget, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK } from '../core/WeaponAim.js'
+import { solveGunAim, pickAimTarget, gunBobPose, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK, deriveGunHoldPoints, solveGripMount } from '../core/WeaponAim.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
 import { raySphere } from '../world/World.js'
@@ -27,8 +27,9 @@ import { raySphere } from '../world/World.js'
 //    玩家不扭腰（横移时上身压向 idle，持枪不甩臂），双腿镜像外展滑步 + 脚尖
 //    微朝移动方向 + 并腿屈膝起伏（与程序化假人同套 VALORANT 步态口径），见
 //    _stepStrafeGait；腿骨链不齐的老模型 pull 退回顺跑向（防滑步穿帮）
-//  - 挂官方枪（Vandal/Phantom 池，kamae 双 WeaponPoint 中点架枪位）：世界空间
-//    解瞄准四元数——pull 对枪/站定枪口追玩家眼、cross 顺跑向携枪（_stepGun）；
+//  - 挂官方枪（Vandal/Phantom 池，kamae 官方手位）：枪体握把钉后手 WeaponPoint
+//    （≈掌心，托底抵肩）、前手 IK 钉护木握点；世界空间解瞄准四元数——pull 对枪/
+//    站定枪口追玩家眼、cross 顺跑向携枪（_stepGun）；
 //    受击踉跄/开火后坐走脊柱骨骼覆盖（_applyUpperFlinch 共轭精确合成）；
 //    死亡为骨骼化塌倒（bakeDeathClips 烘焙：盆骨后仰下沉+腿折叠+撒手）+
 //    撒手掉枪弹道（WeaponAim.stepDroppedGun：抛落翻滚落地摆平）
@@ -45,6 +46,7 @@ const _q3 = new THREE.Quaternion()
 const _q4 = new THREE.Quaternion()
 const _gv1 = new THREE.Vector3() // 挂枪：双 WeaponPoint 世界位置/中点
 const _gv2 = new THREE.Vector3()
+const _gBob = new THREE.Vector3() // 步伐随动：武器锚点偏移（世界系）
 const _gaim = new THREE.Vector3() // 挂枪瞄准目标
 const _gq1 = new THREE.Quaternion()
 const _gq2 = new THREE.Quaternion()
@@ -63,6 +65,7 @@ const _fpKnee = new THREE.Vector3()
 const _fpFoot = new THREE.Vector3()
 const _fpAnchor = new THREE.Vector3()
 const _IDENTITY = new THREE.Quaternion()
+const _ZAXIS = new THREE.Vector3(0, 0, 1) // 枪轴滚转轴（holder 局部 Z = 枪管向）
 
 export class Bot {
   static customTemplate = null   // 用户 GLB 模板（UserAssets 注入）
@@ -321,9 +324,10 @@ export class Bot {
         neckBone: rig.neck, neckBindW,
         arms: rig.arms ?? [],
       })
-      // 挂官方枪（Vandal/Phantom 池随机一把）：kamae 双手架枪位——R 后手/L 前手
-      // 两根 WeaponPoint。holder 挂 mesh 下、逐帧世界空间解瞄准（_stepGun），
-      // 枪口追目标 = 本体持枪对枪形态；材质逐 bot 克隆（受击闪红/死亡淡出含枪）
+      // 挂官方枪（Vandal/Phantom 池随机一把）：kamae 后手 WeaponPoint（≈掌心）
+      // 钉枪体握把、前手 IK 钉护木握点——官方双手架枪位。holder 挂 mesh 下、
+      // 逐帧世界空间解瞄准（_stepGun），枪口追目标；材质逐 bot 克隆（受击闪红/
+      // 死亡淡出含枪）
       const wtpl = Bot.weaponTemplates
       const wkeys = wtpl ? Object.keys(wtpl) : []
       if (wkeys.length && rig.weaponL && rig.weaponR) {
@@ -342,7 +346,14 @@ export class Bot {
           }
         })
         const holder = new THREE.Group()
-        gun.position.set(0, -0.02, 0) // 微下沉：握把落向后手
+        // 微下沉：握把落向后手。⚠ 只减 y——归一化模板根节点带居中偏移
+        //（normalizeViewmodel 的 vm.position = −center），set 会把整枪平移出位
+        gun.position.y -= 0.02
+        // 枪体双手握点（挂入场景图前推导，gun 局部 → holder 系 = +gun.position）：
+        // grip=后握把（钉后手）、fore=护木（左手 IK 目标）
+        const hold = deriveGunHoldPoints(gun) ?? { grip: new THREE.Vector3(0, 0, 0.18), fore: new THREE.Vector3(0, 0, -0.18) }
+        hold.grip.add(gun.position)
+        hold.fore.add(gun.position)
         holder.add(gun)
         holder.updateMatrixWorld(true)
         const bb = new THREE.Box3().setFromObject(gun)
@@ -353,6 +364,7 @@ export class Bot {
           holder, gun,
           boneL: rig.weaponL, boneR: rig.weaponR,
           armL: rig.arms?.find(a => a.side === 'L') ?? null, // 左手两骨 IK 链（肩/肘）
+          hold,
           muzzleLocal,
           aimQ: new THREE.Quaternion(), kick: 0, init: false,
         }
@@ -523,12 +535,11 @@ export class Bot {
     }
   }
 
-  // 挂枪步进：枪托锚定 + 手线定向。锚点=后手(R)沿「后手→前手(L)」连线前移
-  // 0.365m（=0.425 半枪长 − 0.06 托底后置：托底板恰抵肩窝、枪口恰落在前手），
-  // 朝向沿手线——kamae 本就是双手架枪姿势，枪轴与手线重合 = 双手天然贴枪、
-  // 枪身不穿躯干（旋转轴即枪轴，不绕胸腔扫）。pull 对枪/站定时瞄准目标向玩家
-  // 眼位混合 50%（枪压向玩家的压迫感，半量不破坏贴手）。holder 挂 mesh 下，
-  // 局部 = mesh⁻¹·world
+  // 挂枪步进：握把钉位 + 手线定向。kamae 的 R_WeaponPoint ≈ 后手掌心（实测在腕
+  // 骨前 ~9cm）：把枪体握把点（deriveGunHoldPoints 几何推导）钉在后手上——托底
+  // 板自然抵肩窝、枪口略越前手，本体持枪形态 = 官方双手架枪位（旧锚点公式把枪
+  // 心放后手前 0.365m，握把离后手 0.58m 悬空穿帮）。朝向沿手线解瞄准——pull 对
+  // 枪/站定枪口追玩家眼、cross 顺跑向携枪。holder 挂 mesh 下，局部 = mesh⁻¹·world
   _stepGun(dt, player, stopped) {
     const G = this.gun
     if (!G) return
@@ -539,8 +550,19 @@ export class Bot {
     _gv2.sub(_gv1) // 手线向量（后手 → 前手 = 枪口向）
     if (_gv2.lengthSq() < 1e-6) return
     _gv2.normalize()
-    _gv1.addScaledVector(_gv2, 0.365)
     const moving = Math.abs(this.velX) > 0.4
+    // 步伐随动（漂浮感主消）：跑动中武器锚点随步频 dip/sway——本体跑动枪不是
+    // 焊死在胸口，落脚后武器惯性下沉、左右脚交替横摆。锚点平移而瞄准点不动
+    // （枪口纪律不受扰，方向偏移仅 8mm/4m≈0.1°），左手 IK 随握点自动跟随 =
+    // 手臂给枪让位的真实弹性，后手让位 ≤8mm 读作握持旷量。幅度随移速渐强、
+    // 急停随速度淡出（gunBobPose 纯函数，单测锁值）
+    const bob = gunBobPose({ phase: this.walkPhase, speed: Math.abs(this.velX) })
+    if (bob.dip !== 0 || bob.sway !== 0) {
+      _gBob.set(-_gv2.z, 0, _gv2.x).normalize() // 手线的水平垂直向（重心横摆方向）
+      _gBob.multiplyScalar(bob.sway)
+      _gBob.y = bob.dip
+      _gv1.add(_gBob)
+    }
     _gaim.copy(_gv1).addScaledVector(_gv2, 4) // 手线远点（默认目标）
     if (pickAimTarget({ style: this.peek?.style, stopped, moving }) === 'player') {
       // 站定对枪：枪口全权重钉玩家眼位——瞄准里只要混着手线分量，待机呼吸摆动
@@ -555,15 +577,19 @@ export class Bot {
     else G.aimQ.slerp(_gq3, Math.min(1, dt * 14))
     _gq4.copy(this.mesh.quaternion).invert()
     G.holder.quaternion.copy(_gq4).multiply(G.aimQ)
-    G.holder.position.copy(_gv1).sub(this.mesh.position).applyQuaternion(_gq4)
+    if (bob.roll !== 0) { // 枪轴微倾：绕 holder 局部 Z（=枪管轴）滚转，不甩枪口
+      G.holder.quaternion.multiply(_gq1.setFromAxisAngle(_ZAXIS, bob.roll))
+    }
+    // 握把钉位：解 holder 位置使枪上握把点世界位 = 后手（步初 _gv1）
+    solveGripMount(_gv1, this.mesh.position, this.mesh.quaternion,
+      _gq3.copy(this.mesh.quaternion).multiply(G.holder.quaternion), G.hold.grip, G.holder.position)
     G.gun.position.z = G.kick > 0 ? kickPose(G.kick).gunZ : 0
     this._stepHandIK()
   }
 
-  // 左手两骨 IK：肩-肘链把 L_Hand 钉在护木握点（紧随 _stepGun）。握点 = 前手
-  // 在枪轴线段上的投影——瞄准把枪转到大角度时手沿护木滑动（真实持枪动作），
-  // 目标恒贴着当前手 → 恒在臂展内（固定握点会被瞄准旋转摆出 0.69m > 0.56m
-  // 臂展，钳制也追不上）。解算的旋转增量为零起点（极向量=当前上臂方向），
+  // 左手两骨 IK：肩-肘链把 L_Hand 钉在枪上护木握点（紧随 _stepGun）。目标 =
+  // fore 握点世界位——瞄准把枪转开时手随枪走（真实持枪，手不离护木），臂展不
+  // 够由 IK 距离钳制自然前伸。解算的旋转增量为零起点（极向量=当前上臂方向），
   // Δ_world 用共轭落到骨局部——⚠ 方向向量全部来自 matrixWorld = 场景系，父级
   // 四元数必须前乘 meshQ 升到场景系（_boneWorldQ 只给 mesh 系，差一个 bot
   // 朝向/侧倾，共轭会被拧错方向）
@@ -577,13 +603,10 @@ export class Bot {
     arm.fore.matrixWorld.decompose(_ikB, _gq2, _gscl) // 肘
     arm.hand.updateWorldMatrix(true, false)
     arm.hand.matrixWorld.decompose(_ikC, _gq3, _gscl) // 腕（kamae 前手）
-    // 枪轴线：过 holder 世界原点、方向 = holder 世界 -Z（枪口向）
+    // fore 握点世界位：holder 系常量 → 经 holder 世界位姿升 mesh 系 → 世界
     _gq4.copy(this.mesh.quaternion).multiply(G.holder.quaternion)
-    _ikT.copy(G.holder.position).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
-    _ikDir.set(0, 0, -1).applyQuaternion(_gq4)
-    // 投影求握点：手到枪轴的最近点，钳在 [枪中心, 枪口内收 0.10]
-    const t = THREE.MathUtils.clamp(_gv1.copy(_ikC).sub(_ikT).dot(_ikDir), 0, -G.muzzleLocal.z - 0.1)
-    _ikT.addScaledVector(_ikDir, t)
+    _ikT.copy(G.hold.fore).applyQuaternion(_gq4).add(G.holder.position)
+    _ikT.applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
     const sol = solveTwoBoneIK({ shoulder: _ikA, elbow: _ikB, hand: _ikC, target: _ikT })
     if (!sol) return
     // 肩骨：Δ_world = R(abDirCur → dirAb)，共轭到锁骨系（场景系）
@@ -758,16 +781,21 @@ export class Bot {
       stepFootPinState(st, _fpFoot.y, dt)
       if (st.has && !was) st.anchor.copy(_fpFoot)
       if (st.w <= 0) continue
-      // 3) IK 目标 = 当前脚位与锚点按 w 过渡（进入/退出都平滑），解髋-膝两骨链
-      _fpAnchor.copy(_fpFoot).lerp(st.anchor, st.w)
+      // 3) IK 目标：锚点优先，但跑动支撑期身体位移（~1.3m）远超腿的可达锥
+      //    （~0.99m）——锚点被拉远超过 0.25m 后按越距把目标滑回 clip 脚位（0.5m
+      //    处修正归零）：脚从钉住连续加速进蹬地离地（本体支撑后期本就是蹬伸
+      //    推移），不再积攒「松钳弹回」的滑冰 snap；释放只看抬脚（y>0.26）
+      const over = _fpAnchor.copy(st.anchor).sub(_fpFoot).length()
+      const give = THREE.MathUtils.smoothstep(over, 0.25, 0.5)
+      _fpAnchor.copy(_fpFoot).lerp(st.anchor, st.w * (1 - give))
       leg.up.matrixWorld.decompose(_fpHip, _q1, _gscl)
       leg.knee.matrixWorld.decompose(_fpKnee, _q2, _gscl)
       const sol = solveTwoBoneIK({ shoulder: _fpHip, elbow: _fpKnee, hand: _fpFoot, target: _fpAnchor })
       if (!sol) continue
-      // clamped（腿全伸）照常应用：clamped 解 = 指向锚点方向的满展位，脚沿可达
+      // clamped（腿全伸）照常应用：clamped 解 = 指向目标方向的满展位，脚沿可达
       // 弧后扫 = 蹬地推移的自然表现（跑步支撑期腿本就接近全伸，按 clamped 放锚
-      // 会让锚点 4tick 内乒乓）。真正释放只看抬脚（y>0.26）与异常远锚
-      if (_fpAnchor.distanceTo(_fpFoot) > 0.5) { st.has = false; continue }
+      // 会让锚点 4tick 内乒乓）。0.75 只兜异常远锚
+      if (over > 0.75) { st.has = false; continue }
       // 4) 共轭落骨局部（与 _stepHandIK 同款：父级世界 Q 前乘 meshQ 升场景系）
       const hipParentW = this._boneWorldQ(leg.up.parent, _chainW).premultiply(this.mesh.quaternion)
       _q3.setFromUnitVectors(sol.abDirCur, sol.dirAb)
@@ -1022,6 +1050,9 @@ export class Bot {
         q: this.gun.holder.quaternion.clone(),
         v: new THREE.Vector3(vx * 0.7 + (vary() - 0.5) * 1.2, 1.5 + vary() * 0.9, (vary() - 0.5) * 1.0),
         axis: new THREE.Vector3(vary() - 0.5, 0, vary() - 0.5).normalize(),
+        // 翻滚轴心偏置到枪口端 55% 处：枪托绕前段甩（本体掉枪不是绕中心匀速
+        // 自旋），落地在 restY 反弹 ≤2 次（着速够才弹）
+        pivotLocal: new THREE.Vector3(0, 0, this.gun.muzzleLocal.z * 0.55),
         spin: 4 + vary() * 5,
         restY: 0.05,
         landed: false,
@@ -1157,6 +1188,14 @@ export class Bot {
       this.walkPhase += speed * dt * Math.PI / STEP_LEN
       this._stepAnim(speed, dt)
       this._stepStrafeGait(speed, w, dt)
+      // 先落位再钉地（顺序是钉地成败的关键）：IK 用本帧最终 mesh 位姿解算——
+      // 若先解 IK 再挪 mesh，脚会跟着 mesh 每帧前跳一次（系统性拖尾 = 钉住的
+      // 脚恰好以体速滑行）。水平位本帧精确；贴地高度用上一 tick 的量测（8ms
+      // 滞后不可见），本 tick 的新量测由 _stepFootPin 顺带写下帧用
+      if (this._officialLo) this.mesh.position.y = this._loY
+      _v.copy(this.prevPos).lerp(this.pos, ctx.alpha ?? 1)
+      this.mesh.position.x = _v.x
+      this.mesh.position.z = _v.z
       this._stepFootPin(dt) // 官方曲线支撑脚钉地（防全速滑步）
       // 官方曲线垂直根运动重建：导出剥离根位移时把盆骨的支撑期下落也剥掉了
       // （实测 runN 全周期脚在 0.45~0.96m = 悬空跑）——身体高度跟随「最低脚贴地」
@@ -1166,7 +1205,6 @@ export class Bot {
         // 直通跟踪：目标本身就是 clip 相位的平滑函数（无需再滤波；一阶跟踪在
         // 3.5Hz 的支撑期下落上滞后会让低点悬空 5cm+、钉地入不了锚）
         this._loY = 0.09 - this._loMinY
-        this.mesh.position.y = this._loY
       }
       this._stepGun(dt, ctx.player, stopped)
     } else if (speed > 0.3) {

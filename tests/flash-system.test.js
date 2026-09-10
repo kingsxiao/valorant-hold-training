@@ -132,3 +132,30 @@ describe('renderSync 类型分支互不串线（第一百二十八轮回归）',
     expect(fs._models.phoenix.halo.scale.x).toBe(0.42)
   })
 })
+
+describe('出膛首帧 renderSync 安全（第一百二十九轮闪退回归）', () => {
+  // 线上触发链复刻：非拖尾类（KAY/O/Yoru/Breach）飞行期 _trailAt 只增不清，
+  // 长会话累积到数百；下一颗若是火男，出膛帧 renderSync 的拖尾分支在首个
+  // _stepProj 之前就读 p.vel.x → TypeError 每帧中断渲染循环（玩家看到的"闪退"）
+  it('_spawn 归零 _trailAt + phoenix 出膛即带 vel：armed 拖尾下首帧渲染不抛', () => {
+    const { fs } = makeSystem()
+    fs.setMode('yoru'); fs.resetRound(0); fs._spawn()
+    for (let i = 0; i < Math.round(1.5 / DT); i++) fs.step(DT) // 只步进不渲染：出膛前拖尾节拍不被清
+    fs._despawn()
+    fs.setMode('phoenix'); fs._spawn()
+    expect(fs._trailAt).toBe(0) // 出膛即归零：首帧不越过发射阈值
+    expect(fs.proj.vel).toBeDefined()
+    fs._trailAt = 0.05 // 直接武装阈值：即便归零失效/2 帧后正常发射，vel 已存在不得抛
+    expect(() => fs.renderSync(0.5, DT)).not.toThrow()
+  })
+
+  it('读 vel 的弹体（kayo/skye/phoenix/yoru/gecko）出膛时速度三分量都是有限数', () => {
+    const { fs } = makeSystem()
+    for (const type of ['kayo', 'skye', 'phoenix', 'yoru', 'gecko']) {
+      fs.setMode(type); fs.resetRound(0); fs._spawn()
+      const v = fs.proj.vel
+      expect(Number.isFinite(v.x + v.y + v.z)).toBe(true)
+      fs._despawn()
+    }
+  })
+})

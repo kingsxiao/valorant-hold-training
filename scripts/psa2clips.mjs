@@ -1,6 +1,11 @@
 // 官方 .psa 骨骼动画 → locomotion.json（运行时由 core/Locomotion.js 建 AnimationClip）
-// 数据源：assets-raw/{jett,sova}-psa 的官方第三人称 LB（下半身）循环——
-//   走/跑 N（cross 前进）与 E/W（pull 横移，左右两个方向）
+// 数据源：assets-raw/core-psa 的 TP_Core 共享核心集（本体所有英雄的移动都用它）——
+//   走/跑 N/E/W 全 8 向里先取 6 个；死亡/跳/蹲/转身在旁待接入
+// 为什么换源（128 轮滑步根因）：各英雄 Simple 目录的套装（Jett X_Knives、
+//   Sova Q_Bow）是被剥掉跑步机分量的特殊变体——支撑期脚相对盆骨仅 ~46cm 行程，
+//   腿链可达锥（±0.5m）根本盖不住体速位移，钉地 IK 只能钉 50-90ms 然后随体滑。
+//   TP_Core 的循环支撑期脚相对盆骨后扫 ~1.2-1.5m = 全步幅，脚天生落地（盆骨
+//   前移时腿关节相对后蹬），残余不匹配只剩 STEP_LEN 取中的 ±5%，IK 轻松吸收。
 // 转换口径（scripts 内实测对齐）：
 //   - 骨名：psa 无后缀名（L_Knee）↔ 英雄 GLB 带 _NNNN 后缀（L_Knee_0137），
 //     运行时按「去后缀」解析，JSON 里存 psa 名
@@ -9,8 +14,6 @@
 //   - 位置：psa cm × 0.01 = GLB m（L_Hip 11.522cm ↔ 0.11522m 分毫不差）
 //   - 只保留有动画的骨（LB 恰好 12 根：Splitter/Pelvis + 双腿链），
 //     恒定轨道不发（mixer 缺轨=保持 rest，骨架 rest 即官方 bind）
-//   - Jett 的 WalkE/RunE 腿轨道 = WalkN/RunN 导出复用（官方导出偷懒），真横移
-//     曲线只在 Sova——横移 E/W 统一取 Sova
 import fs from 'node:fs'
 
 function parsePsa(path) {
@@ -71,17 +74,13 @@ function clipFrom(path) {
 }
 
 const SRC = {
-  jett: {
-    walkN: 'assets-raw/jett-psa/X_Knives_WalkN_LB.psa',
-    runN: 'assets-raw/jett-psa/X_Knives_RunN_LB.psa',
-  },
-  sova: {
-    walkN: 'assets-raw/sova-psa/TP_Hunter_S0_Q_Bow_WalkN_LB.psa.psa',
-    runN: 'assets-raw/sova-psa/TP_Hunter_S0_Q_Bow_RunN_LB.psa.psa',
-    walkE: 'assets-raw/sova-psa/TP_Hunter_S0_Q_Bow_WalkE_LB.psa.psa',
-    runE: 'assets-raw/sova-psa/TP_Hunter_S0_Q_Bow_RunE_LB.psa.psa',
-    walkW: 'assets-raw/sova-psa/TP_Hunter_S0_Q_Bow_WalkW_LB.psa.psa',
-    runW: 'assets-raw/sova-psa/TP_Hunter_S0_Q_Bow_RunW_LB.psa.psa',
+  core: {
+    walkN: 'assets-raw/core-psa/TP_Core_WalkN_LB.psa',
+    runN: 'assets-raw/core-psa/TP_Core_RunN_LB.psa',
+    walkE: 'assets-raw/core-psa/TP_Core_WalkE_LB.psa',
+    runE: 'assets-raw/core-psa/TP_Core_RunE_LB.psa',
+    walkW: 'assets-raw/core-psa/TP_Core_WalkW_LB.psa',
+    runW: 'assets-raw/core-psa/TP_Core_RunW_LB.psa',
   },
 }
 const out = {}
@@ -89,8 +88,8 @@ for (const [hero, files] of Object.entries(SRC)) {
   out[hero] = {}
   for (const [k, p] of Object.entries(files)) out[hero][k] = clipFrom(p)
 }
-// 横移 E/W 统一挂到 jett 名下以外也供 phoenix/sage 复用：单独一份 strafe 集
-out.strafe = { walkE: out.sova.walkE, runE: out.sova.runE, walkW: out.sova.walkW, runW: out.sova.runW }
+// 横移 E/W 集：TP_Core 的真方向性循环（摆动腿跨向、支撑腿蹬伸各方向不同）
+out.strafe = { walkE: out.core.walkE, runE: out.core.runE, walkW: out.core.walkW, runW: out.core.runW }
 fs.writeFileSync('public/models/locomotion.json', JSON.stringify(out))
 const size = fs.statSync('public/models/locomotion.json').size
 console.log(`written public/models/locomotion.json (${(size / 1024).toFixed(1)} KB)`)

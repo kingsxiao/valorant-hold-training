@@ -434,17 +434,19 @@ loadUserAssets().then(({ agent, agentAnimations, agents, viewmodel, viewmodels, 
   for (const id of ['vandal', 'phantom']) if (viewmodels?.[id]) vmMap[id] = viewmodels[id]
   if (!Object.keys(vmMap).length && viewmodel) vmMap.vandal = vmMap.phantom = viewmodel // 旧单模型
   if (Object.keys(vmMap).length) {
-    // Bot 挂枪模板先克隆存走——setCustomViewmodel 会把原件原位改造成第一人称
-    // 枪模（pivot 重包裹 + 取景参数），克隆件保持归一化（枪口 -Z/0.85m/居中）
-    Bot.weaponTemplates = Object.fromEntries(Object.entries(vmMap).map(([k, v]) => [k, v.clone(true)]))
-    // 皮肤枪模（键 'vandal:aristocrat'）并入 WeaponSystem，但不进 Bot 模板池——
-    // Bot 的 vandal 项由 applyWeaponSkin 按当前皮肤显式替换，两把枪 50/50 出场不变
+    // setCustomViewmodel 会把传入场景原地改造成第一人称枪模（pivot 重包裹 + 取景
+    // 参数偏移）。Bot 第三人称挂枪模板与皮肤换装都必须用改造前的纯净克隆——
+    // 否则枪体带着第一人称取景偏移整体平移（实测 vandal 前飘 0.4m，bot 双手全离枪）
     const vmAll = { ...vmMap }
     for (const k of Object.keys(viewmodels ?? {})) if (k.includes(':')) vmAll[k] = viewmodels[k]
+    const pristine = Object.fromEntries(Object.entries(vmAll).map(([k, v]) => [k, v.clone(true)]))
+    Bot.weaponTemplates = Object.fromEntries(Object.entries(vmMap).map(([k]) => [k, pristine[k]]))
+    // 皮肤枪模（键 'vandal:aristocrat'）并入 WeaponSystem，但不进 Bot 模板池——
+    // Bot 的 vandal 项由 applyWeaponSkin 按当前皮肤从纯净克隆显式替换，两把枪 50/50 出场不变
     weapons.setCustomViewmodel(vmAll); changed = true
-    vmSkinAssets.base = viewmodels?.vandal ?? null
+    vmSkinAssets.base = pristine.vandal ?? null
     vmSkinAssets.skins = Object.fromEntries(
-      Object.entries(viewmodels ?? {}).filter(([k]) => k.includes(':')))
+      Object.entries(pristine).filter(([k]) => k.includes(':')))
     applyWeaponSkin(state.cfg.weaponSkin) // 资产晚到：按已存设置补一次皮肤
   }
   // 手部方案（2026-09-03 定稿）：glove.glb 五指手套双手实例为主路径——五指独立

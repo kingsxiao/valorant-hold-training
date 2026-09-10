@@ -348,3 +348,46 @@ main.applyWeaponSkin 克隆替换（敌我同步换肤）。
 `flashes._spawn*` + 数值探针（官方挂载/盲时长/近视/等离子/可击毁 pickHit+damage）
 + 关键帧截图。坑：探针打可击毁目标要按 proj.pos 现算瞄准方向（部署点有随机横向
 偏移，固定视线打不中 0.32m 球）。
+
+## 附：TP_Core 共享移动集与滑步根治路线（2026-09-11）
+
+### 各英雄 Simple 套装是「剥过跑步机」的变体，TP_Core 才是本体移动真集
+
+129 轮确诊的滑步根因。各英雄 Simple 目录的移动循环（Jett `X_Knives_*`、Sova
+`Q_Bow_*`）支撑期脚相对盆骨行程仅 ~46cm；Rocklan 包 **Shared/Simple** 目录的
+`TP_Core_*` 共享核心集（本体所有英雄移动共用）扫幅 0.73m，且 RunE/RunW 是真
+方向性循环（Jett 集的 E/W 是 N 的导出复件）。**量扫幅别用链式 FK**——parent
+字段全坏 + R 侧镜像约定，自建 FK 链两次误诊（一次把 46cm 量成 124cm）；可信
+的是单骨局部四元数对比 + 运行时实测（hip→ankle 骨间向量经 mesh 逆旋转）。
+
+- TP_Core 可用清单（已下 `assets-raw/core-psa/`）：Run/Walk×N/E/W、Jump×4 向 +
+  JumpLand、Falling、CrouchIdle/CrouchWalk、TurnE/W×45/90/135/180、StopAdd、
+  `Death_Land_{Back,Front}Splat_Big`（P2 死亡方向性素材）、RunAdd*_UB（跑动
+  上身叠加）、各武器 IdlePose/Aim*_UB。Drive 纯 HTML 列目录法逐级取文件 ID：
+  `embeddedfolderview?id=<ID>#list` 正则抽 `flip-entry`。
+- **遗留半步**：TP_Core 的 FK 腿曲线扫幅 0.73m ≈ 步幅 45%——本体引擎是 UE
+  AnimGraph 的脚部 IK 把踝约束到 `L_IK_FootTarget` 曲线（两套装里都有，pos.x
+  局部扫幅 1.15-1.35m = 全步幅）。下一轮把该曲线导出进 locomotion.json，运行时
+  `锚 = 盆骨矩阵 · targetLocal(phase)` 作钉地锚：锚随盆骨后退的速率≈体速，
+  世界系近似静止 = 官方同款落地，钉地 IK 修正量即官方修正量。
+
+### verify-official-loco 双重积分 bug（所有旧台架数字都在 2× 速度）
+
+台架曾同时 `b.moveToward(vx, dt)` + `g.bots.step(dt, 1)`——manager 内部按 peek
+状态**也**调 moveToward，双积分把体速跑成 2×（velX=5.4 实走 10.8）。正确姿势：
+台架只设 peek/CONFIG，**绝不自己调 moveToward**，速度档注入
+`window.__game.CONFIG.bot.moveSpeed`。修掉后 128 轮的所有数字（滑速 0.43/1.79、
+步频 3.48）口径作废。另两坑：走曲线档要在 3.0 m/s 采（3.39 落进跑混合带
+`(speed-3.0)/1.6` 掺 24% 跑）；相位分桶要用**被比对 clip 自己的播放头**
+（walk 0.867s ≠ run 0.6s，拿 run.time 给 walk 分桶 RMS 虚高 3 倍）。
+
+### 钉地 IK 的三条实现教训
+
+1. **先落位再钉地**：IK 必须用本帧最终 mesh 位姿解算——先解 IK 再挪 mesh，脚
+   每帧跟着 mesh 前跳一次（系统性拖尾 = 钉住的脚恰好以体速滑行，p50 恰等于
+   体速是它的指纹）。
+2. **「越距平滑移交」替代「硬释放」**：锚点被拉远 0.25→0.5m 区间按 smoothstep
+   把 IK 目标滑回 clip 脚位——脚从钉住连续加速进蹬地离地；旧的 0.5m 硬释放会
+   积攒「松钳弹回」snap（逐帧最高 20+ m/s 的脚速尖峰）。
+3. **量滑速要按脚连续追踪**：双脚在换支撑瞬间「低脚」身份翻转，按低脚算速度
+   会把两只脚的位置差算成 20+ m/s 假尖峰——p95 假高全拜它所赐。

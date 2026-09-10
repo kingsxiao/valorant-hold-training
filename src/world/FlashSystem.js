@@ -350,6 +350,11 @@ export class FlashSystem {
 
   _spawn() {
     if (this.mode === 'off') return
+    // 归零拖尾节拍：_trailAt 只在拖尾类弹体的发射沿清零，KAY/O/Yoru/Breach
+    // 飞行期与波次间隔里一路累积（长会话可达数百秒）——不清零的话下一颗弹体
+    // 出膛首帧就越过发射阈值，而 vel 等字段要等首个 _stepProj 才齐（phoenix 无
+    // 出膛初速就会在拖尾分支读 undefined，renderFrame 中断=玩家看到的"闪退"）
+    this._trailAt = 0
     const type = this.mode === 'mix' ? TYPES[(Math.random() * TYPES.length) | 0] : this.mode
     const gap = this.map.gaps[0]
     const gapCx = (gap.x0 + gap.x1) / 2
@@ -414,6 +419,14 @@ export class FlashSystem {
     const p2 = { x: clamp(gapCx - side * rand(0.2, 0.9), gap.x0 + 0.4, gap.x1 - 0.4), y: rand(2.3, 2.8), z: rand(-21.0, -20.2) }
     this.proj = {
       type: 'phoenix', pos: { ...p0 }, prevPos: { ...p0 }, t: 0,
+      // 出膛初速（u=0 处贝塞尔导数 2(p1−p0) 方向 × 巡航速）：拖尾分支读 vel，
+      // 字段必须出膛即存在——首个 _stepProj 前的渲染帧不能拿到 undefined
+      vel: (() => {
+        const dx = p1.x - p0.x, dy = p1.y - p0.y, dz = p1.z - p0.z
+        const dl = Math.hypot(dx, dy, dz) || 1
+        const sp = CONFIG.flash.phoenix.speed
+        return { x: dx / dl * sp, y: dy / dl * sp, z: dz / dl * sp }
+      })(),
       curve: arcBezier(p0, p1, p2),
       voice: this.audio.orbFlight?.(this._listener, CONFIG.flash.phoenix.windup) ?? null,
     }

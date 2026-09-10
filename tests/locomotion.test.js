@@ -57,31 +57,37 @@ describe('buildClip 骨名后缀解析', () => {
 describe('buildLocomotion 池条目集', () => {
   const locoJson = JSON.parse(fs.readFileSync('public/models/locomotion.json', 'utf8'))
 
-  it('locomotion.json 结构锁值：官方时长（跑 0.6s / Jett 走 0.8667s / Sova 走 0.8s）、十骨轨道、盆骨/脊位置轨道在', () => {
-    expect(locoJson.jett.runN.duration).toBeCloseTo(0.6, 3)
-    expect(locoJson.jett.walkN.duration).toBeCloseTo(0.8667, 3)
-    expect(locoJson.sova.walkN.duration).toBeCloseTo(0.8, 3)
+  it('locomotion.json 结构锁值：TP_Core 官方时长（跑 0.6s / 走 0.8667s）、十骨轨道、盆骨位置轨道在', () => {
+    expect(locoJson.core.runN.duration).toBeCloseTo(0.6, 3)
+    expect(locoJson.core.walkN.duration).toBeCloseTo(0.8667, 3)
+    expect(locoJson.core.walkE.duration).toBeCloseTo(0.8667, 3) // E/W 真方向性循环（同为走时长）
+    expect(locoJson.core.runW.duration).toBeCloseTo(0.6, 3)
     expect(locoJson.strafe.runE.duration).toBeCloseTo(0.6, 3)
-    const bones = locoJson.jett.runN.tracks.map(t => t.b)
+    const bones = locoJson.core.runN.tracks.map(t => t.b)
     expect(bones).toEqual(['Splitter', 'Pelvis', 'L_Hip', 'L_Knee', 'L_Foot', 'L_Toe', 'R_Hip', 'R_Knee', 'R_Foot', 'R_Toe'])
-    expect(locoJson.jett.runN.tracks.find(t => t.b === 'Pelvis').p).toBeDefined() // 盆骨起伏轨道
-    expect(locoJson.jett.runN.tracks.find(t => t.b === 'Splitter').p).toBeDefined()
+    expect(locoJson.core.runN.tracks.find(t => t.b === 'Pelvis').p).toBeDefined() // 盆骨起伏轨道
+    expect(locoJson.core.runN.tracks.find(t => t.b === 'Splitter').p).toBeDefined()
+    // 方向性抽查：TP_Core 的 RunE 是真横移（腿轨道 ≠ RunN 导出复件——旧 Jett X_Knives 集是复件）
+    const runN = locoJson.core.runN.tracks.find(t => t.b === 'L_Knee').q
+    const runE = locoJson.core.runE.tracks.find(t => t.b === 'L_Knee').q
+    expect(runN).not.toEqual(runE)
     // 四元数单位性抽查（转换不破坏归一）
-    const q = locoJson.sova.runN.tracks.find(t => t.b === 'L_Knee').q
+    const q = locoJson.core.runN.tracks.find(t => t.b === 'L_Knee').q
     for (let i = 0; i < q.length; i += 4) {
       const n = Math.hypot(q[i], q[i + 1], q[i + 2], q[i + 3])
       expect(n).toBeCloseTo(1, 3)
     }
   })
 
-  it('hero 键命中各自的 N 集，未知英雄回退 jett；横移集四英雄共用', () => {
+  it('各英雄共用 core 集（本体移动全英雄同款 TP_Core），横移集同源；无数据回退 null', () => {
     const root = fakeHeroSkeleton([['Pelvis', '9'], ['L_Hip', '9'], ['L_Knee', '9'], ['L_Foot', '9'], ['L_Toe', '9'], ['R_Hip', '9'], ['R_Knee', '9'], ['R_Foot', '9'], ['R_Toe', '9'], ['Splitter', '9']])
-    const sova = buildLocomotion(locoJson, 'sova', root)
-    expect(sova.walk.duration).toBeCloseTo(0.8, 3)
-    expect(sova.run.duration).toBeCloseTo(0.6, 3)
-    expect(sova.strafe.E.walk.tracks.length).toBeGreaterThan(0)
-    const phx = buildLocomotion(locoJson, 'phoenix', root) // 未知英雄 → jett 集
-    expect(phx.walk.duration).toBeCloseTo(locoJson.jett.walkN.duration, 3)
+    const jett = buildLocomotion(locoJson, 'jett', root)
+    expect(jett.walk.duration).toBeCloseTo(0.8667, 3)
+    expect(jett.run.duration).toBeCloseTo(0.6, 3)
+    expect(jett.strafe.E.walk.tracks.length).toBeGreaterThan(0)
+    expect(jett.strafe.W.run.tracks.length).toBeGreaterThan(0)
+    const phx = buildLocomotion(locoJson, 'phoenix', root) // 未知英雄 → 同 core 集
+    expect(phx.walk.duration).toBe(jett.walk.duration)
     expect(buildLocomotion({}, 'jett', root)).toBeNull() // 无数据 → null
   })
 })

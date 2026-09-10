@@ -3,7 +3,7 @@
 //  GaitBake.deathPose / bakeDeathClips —— 骨骼化死亡塌倒烘焙
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
-import { solveGunAim, pickAimTarget, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK } from '../src/core/WeaponAim.js'
+import { solveGunAim, pickAimTarget, gunBobPose, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK, deriveGunHoldPoints, solveGripMount } from '../src/core/WeaponAim.js'
 import { deathPose, bakeDeathClips } from '../src/core/GaitBake.js'
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z)
@@ -38,6 +38,36 @@ describe('pickAimTarget 瞄准目标选择', () => {
   })
 })
 
+describe('gunBobPose 步伐随动', () => {
+  it('站定/低速全零（对枪枪口纪律），幅度随速度线性涨到跑速满幅', () => {
+    for (const sp of [0, 0.3, 0.4]) {
+      const z = gunBobPose({ phase: 1.23, speed: sp })
+      expect(z.dip).toBe(0); expect(z.sway).toBe(0); expect(z.roll).toBe(0)
+    }
+    const walk = gunBobPose({ phase: 0.9, speed: 2.7 })
+    const run = gunBobPose({ phase: 0.9, speed: 5.4 })
+    expect(run.dip).toBeCloseTo(walk.dip * 2, 6) // 2.7/5.4 = 半幅线性
+    expect(Math.abs(run.dip)).toBeLessThanOrEqual(0.008 + 1e-9) // ±8mm 封顶
+  })
+
+  it('dip 每步下沉一次：谷在落脚（kπ）后 ~0.28rad，摆动中段回正', () => {
+    const at = (p) => gunBobPose({ phase: p, speed: 5.4 }).dip
+    expect(at(Math.PI + 0.28)).toBeCloseTo(-0.008, 6)  // 落脚后惯性下沉谷
+    expect(at(Math.PI)).toBeLessThan(-0.006)           // 落脚瞬间已大部分压实
+    expect(at(Math.PI + Math.PI / 2 + 0.28)).toBeCloseTo(0.008, 6) // 摆动中段回升峰
+    expect(at(0)).toBeCloseTo(at(Math.PI), 9)          // 周期 π 每步重复
+  })
+
+  it('sway 左右脚交替（周期 2π 反号），roll 有界', () => {
+    const sway = (p) => gunBobPose({ phase: p, speed: 5.4 }).sway
+    expect(sway(Math.PI / 2)).toBeCloseTo(0.005, 6)
+    expect(sway(3 * Math.PI / 2)).toBeCloseTo(-0.005, 6)
+    expect(sway(0)).toBeCloseTo(0, 9)
+    const roll = (p) => gunBobPose({ phase: p, speed: 5.4 }).roll
+    expect(Math.abs(roll(1.4))).toBeLessThanOrEqual(0.007 + 1e-9)
+  })
+})
+
 describe('stepDroppedGun 掉枪弹道', () => {
   const st = (vy = 0) => ({
     p: V(0, 1.5, 0), q: new THREE.Quaternion(),
@@ -68,6 +98,40 @@ describe('stepDroppedGun 掉枪弹道', () => {
   })
 })
 
+describe('stepDroppedGun 落地反弹与偏心翻滚', () => {
+  const st = (over = {}) => ({
+    p: V(0, 1.2, 0), q: new THREE.Quaternion(),
+    v: V(0.5, 0, 0), axis: V(1, 0, 0), spin: 6, restY: 0.05, landed: false, ...over,
+  })
+  it('高速着地弹起再落，≤2 次后趴住（bounces 计数锁定）', () => {
+    let s = st()
+    let touched = false, rose = false
+    for (let i = 0; i < 400 && !s.landed; i++) {
+      s = stepDroppedGun(s, 1 / 60)
+      if (s.p.y <= 0.051) touched = true
+      else if (touched && s.p.y > 0.08) rose = true // 触地后弹起（离地 >3cm）
+    }
+    expect(touched).toBe(true)
+    expect(rose).toBe(true)
+    expect(s.landed).toBe(true)
+    expect(s.bounces).toBe(2) // 1.2m 落高：两次弹后着速 <0.8m/s 停
+  })
+  it('慢落（着速 <0.8）直接趴住不弹', () => {
+    let s = st({ p: V(0, 0.06, 0), v: V(0, 0, 0) })
+    for (let i = 0; i < 3; i++) s = stepDroppedGun(s, 1 / 60)
+    expect(s.landed).toBe(true)
+    expect(s.bounces).toBe(0)
+  })
+  it('pivotLocal 偏心翻滚：位置绕枪口端公转（路径偏离中心自旋，轴距守恒）', () => {
+    const base = { p: V(0, 1.0, 0), q: new THREE.Quaternion(), v: V(0, 0, 0), axis: V(1, 0, 0), spin: 6, restY: 0.05, landed: false }
+    const a = stepDroppedGun(base, 0.016, 0) // g=0 隔离平移，只看公转
+    const b = stepDroppedGun({ ...base, pivotLocal: V(0, 0, -0.2) }, 0.016, 0)
+    expect(b.p.distanceTo(a.p)).toBeGreaterThan(1e-3)
+    const pivot = V(0, 0, -0.2).applyQuaternion(base.q).add(base.p)
+    expect(b.p.distanceTo(pivot)).toBeCloseTo(base.p.distanceTo(pivot), 6)
+  })
+})
+
 describe('settleFlatQ 落地摆平', () => {
   it('保留水平 yaw、清除俯仰/横滚（-Z 投影回水平面）', () => {
     const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.4, 1.2, -0.3, 'YXZ'))
@@ -85,6 +149,67 @@ describe('kickPose 开火后坐', () => {
     expect(kickPose(0).spine).toBe(0)
     expect(kickPose(0).gunZ).toBe(0)
     expect(kickPose(1).gunZ).toBeGreaterThan(0)
+  })
+})
+
+describe('deriveGunHoldPoints 枪体握点几何推导', () => {
+  // AK 族简化几何（归一化口径：枪口 -Z、居中）：枪管前段 + 护木 + 弹匣 + 握把 + 枪托。
+  // 深度方向细分（真实枪模顶点沿枪身稠密分布；纯 24 顶点盒的角落稀疏采样会让
+  // z 分箱簇碎裂）。BoxGeometry 顶点在 mesh 局部，根为独立 Group（matrixWorld = 摆放系）
+  const box = (w, h, d, x, y, z) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d, 1, 1, Math.max(2, Math.round(d / 0.02))))
+    m.position.set(x, y, z)
+    return m
+  }
+  const gun = () => {
+    const g = new THREE.Group()
+    g.add(box(0.05, 0.09, 0.5, 0, 0.07, -0.19))    // 机匣+枪管前段（轴线 ~0.07）
+    g.add(box(0.05, 0.06, 0.14, 0, 0.05, -0.24))   // 护木（前段下方）
+    g.add(box(0.05, 0.14, 0.12, 0, -0.005, -0.02)) // 弹匣（中段、深）
+    g.add(box(0.05, 0.09, 0.09, 0, -0.03, 0.17))   // 握把（后段、低于枪管线）
+    g.add(box(0.05, 0.1, 0.16, 0, 0.06, 0.32))     // 枪托（末端、高于握把底）
+    return g
+  }
+
+  it('后握点落在握把块内（z 带内最深簇：排除前方弹匣与后方枪托）', () => {
+    const { grip } = deriveGunHoldPoints(gun())
+    expect(grip.z).toBeGreaterThan(0.12)
+    expect(grip.z).toBeLessThan(0.24)
+    expect(grip.y).toBeLessThan(0.02)    // 低于枪管轴线
+    expect(grip.y).toBeGreaterThan(-0.09)
+  })
+
+  it('前握点落在护木段（枪管前段 |y-轴线| 环带顶点质心）', () => {
+    const { fore } = deriveGunHoldPoints(gun())
+    expect(fore.z).toBeLessThan(-0.05)
+    expect(fore.z).toBeGreaterThan(-0.33)
+    expect(Math.abs(fore.y - 0.07)).toBeLessThan(0.05)
+  })
+
+  it('无网格几何返回 null', () => {
+    expect(deriveGunHoldPoints(new THREE.Group())).toBe(null)
+  })
+})
+
+describe('solveGripMount 握把钉位', () => {
+  it('恒等式：meshPos + R_meshQ·(holderPos + R_hwQ·gripLocal) = worldGrip', () => {
+    const worldGrip = V(2, 1.2, -3)
+    const meshPos = V(1.5, 0, -2.6)
+    const meshQ = new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), 0.7)
+    const holderWorldQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.1, -0.5, 0.04))
+    const gripLocal = V(0, -0.05, 0.2)
+    const pos = solveGripMount(worldGrip, meshPos, meshQ, holderWorldQ, gripLocal)
+    const lhs = pos.clone().add(gripLocal.clone().applyQuaternion(holderWorldQ))
+    const rhs = worldGrip.clone().sub(meshPos).applyQuaternion(meshQ.clone().invert())
+    expect(lhs.distanceTo(rhs)).toBeLessThan(1e-9)
+  })
+
+  it('恒等 mesh：holder 位 = 世界握点直减 R_hwQ·gripLocal', () => {
+    const holderWorldQ = new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), 1.1)
+    const gripLocal = V(0, -0.03, 0.17)
+    const worldGrip = V(3, 1, -4)
+    const pos = solveGripMount(worldGrip, V(0, 0, 0), new THREE.Quaternion(), holderWorldQ, gripLocal)
+    expect(pos.distanceTo(worldGrip.clone().sub(gripLocal.clone().applyQuaternion(holderWorldQ)))).toBeLessThan(1e-9)
   })
 })
 

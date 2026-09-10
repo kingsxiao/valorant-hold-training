@@ -25,12 +25,12 @@ export function buildClip(jsonClip, skeletonRoot, name = 'loco') {
   return new THREE.AnimationClip(name, jsonClip.duration, tracks)
 }
 
-// 池条目用：heroKey 的 N 集（jett/sova 各自官方曲线，未知英雄回退 jett）+
-// 横移 E/W 集（Sova 官方方向性曲线，四英雄共用——Jett 的 E/W 腿轨道是 N 的
-// 导出复件，非真横移）。数据不齐返回 null（Bot 退回烘焙近似）。
+// 池条目用：core 集（TP_Core 共享移动循环，四英雄同款——本体移动就用它）+
+// 横移 E/W 集（TP_Core 真方向性循环）。旧英雄名（jett/sova）留作回退兼容。
+// 数据不齐返回 null（Bot 退回烘焙近似）。
 export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
-  const heroSet = locoJson?.[heroKey] ?? locoJson?.jett
-  const strafeSet = locoJson?.strafe
+  const heroSet = locoJson?.core ?? locoJson?.[heroKey] ?? locoJson?.jett
+  const strafeSet = locoJson?.strafe ?? locoJson?.core
   if (!heroSet?.walkN || !heroSet?.runN) return null
   const build = (c, name) => (c ? buildClip(c, skeletonRoot, name) : null)
   const walk = build(heroSet.walkN, `${heroKey}-walkN`)

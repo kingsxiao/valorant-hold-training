@@ -34,10 +34,15 @@ const run = await page.evaluate(async ({ specs, locoJson }) => {
   if (!b) return { err: 'no official bot in pool' }
   g.bots.roundEndAt = 0 // 关回合计时（手动驱动不限时）
   g.bots.countdownUntil = 0
+  // 速度档经 CONFIG 注入（manager 按 peek.dir × moveSpeed 驱动）——台架绝不能
+  // 自己再调 moveToward：manager 内部同样驱动，双积分会把体速跑成 2×（曾把
+  // 钉地/曲线全部指标测在两倍速度上）
+  const speed0 = g.CONFIG.bot.moveSpeed
   const hero = b.anim.walk.getClip().name.split('-')[0] // 'jett-walkN' → 'jett'
   const dt = 1 / 128
   const results = []
   for (const sp of specs) {
+    g.CONFIG.bot.moveSpeed = Math.abs(sp.vx)
     b.place(sp.startX, b.manager.map.peekLineZ, 'peek')
     b.peek = { style: sp.style, dir: Math.sign(sp.vx) || 1, phase: 'out', startX: sp.startX,
       endX: sp.startX + Math.sign(sp.vx) * 40, stopAt: 1, stopped: false, stopUntil: 0,
@@ -45,13 +50,11 @@ const run = await page.evaluate(async ({ specs, locoJson }) => {
     if (sp.pinOff) b._pinOff = true // 曲线比对只关钉锚（IK 有意偏离曲线），贴地高度照常
     else delete b._pinOff
     if (sp.forceSide) b._strafeSide = sp.forceSide
-    // 满速起跳：跳过加速段（权重 ramp 会混入 kamae 污染曲线比对）
-    b.velX = sp.vx
-    b._moveW = 1; b._runW = Math.abs(sp.vx) > 3 ? 1 : 0
-    b._strafeW = sp.style === 'pull' ? 1 : 0
-    // 销毁段：跑 ~1 个周期让相位/钉地进入稳态，然后重置钉锚与快照基点
-    for (let i = 0; i < 96; i++) { b.manager.t += dt; b.moveToward(sp.vx, dt); g.bots.step(dt, 1) }
+    // 销毁段：跑 ~1 个周期让相位/钉地/权重进入稳态
+    for (let i = 0; i < 96; i++) { b.manager.t += dt; g.bots.step(dt, 1) }
     for (const leg of b._strafeRig.legs) { const st = leg.foot.userData._pin; if (st) { st.has = false; st.w = 0 } }
+    // 起步权重爬坡（moveW/runW 淡入 ~0.5s）会污染相位桶——丢弃一段再采样
+    for (let i = 0; i < 64; i++) { b.manager.t += dt; g.bots.step(dt, 1) }
     const bones = { knee: b._strafeRig.legs[0].knee, hip: b._strafeRig.legs[0].up }
     const foot = (s) => b._strafeRig.legs.find(l => l.side === s).foot
     const snapQ = { knee: bones.knee.quaternion.clone(), hip: bones.hip.quaternion.clone() }
@@ -59,11 +62,14 @@ const run = await page.evaluate(async ({ specs, locoJson }) => {
     const samples = []
     for (let i = 0; i < sp.steps; i++) {
       b.manager.t += dt
-      b.moveToward(sp.vx, dt)
       g.bots.step(dt, 1)
-      const t = sp.style === 'pull'
-        ? b.anim.strafe[b._strafeSide ?? 'E'].run.time
-        : b.anim.run.time
+      // 相位基准 = 被比对 clip 自己的播放头（walk 时长 0.867 ≠ run 0.6，拿 run.time
+      // 给 walk 分桶会整体错相位——RMS 虚高 3 倍的教训）
+      const t = sp.jsonSet === 'walk'
+        ? b.anim.walk.time
+        : sp.style === 'pull'
+          ? b.anim.strafe[b._strafeSide ?? 'E'].run.time
+          : b.anim.run.time
       const row = {
         t, speed: Math.abs(b.velX),
         knee: +ang(bones.knee.quaternion, snapQ.knee).toFixed(3),
@@ -93,7 +99,7 @@ const run = await page.evaluate(async ({ specs, locoJson }) => {
     // 曲线桶比对（引擎同款 slerp 求值，同基=采样起点）
     const jsonClip = sp.jsonSet === 'strafe'
       ? loco.strafe[sp.forceSide === 'W' ? 'runW' : 'runE']
-      : (loco[hero] ?? loco.jett)[sp.jsonSet === 'walk' ? 'walkN' : 'runN']
+      : (loco[hero] ?? loco.core ?? loco.jett)[sp.jsonSet === 'walk' ? 'walkN' : 'runN']
     const trackOf = (bone) => jsonClip.tracks.find(t => t.b === bone)
     const dot = (a, b2) => a[0]*b2[0]+a[1]*b2[1]+a[2]*b2[2]+a[3]*b2[3]
     const slerp = (tr, t) => {
@@ -139,16 +145,22 @@ const run = await page.evaluate(async ({ specs, locoJson }) => {
       const x1 = sL ? samples[i].xL : samples[i].xR
       swingV.push(Math.sign(sp.vx) * ((x1 - x0) / dt) - Math.abs(samples[i].speed))
     }
-    // 支撑脚滑速（较低脚沿移动轴，去边界 10% 截尾均值）
+    // 支撑脚滑速（较低脚沿移动轴，去边界 10% 截尾均值）；分项：钉住帧
+    // （pin.w≥0.5）vs 边界帧（入锚/出锚过渡，合法移动相）
     const stanceV = []
+    const pinnedV = []
     for (let i = 1; i < samples.length; i++) {
       const sL = samples[i].yL <= samples[i].yR
       const x0 = sL ? samples[i - 1].xL : samples[i - 1].xR
       const x1 = sL ? samples[i].xL : samples[i].xR
       stanceV.push((x1 - x0) / dt)
+      if ((sL ? samples[i].wL : samples[i].wR) >= 0.5) pinnedV.push((x1 - x0) / dt)
     }
     stanceV.sort((a, b2) => a - b2)
     const trim = stanceV.slice(Math.floor(stanceV.length * 0.1), Math.floor(stanceV.length * 0.9))
+    const absMean = (arr) => +(arr.reduce((a, v) => a + Math.abs(v), 0) / Math.max(1, arr.length)).toFixed(2)
+    const absSorted = stanceV.map(Math.abs).sort((a, b2) => a - b2)
+    const absP95 = absSorted[Math.floor(absSorted.length * 0.95)] ?? 0
     results.push({
       ySeries: samples.filter((_, i) => i % 12 === 0).map(r => +Math.min(r.yL, r.yR).toFixed(3)),
       dRunT: +(samples[samples.length-1].t - samples[0].t).toFixed(3),
@@ -156,6 +168,9 @@ const run = await page.evaluate(async ({ specs, locoJson }) => {
       clipDur: jsonClip.duration, samples: samples.length,
       kneeCmp: compare('knee', 'L_Knee'), hipCmp: compare('hip', 'L_Hip'),
       stanceAbsMean: +(trim.reduce((a, v) => a + Math.abs(v), 0) / trim.length).toFixed(2),
+      stanceAbsP95: +absP95.toFixed(2),
+      pinnedAbsMean: absMean(pinnedV),
+      pinnedFrames: pinnedV.length,
       bodyV: +Math.abs(sp.vx).toFixed(2),
       pinDuty: +((samples.filter(r => r.pinL || r.pinR).length / samples.length)).toFixed(2),
       yMin: +Math.min(...samples.map(r => Math.min(r.yL, r.yR))).toFixed(3),
@@ -170,13 +185,15 @@ const run = await page.evaluate(async ({ specs, locoJson }) => {
       })(),
     })
   }
+  g.CONFIG.bot.moveSpeed = speed0
   b.hide()
   return { hero, results }
 }, {
     locoJson: loco,
     specs: [
     { tag: 'runN 曲线', style: 'cross', vx: 5.4, startX: -20, steps: 384, jsonSet: 'run', pinOff: true },
-    { tag: 'walkN 曲线', style: 'cross', vx: 3.39, startX: -20, steps: 512, jsonSet: 'walk', pinOff: true },
+    // 走曲线档用 3.0 m/s：speed>3.0 起跑权重混入 run 曲线（ramp 阈值 (speed-3.0)/1.6），3.39 会掺 24% 跑
+    { tag: 'walkN 曲线', style: 'cross', vx: 3.0, startX: -20, steps: 512, jsonSet: 'walk', pinOff: true },
     { tag: 'strafe-E 曲线', style: 'pull', vx: 5.4, startX: -20, steps: 384, jsonSet: 'strafe', pinOff: true, forceSide: 'E' },
     { tag: 'strafe-W 曲线', style: 'pull', vx: -5.4, startX: 20, steps: 384, jsonSet: 'strafe', pinOff: true, forceSide: 'W' },
     { tag: 'E错配(左移)', style: 'pull', vx: -5.4, startX: 20, steps: 384, jsonSet: 'strafe', pinOff: true, forceSide: 'E' },

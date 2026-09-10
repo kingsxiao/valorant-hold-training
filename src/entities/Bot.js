@@ -1109,7 +1109,7 @@ export class Bot {
       this._crouchPlanned = false; this._crouching = false; this._crouchW = 0
       this._crouchWW = 0; this._cwPhase = 0
       if (this.anim.crouchWalk) for (const a of Object.values(this.anim.crouchWalk)) a.setEffectiveWeight(0)
-      this._jump = null
+      this._jump = null; this._jumpW = 0
       if (this.anim.jump) this.anim.jump.setEffectiveWeight(0)
       if (this.anim.jumpLand) this.anim.jumpLand.setEffectiveWeight(0)
       this.anim.walk.time = 0
@@ -1458,8 +1458,10 @@ export class Bot {
         const airT = active ? Math.max(0, this._jump.t - JUMP_LAUNCH) : 0
         const airFall = airT > JUMP_FALL_AFTER && !!this.anim.fall
         const fallBlend = airFall ? jumpFallBlend(airT) : 0
-        if (this.anim.jump) this.anim.jump.setEffectiveWeight(active && !landed ? 1 - fallBlend : 0)
-        if (this.anim.fall) this.anim.fall.setEffectiveWeight(fallBlend)
+        // 起跳权重走坡：预备蹲压缩读作蓄力下蹲，非硬切
+        this._jumpW = smoothW(this._jumpW ?? 0, active && !landed ? 1 : 0, dt)
+        if (this.anim.jump) this.anim.jump.setEffectiveWeight(this._jumpW * (1 - fallBlend))
+        if (this.anim.fall) this.anim.fall.setEffectiveWeight(fallBlend * this._jumpW)
         if (__jl) {
           if (active) __jl.setEffectiveWeight(1)
           else __jl.setEffectiveWeight(Math.max(0, __jl.getEffectiveWeight() - dt * 3))

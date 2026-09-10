@@ -85,6 +85,27 @@ function clipFrom(path) {
   return { duration: +duration.toFixed(4), n: frames.length, times, tracks, ik }
 }
 
+// 全骨骼变体（死亡等整身动画）：导出所有有变化的骨（恒定轨道不发 = mixer 缺轨
+// 保持 rest）。死亡是整身表现（脊柱/颈/手臂/腿全动），LB 十骨不够
+function clipFromFull(path) {
+  const { names, frames, duration } = parsePsa(path)
+  const tracks = []
+  for (let bi = 0; bi < names.length; bi++) {
+    const bone = names[bi]
+    if (/\b(end|Twst|Ndl|IKpv|_IUE)$/i.test(bone) || /_end$|_Twst|_Ndl|IKpv|_IUE/.test(bone)) continue
+    const q = frames.map(f => f[bi].q)
+    const p = frames.map(f => f[bi].p)
+    const qVar = q.some(v => v.some((x, k) => Math.abs(x - q[0][k]) > 1e-6))
+    const pVar = p.some(v => v.some((x, k) => Math.abs(x - p[0][k]) > 1e-6))
+    if (!qVar && !pVar) continue
+    const t = { b: bone, q: q.flat().map(v => +v.toFixed(5)) }
+    if (pVar) t.p = p.flat().map(v => +(v * 0.01).toFixed(5))
+    tracks.push(t)
+  }
+  const times = frames.map((_, i) => +((i / (frames.length - 1)) * duration).toFixed(4))
+  return { duration: +duration.toFixed(4), n: frames.length, times, tracks }
+}
+
 const SRC = {
   core: {
     walkN: 'assets-raw/core-psa/TP_Core_WalkN_LB.psa',
@@ -94,14 +115,23 @@ const SRC = {
     walkW: 'assets-raw/core-psa/TP_Core_WalkW_LB.psa',
     runW: 'assets-raw/core-psa/TP_Core_RunW_LB.psa',
   },
+  // 死亡整身 clip：玩家在正面 → 后仰背摔（弹道把人向后打）；背后/侧后 → 前扑
+  death: {
+    back: { path: 'assets-raw/core-psa/TP_Core_Death_Land_BackSplat_Big.psa', full: true },
+    front: { path: 'assets-raw/core-psa/TP_Core_Death_Land_FrontSplat_Big.psa', full: true },
+  },
 }
 const out = {}
 for (const [hero, files] of Object.entries(SRC)) {
-  out[hero] = {}
-  for (const [k, p] of Object.entries(files)) out[hero][k] = clipFrom(p)
+  out[hero] = out[hero] ?? {}
+  for (const [k, spec] of Object.entries(files)) {
+    out[hero][k] = typeof spec === 'string' ? clipFrom(spec) : clipFromFull(spec.path)
+  }
 }
 // 横移 E/W 集：TP_Core 的真方向性循环（摆动腿跨向、支撑腿蹬伸各方向不同）
 out.strafe = { walkE: out.core.walkE, runE: out.core.runE, walkW: out.core.walkW, runW: out.core.runW }
+// 死亡集提到顶层（与 strafe 平级），供 Locomotion.buildLocomotion 消费
+out.death = { back: out.death.back, front: out.death.front }
 fs.writeFileSync('public/models/locomotion.json', JSON.stringify(out))
 const size = fs.statSync('public/models/locomotion.json').size
 console.log(`written public/models/locomotion.json (${(size / 1024).toFixed(1)} KB)`)

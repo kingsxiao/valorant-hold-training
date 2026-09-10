@@ -5,7 +5,7 @@ import { CONFIG } from '../core/Config.js'
 import { groundStep, accelFor } from '../core/GroundMotion.js'
 import { peekFacingYaw, leanInto, strafeRampW, strafeStepPose } from '../core/PeekPose.js'
 import { matchRigBones, bakeLocomotionClips, bakeDeathClips, smoothW } from '../core/GaitBake.js'
-import { locoWeights, stepFootPinState, sampleIkAnchor } from '../core/Locomotion.js'
+import { locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide } from '../core/Locomotion.js'
 import { solveGunAim, pickAimTarget, gunBobPose, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK, deriveGunHoldPoints, solveGripMount } from '../core/WeaponAim.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
@@ -432,6 +432,21 @@ export class Bot {
         this.deathAction = this.mixer.clipAction(this.deathClip)
         this.deathAction.play()
         this.deathAction.setEffectiveWeight(0)
+      }
+      // 官方死亡整身 clip（背摔/前扑，TP_Core Death Splat）：优先于烘焙塌倒；
+      // LoopOnce 播一次停在终 pose（corpse 定格 = 尸体姿势）
+      if (official?.death && (official.death.back || official.death.front)) {
+        this.deathActions = {}
+        for (const side of ['back', 'front']) {
+          const clip = official.death[side]
+          if (!clip) continue
+          const a = this.mixer.clipAction(clip)
+          a.loop = THREE.LoopOnce
+          a.clampWhenFinished = true
+          a.play()
+          a.setEffectiveWeight(0)
+          this.deathActions[side] = a
+        }
       }
       this._animAcc = 0
       this._setAnimWeights(0)
@@ -990,6 +1005,7 @@ export class Bot {
     this._restoreEmissive() // 也不带旧受击红光（如被击杀后立刻复用）
     if (this.mixer) { // 骨骼假人归位站姿，不带上一条的残留步态
       if (this.deathAction) this.deathAction.stop() // 先停死亡 clip，update(0) 才是干净重摆
+      for (const a of Object.values(this.deathActions ?? {})) a.stop()
       this.anim.walk.time = 0
       if (this.anim.run) this.anim.run.time = 0
       if (this.anim.strafe) {
@@ -1062,25 +1078,55 @@ export class Bot {
     // 否则击杀瞬间的受击红光会贯穿整个倒地动画与重生
     this.hitFlash = 0
     this._restoreEmissive()
-    if (this.mixer && this.deathAction) {
-      // 骨骼化塌倒（无畏契约击杀表现：盆骨后仰折叠拍地 + 撒手）：kamae/步态
-      // 全停，死亡 clip 从头接管
+    // 死亡方向性：玩家在 bot 正面 → 弹道把人向后打（背摔）；背面/侧后 → 前扑
+    let side = null
+    if (this._playerX !== undefined) {
+      const yaw = this.mesh.rotation.y
+      const fwdX = -Math.sin(yaw), fwdZ = -Math.cos(yaw) // mesh -Z = 朝向
+      const dx = this._playerX - this.pos.x, dz = this._playerZ - this.pos.z
+      side = pickDeathSide(fwdX * dx + fwdZ * dz)
+    }
+    const officialDeath = side ? this.deathActions?.[side] : null
+    if (this.mixer && officialDeath) {
+      // 官方死亡整身 clip（TP_Core Death Splat：脊柱/颈/手臂/腿全动 + 根位移
+      // 走骨道）：kamae/步态全停，死亡 clip 从头播一次停在终 pose
       const A = this.anim
       if (A) {
         A.walk.setEffectiveWeight(0)
         if (A.idle) A.idle.setEffectiveWeight(0)
         if (A.run) A.run.setEffectiveWeight(0)
-        if (A.strafe) for (const side of ['E', 'W']) {
-          A.strafe[side].walk.setEffectiveWeight(0)
-          A.strafe[side].run.setEffectiveWeight(0)
+        if (A.strafe) for (const s of ['E', 'W']) {
+          A.strafe[s].walk.setEffectiveWeight(0)
+          A.strafe[s].run.setEffectiveWeight(0)
+        }
+      }
+      if (this.deathAction) this.deathAction.setEffectiveWeight(0)
+      officialDeath.reset()
+      officialDeath.setEffectiveWeight(1)
+      officialDeath.play()
+      this._skelDeath = true
+      this._officialDeath = true
+      this._deathDur = officialDeath.getClip().duration
+    } else if (this.mixer && this.deathAction) {
+      // 烘焙塌倒（官方死亡 clip 缺席时的骨骼化回退）
+      const A = this.anim
+      if (A) {
+        A.walk.setEffectiveWeight(0)
+        if (A.idle) A.idle.setEffectiveWeight(0)
+        if (A.run) A.run.setEffectiveWeight(0)
+        if (A.strafe) for (const s of ['E', 'W']) {
+          A.strafe[s].walk.setEffectiveWeight(0)
+          A.strafe[s].run.setEffectiveWeight(0)
         }
       }
       this.deathAction.reset()
       this.deathAction.setEffectiveWeight(1)
       this.deathAction.play()
       this._skelDeath = true
+      this._officialDeath = false
     } else {
       this._skelDeath = false
+      this._officialDeath = false
     }
     // 撒手掉枪：保持世界姿态抛落（弹道/翻滚/落地摆平在 step 的 dying 分支）
     if (this.gun) {
@@ -1122,9 +1168,10 @@ export class Bot {
       const t = Math.min(1, this.deathT / CONFIG.bot.deathTime)
       if (this._skelDeath) {
         // 骨骼化塌倒：死亡 clip 接管盆骨/腿/脊柱/手臂（128Hz 平滑推进）；
-        // mesh 只收敛走跑残留的高度偏移，不做刚体旋转
+        // mesh 只收敛走跑残留的高度偏移，不做刚体旋转。官方死亡 clip 的根
+        // 位移在骨道里（倒地全靠骨道），mesh.y 衰减会双重下沉——跳过
         this.mixer.update(dt)
-        this.mesh.position.y *= 1 - Math.min(1, dt * 22)
+        if (!this._officialDeath) this.mesh.position.y *= 1 - Math.min(1, dt * 22)
       } else {
         // 刚体后仰倒地（程序化假人/无烘焙老模型）：ease-out + 随机侧倒 + 下沉
         const e = 1 - Math.pow(1 - t, 3)
@@ -1147,7 +1194,7 @@ export class Bot {
         this._landed = true
         this.onDeathLand?.()
       }
-      if (this.deathT > 1.2) {
+      if (this.deathT > (this._officialDeath ? this._deathDur : 1.2)) {
         // 本体击杀表现：尸体与掉枪整局留存——定格在最终姿势（corpse 不 step：
         // 零 CPU，静态网格），不淡出不 hide；直到池复用（place 重置）或回合
         // 结束（dispose）/地图重建（onMapRebuilt）才回收
@@ -1160,6 +1207,8 @@ export class Bot {
 
     // 可见性 → 反应计时起点
     const p = ctx.player
+    this._playerX = p.pos.x // 暂存玩家位置：死亡方向性（背摔/前扑）判定用
+    this._playerZ = p.pos.z
     const eyeY = this.pos.y + 1.68
     this.visibleNow = this.world.lineOfSight(
       this.pos.x, eyeY, this.pos.z,

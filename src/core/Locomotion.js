@@ -47,7 +47,18 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
     }
     : null
   if (strafe && (!strafe.E.walk || !strafe.E.run)) return { walk, run, strafe: null }
-  return { walk, run, strafe }
+  // 官方死亡整身 clip（背摔/前扑）：缺席不阻塞移动集（Bot 退回烘焙塌倒）
+  const deathSet = locoJson?.death
+  const death = deathSet
+    ? { back: build(deathSet.back, 'death-back'), front: build(deathSet.front, 'death-front') }
+    : null
+  return { walk, run, strafe, death }
+}
+
+// 死亡倒向选择（纯函数）：dot = 「bot 朝向」与「bot→玩家」的前向点积。
+// 玩家在 bot 正面（dot>0）→ 弹道把人向后打 = 背摔；背后/侧后 → 前扑
+export function pickDeathSide(forwardDot) {
+  return forwardDot > 0 ? 'back' : 'front'
 }
 
 // 官方 IK 目标锚采样（纯函数，Bot._stepFootPin 与单测共用）：在 clip 的 ik
@@ -67,9 +78,6 @@ export function sampleIkAnchor(ik, duration, n, t, side, out) {
 }
 
 // 走/跑/横移的动画权重分配（纯函数，Bot._setAnimWeights 与单测共用）：
-// idle ↔ 走 ↔ 跑 × 前进(N)/横移(E/W) 两组正交分配——横移权重 wS 把 moveW 按
-// (1-wS)/wS 分给 N 与 E/W，走↔跑再按 runW 内分。无 idle 动作的老模型 walk
-// 承接 (1-moveW) 残余（单 clip 冻结语义）
 export function locoWeights({ moveW, runW, strafeW = 0, hasStrafe = false }) {
   const wS = hasStrafe ? strafeW : 0
   const idle = 1 - moveW

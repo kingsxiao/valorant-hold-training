@@ -35,6 +35,8 @@ import { raySphere } from '../world/World.js'
 //    撒手掉枪弹道（WeaponAim.stepDroppedGun：抛落翻滚落地摆平）
 const STEP_LEN = 1.55 // 一步的位移（m）：步态相位锁相基准。官方动画实测（assets-raw/psa_*：
                       // 跑周期 0.6s@5.4m/s → 1.62m/步、走周期 ~0.85s@3.39m/s → 1.44m/步）取中值
+const CROUCH_ZONE_DROP = 0.30 // 蹲姿命中区下沉比：官方根高 79.6/114.1cm（CrouchIdle vs RunN
+                              // 实测），头/胸/腹/腿区高度按 1−0.30·蹲姿权重缩放，半径不变
 const STRAFE_STEP_LEN = 1.15 // 横移步距保持既有调校口径（pull 出场节奏 1 步/1.15m 已验收）
 const _v = new THREE.Vector3()
 const _up = new THREE.Vector3(0, 1, 0)
@@ -472,6 +474,13 @@ export class Bot {
           this.anim.turn[key] = a
         }
       }
+      // 蹲踞待机（官方蹲姿循环，自由跑；权重坡合成下蹲/起立过渡）
+      if (official?.crouchIdle) {
+        const a = this.mixer.clipAction(official.crouchIdle)
+        a.play()
+        a.setEffectiveWeight(0)
+        this.anim.crouchIdle = a
+      }
       // 急停支架（加法层叠在 kamae 上）：播完定格（clampWhenFinished）= 支架保持
       if (official?.stopAdd) {
         const a = this.mixer.clipAction(official.stopAdd)
@@ -529,7 +538,9 @@ export class Bot {
       moveW: this._moveW, runW: this._runW,
       strafeW: this._strafeW, hasStrafe: !!A.strafe,
     })
-    if (A.idle) A.idle.setEffectiveWeight(W.idle)
+    // 蹲踞时 idle（全身站立待机）按蹲姿权重退缩——否则站立腿型与蹲姿五五混
+    // 合（半蹲脚悬空，贴地跟踪跟着追不上）
+    if (A.idle) A.idle.setEffectiveWeight(W.idle * (1 - (this._crouchW ?? 0)))
     A.walk.setEffectiveWeight(A.idle ? W.walkN : W.walkNoIdle)
     if (A.run) A.run.setEffectiveWeight(W.runN)
     const ph = ((this.walkPhase % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
@@ -1055,6 +1066,7 @@ export class Bot {
       for (const a of Object.values(this.anim?.turn ?? {})) a.stop()
       this.anim?.stopAdd?.stop()
       this._turnKey = null; this._turnW = 0; this._braceW = 0
+      this._crouchPlanned = false; this._crouching = false; this._crouchW = 0; this._zoneYK = 1
       this.anim.walk.time = 0
       if (this.anim.run) this.anim.run.time = 0
       if (this.anim.strafe) {
@@ -1301,12 +1313,18 @@ export class Bot {
     dy = Math.atan2(Math.sin(dy), Math.cos(dy)) // 取最短角差
     this.mesh.rotation.y += dy * Math.min(1, dt * 14)
 
+    // 蹲姿对枪（BotManager 在急停时按 crouchChance 掷定）：蹲下压低命中区，
+    // 逼玩家下压准星——本体对枪蹲。蹲姿优先：蹲下时不出转身踏步/支架（腿部
+    // 五五混合会吃掉蹲姿的根高沉降）
+    this._crouching = !!(stopped && this._crouchPlanned && this.anim?.crouchIdle)
+    this._crouchW = smoothW(this._crouchW ?? 0, this._crouching ? 1 : 0, dt)
+    this._zoneYK = 1 - CROUCH_ZONE_DROP * this._crouchW
     // 停步挑战的官方转身/支架选型（先算好，mixer 分支消费）：急停且朝向差够大
     // → 出「转身踏步」clip（E=右转/W=左转，角度最近档）；朝向已对 → 出「急停
     // 支架」加法层。走路/移动中不触发（stopped 才算）
     let turnKey = null
-    if (stopped && this.anim?.turn) turnKey = pickTurnClip(dy)
-    const braceTarget = stopped && this.anim?.stopAdd && !turnKey ? 1 : 0
+    if (stopped && this.anim?.turn && !this._crouching) turnKey = pickTurnClip(dy)
+    const braceTarget = stopped && this.anim?.stopAdd && !turnKey && !this._crouching ? 1 : 0
 
     // 移动表现：程序化假人 = VALORANT 横移步态；骨骼假人播放混合动画，pull 波
     // 横移时腿由程序化侧移覆盖、上身动画速度压向 0（退到 idle：持枪横移不甩臂）
@@ -1332,6 +1350,9 @@ export class Bot {
           a.setEffectiveWeight(key === turnKey ? this._turnW : 0)
         }
         this._turnKey = turnKey
+      }
+      if (this.anim.crouchIdle) {
+        this.anim.crouchIdle.setEffectiveWeight(this._crouchW)
       }
       if (this.anim.stopAdd) {
         this._braceW = smoothW(this._braceW ?? 0, braceTarget, dt)
@@ -1431,7 +1452,7 @@ export class Bot {
     if (this.invulnerable) return null
     let bestT = maxT, bestZone = null
     for (const z of this.zones) {
-      _v.set(0, z.y, 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
+      _v.set(0, z.y * (this._zoneYK ?? 1), 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
       const t = raySphere(ox, oy, oz, dx, dy, dz, _v.x, _v.y, _v.z, z.r)
       if (t !== null && t < bestT) { bestT = t; bestZone = z.zone }
     }

@@ -241,6 +241,9 @@ export class BotManager {
           if (!pk.stopped && !pk.resolved && prog > pk.stopAt && Math.random() < CONFIG.training.peekStopChance) {
             pk.stopped = true
             pk.stopUntil = this.now() + rand(0.15, 0.35)
+            // 急停掷蹲姿：本体对枪蹲（压低头部躲爆头线）——命中区随官方蹲姿
+            // 根高缩放，逼玩家下压准星
+            activeBot._crouchPlanned = Math.random() < CONFIG.training.crouchChance
           }
         }
         if ((pk.dir > 0 && activeBot.pos.x >= pk.endX) || (pk.dir < 0 && activeBot.pos.x <= pk.endX)) {

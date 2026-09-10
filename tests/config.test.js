@@ -169,3 +169,9 @@ describe('Rng（mulberry32 可复现伪随机）', () => {
     expect(vals.size).toBeGreaterThan(40)
   })
 })
+
+describe('蹲姿对枪 crouchChance', () => {
+  it('默认 0.3（急停瞬间掷蹲姿对枪的本体口径）', () => {
+    expect(CONFIG.training.crouchChance).toBe(0.3)
+  })
+})

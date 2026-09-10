@@ -52,6 +52,8 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
   const death = deathSet
     ? { back: build(deathSet.back, 'death-back'), front: build(deathSet.front, 'death-front') }
     : null
+  // 蹲踞待机循环（官方蹲姿根高，全程蹲姿的 4.5s 循环）：缺席不阻塞
+  const crouchIdle = locoJson?.crouch?.idle ? build(locoJson.crouch.idle, 'crouch-idle') : null
   // 跑动上身叠加层（加法）：与 RunN 同相（0.6s），Spine/颈/头/枪锚骨的官方
   // 跑动胸口运动；缺席不阻塞
   const runAddSet = locoJson?.runAdd
@@ -74,7 +76,7 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
     THREE.AnimationUtils.makeClipAdditive(c, 0)
     c.blendMode = THREE.AdditiveAnimationBlendMode
   }
-  return { walk, run, strafe, death, turn, stopAdd, runAdd }
+  return { walk, run, strafe, death, turn, stopAdd, runAdd, crouchIdle }
 }
 
 // 停步转身选型（纯函数）：deltaYaw = 朝向差（最短角，rad，正=左转）。

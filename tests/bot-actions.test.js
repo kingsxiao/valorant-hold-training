@@ -368,3 +368,30 @@ describe('bakeDeathClips 死亡烘焙', () => {
     expect(bakeDeathClips({ ...spec, legs: [spec.legs[0]] })).toBeNull()
   })
 })
+
+describe('蹲姿命中区缩放（raycast _zoneYK）', () => {
+  // Bot.prototype.raycast 用最小桩直测：zones 高度按 1−0.30·蹲姿权重缩放
+  const stub = (zoneYK) => ({
+    invulnerable: false,
+    zones: [
+      { y: 1.63, r: 0.13, zone: 'head' },
+      { y: 0.22, r: 0.14, zone: 'leg' },
+    ],
+    _zoneYK: zoneYK,
+    mesh: { quaternion: { get x() { return 0 }, get y() { return 0 }, get z() { return 0 }, get w() { return 1 } }, position: { x: 0, y: 0, z: 0 } },
+  })
+  const getRaycast = async () => (await import('../src/entities/Bot.js')).Bot.prototype.raycast
+  it('站定（zoneK=1）头部命中区在 1.63m', async () => {
+    const raycast = await getRaycast()
+    const hit = raycast.call(stub(1), 0, 1.63, 5, 0, 0, -1, 50)
+    expect(hit.zone).toBe('head')
+  })
+  it('蹲满（zoneK=0.70）头部区下沉到 ~1.14m：站立爆头线打空、下压命中', async () => {
+    const raycast = await getRaycast()
+    const s = stub(0.70)
+    const miss = raycast.call(s, 0, 1.63, 5, 0, 0, -1, 50) // 站立爆头线
+    expect(miss).toBeNull()
+    const hit = raycast.call(s, 0, 1.14, 5, 0, 0, -1, 50)
+    expect(hit.zone).toBe('head')
+  })
+})

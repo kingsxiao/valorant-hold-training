@@ -128,6 +128,11 @@ const SRC = {
     W: { path: 'assets-raw/core-psa/TP_Core_RunAddW_UB.psa', full: true },
   },
 
+  // 蹲踞待机循环（全程蹲姿的 4.5s 循环，根高 79.6cm vs 站姿 114.1cm = 沉降
+  // 30%——下蹲过渡由权重坡合成，命中区按同比例缩放）
+  crouch: {
+    idle: 'assets-raw/core-psa/TP_Core_CrouchIdle_LB.psa',
+  },
   // 停步转身踏步（E=向右 / W=向左 × 45/90/135/180°，全部 1.0s）：clip 本体不带
   // 根旋转（Splitter/Pelvis Y 转角≈0）——本体引擎程序化转根，腿只出「转身踏步」
   // 步型；我们同样保持 yaw lerp 权威、clip 只出腿

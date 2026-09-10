@@ -23,7 +23,8 @@ import { Tex } from './Textures.js'
 //    悬停，活跃 1s 内对 45m 视线目标 0.35s 锁定喷等离子：全屏 2s=1s 满效+
 //    1s 渐褪（转身不可避）；20HP 可击毁
 // 白闪判定：视线(LOS) + 朝向角 + 距离（模型见 flashMath.js），到期后白屏
-// 1 秒渐褪；近视/等离子走独立屏效（reyna 紫雾近视、gecko 等离子糊屏）。
+// 1 秒渐褪（整屏纯白，本体口径）；近视/等离子走独立屏效（reyna 紫雾近视 +
+// Deafened 闷音、gecko 绿紫史莱姆糊屏）。
 // 投掷起点在墙后（模拟看不见的敌人），轨迹按"敌方 pop flash"设计
 // ============================================================================
 const rand = (a, b) => a + Math.random() * (b - a)
@@ -32,30 +33,29 @@ const TYPES = ['kayo', 'skye', 'phoenix', 'yoru', 'breach', 'reyna', 'gecko']
 const MODES = [...TYPES, 'mix', 'off']
 
 // ---- 程序化模型（原创近似：官方美术资产有版权，不做提取复用）----
-// KAY/O 手雷：八棱"智能雷"造型——枪金属棱柱体 + 青色发光环 + 两侧翼片
+// KAY/O 手雷：枪金属罐体 + 琥珀橙警示灯（顶灯 + 赤道灯环）——预备期内闪烁
+// 加速（renderSync 的 _pulse 驱动），暖色警灯是玩家计时转身的视觉锚点
 function buildKayoGrenade() {
   const g = new THREE.Group()
   const body = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.08, 0.08, 0.062, 8),
+    new THREE.CylinderGeometry(0.08, 0.08, 0.062, 10),
     new THREE.MeshStandardMaterial({ color: 0x2b3036, metalness: 0.85, roughness: 0.35 })
   )
   const glowMat = new THREE.MeshStandardMaterial({
-    color: 0x083038, emissive: 0x4fe3ff, emissiveIntensity: 1.8, roughness: 0.4,
+    color: 0x38200a, emissive: 0xffa54a, emissiveIntensity: 1.6, roughness: 0.4,
   })
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.078, 0.008, 8, 28), glowMat)
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.081, 0.007, 8, 28), glowMat)
   ring.rotation.x = Math.PI / 2
   const cap = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.05, 0.05, 0.02, 8),
+    new THREE.CylinderGeometry(0.05, 0.05, 0.02, 10),
     new THREE.MeshStandardMaterial({ color: 0x1a1e22, metalness: 0.9, roughness: 0.3 })
   )
   cap.position.y = 0.04
-  const finGeo = new THREE.BoxGeometry(0.012, 0.004, 0.07)
-  for (const sx of [-1, 1]) {
-    const fin = new THREE.Mesh(finGeo, glowMat)
-    fin.position.set(sx * 0.092, 0, 0)
-    g.add(fin)
-  }
-  for (const m of [body, ring, cap]) { m.castShadow = true; g.add(m) }
+  // 顶灯：罐顶的琥珀警示灯（引信倒数的主角）
+  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.026, 10, 8), glowMat)
+  lamp.scale.y = 0.55
+  lamp.position.y = 0.055
+  for (const m of [body, ring, cap, lamp]) { m.castShadow = true; g.add(m) }
   return { group: g, glowMat }
 }
 
@@ -317,16 +317,18 @@ export class FlashSystem {
     this.blindUntil = -1
     this._nearsightUntil = -1
     this._plasma = null
+    this.audio.setDeafened?.(0)
     this.startAfter = countdownSec
     this.nextAt = this.mode === 'off' ? Infinity : countdownSec + rand(CONFIG.flash.firstMin, CONFIG.flash.firstMax)
   }
 
-  // 回合结束（结算面板弹出）：清道具并立即解除白屏/近视/等离子
+  // 回合结束（结算面板弹出）：清道具并立即解除白屏/近视/等离子/耳聋
   endRound() {
     this._despawn()
     this.blindUntil = -1
     this._nearsightUntil = -1
     this._plasma = null
+    this.audio.setDeafened?.(0)
   }
 
   // 地图重建（缺口左右切换）：旧轨迹作废，清道具重排
@@ -764,16 +766,21 @@ export class FlashSystem {
     const eye = this._eye()
     const total = dizzyPlasmaBlind()
     this._plasma = { at: this.t, potencyUntil: this.t + total.potency, until: this.t + total.total }
-    // 等离子束 + 溅射糊屏的落点视觉
+    // 等离子束 + 溅射糊屏的落点视觉（绿紫史莱姆双色——本体 goop 是绿紫外星黏液）
     const dx = eye.x - p.pos.x, dy = eye.y - p.pos.y, dz = eye.z - p.pos.z
     for (let i = 0; i < 22; i++) {
       const f = i / 22
+      const green = i % 2 === 0
       this.fx.sparks.emit(p.pos.x + dx * f, p.pos.y + dy * f, p.pos.z + dz * f,
         (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 0.8,
-        { life: 0.3 + Math.random() * 0.25, size: 0.05, r: 0.78, g: 0.4, b: 1, alpha: 0.95, drag: 2 })
+        {
+          life: 0.3 + Math.random() * 0.25, size: 0.05,
+          r: green ? 0.5 : 0.72, g: green ? 0.95 : 0.42, b: green ? 0.55 : 1,
+          alpha: 0.95, drag: 2,
+        })
     }
     this.fx.sparks.emit(eye.x, eye.y, eye.z, 0, 0.3, 0,
-      { life: 0.5, size: 0.3, sizeEnd: 0.9, r: 0.78, g: 0.4, b: 1, alpha: 0.5, drag: 1 })
+      { life: 0.5, size: 0.3, sizeEnd: 0.9, r: 0.55, g: 0.9, b: 0.6, alpha: 0.5, drag: 1 })
     this.audio.plasmaSplat?.({ x: eye.x, y: eye.y, z: eye.z }, this._listener)
     this.onPopped?.(true) // 敌方成功施放 → 催促 peek（与白闪 pop 同语义）
   }
@@ -834,11 +841,6 @@ export class FlashSystem {
       intensity = 1 + Math.min(0.25, (dur / maxBlind) * 0.25) // 贴脸爆闪更炸
     }
     this._popVisual(p.type, pos)
-    // 渐褪尾段的残像色（白屏退到一半时切类型色余晖）
-    this._tint = {
-      kayo: '#bfeaff', skye: '#d8ffe6', phoenix: '#ffd9a8',
-      yoru: '#cff5ff', breach: '#d6e2ff',
-    }[p.type] ?? ''
     // blinded=dur>0 传给音效：躲过（背对/无视线）时高频层压暗——"背身成功"听得出来
     this.audio.flashPop(p.type, pos, this._listener, intensity, dur > 0)
     this._despawn()
@@ -846,7 +848,9 @@ export class FlashSystem {
   }
 
   // 起爆视觉：白色主爆闪 + 类型色冲击环/双色火花 + 稍驻留的爆闪照明——
-  // 三类道具各自的"爆炸性格"（KAY/O 电蓝、斯凯翠金、火男炽焰）
+  // 三类道具各自的"爆炸性格"（KAY/O 电蓝、斯凯翠金、火男炽焰）。
+  // Breach 专属：贴墙竖直光柱（游戏内 Flashpoint 起爆是沿墙面的竖条爆闪，
+  // 非球形扩散）+ 竖直定向火花
   _popVisual(type, pos) {
     const fx = this.fx
     const C = {
@@ -860,23 +864,53 @@ export class FlashSystem {
     // 第一人称通道由 vmPopGlow 以类型色点亮枪身+手套
     fx.muzzle(pos, { scale: 7, opacity: 1, light: 3, lightDur: 0.26, color: C.light })
     fx.vmPopGlow(C.light)
-    // 冲击环：一圈类型色的扩散光波
-    const r = fx.rings[fx.ringIdx]
-    fx.ringIdx = (fx.ringIdx + 1) % fx.rings.length
-    r.mesh.position.set(pos.x, pos.y, pos.z)
-    r.mesh.material.color.setHex(C.ring)
-    r.mesh.material.opacity = 0.95
-    r.mesh.scale.setScalar(0.3)
-    r.mesh.visible = true
-    r.life = r.dur = 0.34
-    r.maxScale = C.ringMax
-    // 双色火花迸溅
+    if (type === 'breach') {
+      // 竖直光柱：贴墙面拔起的竖条爆闪（本体形态）——加法混合圆柱，0.32s
+      // 内上冲拉伸后熄灭；柱心压在爆点、底端插地由深度测试自然裁掉
+      const b = this._beam ?? this._makeBeam()
+      b.t = 0
+      b.mesh.position.set(pos.x, Math.max(pos.y, 2.0), pos.z - 0.07)
+      b.mesh.material.opacity = 1
+      b.mesh.scale.set(1, 0.6, 1)
+      b.mesh.visible = true
+    } else {
+      // 冲击环：一圈类型色的扩散光波
+      const r = fx.rings[fx.ringIdx]
+      fx.ringIdx = (fx.ringIdx + 1) % fx.rings.length
+      r.mesh.position.set(pos.x, pos.y, pos.z)
+      r.mesh.material.color.setHex(C.ring)
+      r.mesh.material.opacity = 0.95
+      r.mesh.scale.setScalar(0.3)
+      r.mesh.visible = true
+      r.life = r.dur = 0.34
+      r.maxScale = C.ringMax
+    }
+    // 双色火花迸溅（Breach 竖直定向：沿光柱上下喷）
     for (let i = 0; i < 30; i++) {
-      _va.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(1.5 + Math.random() * 3.8)
+      if (type === 'breach') {
+        _va.set((Math.random() - 0.5) * 0.9, (Math.random() < 0.5 ? -1 : 1) * (1.6 + Math.random() * 3.4), (Math.random() - 0.5) * 0.6)
+      } else {
+        _va.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(1.5 + Math.random() * 3.8)
+      }
       const c = i % 3 ? C.s1 : C.s2
       fx.sparks.emit(pos.x, pos.y, pos.z, _va.x, _va.y, _va.z,
         { life: 0.22 + Math.random() * 0.26, size: 0.038, r: c[0], g: c[1], b: c[2], drag: 3 })
     }
+  }
+
+  // Breach 起爆光柱网格（懒建复用）：开口圆柱 + 加法混合，专用于竖条爆闪
+  _makeBeam() {
+    const mesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.34, 0.34, 4.6, 14, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xe4ecff, transparent: true, opacity: 1,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      }),
+    )
+    mesh.visible = false
+    this.scene.add(mesh)
+    this._beam = { mesh, t: 0 }
+    return this._beam
   }
 
   // 玩家视线方向（pitch/yaw → 单位向量；与相机姿态同式）
@@ -900,20 +934,16 @@ export class FlashSystem {
   // ---- 渲染帧：白屏/近视/等离子透明度 / 网格插值 / 模型动画 / 拖尾 / 移动声源 ----
   renderSync(alpha, dt = 0.016) {
     // 白屏：起爆后 0.06s 快速拉满（游戏同款的瞬时白），致盲期内不透明，
-    // 到期后 1 秒线性渐褪（维基确认值）；径向渐变让边缘先透出一点视野。
-    // 渐褪后半段（k>0.5）白底切道具类型色——视网膜残像式的余晖，也提示
-    // 刚才那颗是什么道具
+    // 到期后 1 秒线性渐褪（维基确认值）。纯白平铺——本体被闪即整屏纯白，
+    // 无渐变边缘、无残像色（能看见一点边缘是退役的旧观感）
     let o = 0
-    let tail = false
     if (this.blindUntil >= 0) {
       const k = (this.t - this.blindUntil) / CONFIG.flash.fadeTime
       if (k < 0) o = Math.min(1, (this.t - this._blindAt) / 0.06)
       else if (k >= 1) this.blindUntil = -1
-      else { o = 1 - k; tail = k > 0.5 }
+      else o = 1 - k
     }
     this.overlayEl.style.opacity = o.toFixed(3)
-    const bg = tail && this._tint ? this._tint : ''
-    if (this.overlayEl.style.background !== bg) this.overlayEl.style.background = bg
 
     // 近视（Reyna）：命中期不透明、转开 0.3s 内褪去；等离子（Dizzy）：1s 满效
     // + 1s 渐褪（转身不可避）。两者都不是白闪，走独立屏效
@@ -921,6 +951,9 @@ export class FlashSystem {
     const nsTarget = this._nearsightUntil > this.t ? 1 : 0
     this._nsO += (nsTarget - this._nsO) * Math.min(1, (nsTarget ? 9 : 4) * dt)
     this.nearsightEl.style.opacity = this._nsO.toFixed(3)
+    // Deafened（维基 Status Effect：Nearsight 者同时被聋）：与近视屏效同一条
+    // 透明度曲线驱动主链闷化——视野收束与听觉闷化同步起/褪
+    this.audio.setDeafened?.(this._nsO)
     let po = 0
     if (this._plasma) {
       if (this.t < this._plasma.potencyUntil) po = 1
@@ -928,6 +961,17 @@ export class FlashSystem {
       else this._plasma = null
     }
     this.plasmaEl.style.opacity = po.toFixed(3)
+
+    // Breach 起爆光柱：0.32s 上冲拉伸 → 熄灭（独立于投掷物存续）
+    if (this._beam?.mesh.visible) {
+      this._beam.t += dt
+      const k = this._beam.t / 0.32
+      if (k >= 1) this._beam.mesh.visible = false
+      else {
+        this._beam.mesh.scale.y = 0.6 + k * 0.55
+        this._beam.mesh.material.opacity = 1 - k
+      }
+    }
 
     const p = this.proj
     if (!p) return
@@ -1048,9 +1092,16 @@ export class FlashSystem {
           (Math.random() - 0.5) * 0.2, -0.3 - Math.random() * 0.3, (Math.random() - 0.5) * 0.2,
           { life: 0.55, size: 0.045, sizeEnd: 0.01, r: 0.7, g: 0.3, b: 1, alpha: 0.7, drag: 1.4 })
       } else if (p.type === 'gecko') {
-        if (Math.random() < 0.5) fx.sparks.emit(ix + (Math.random() - 0.5) * 0.15, iy - 0.05, iz + (Math.random() - 0.5) * 0.15,
-          (Math.random() - 0.5) * 0.3, -0.2 - Math.random() * 0.2, (Math.random() - 0.5) * 0.3,
-          { life: 0.4, size: 0.04, sizeEnd: 0.012, r: 0.78, g: 0.45, b: 1, alpha: 0.75, drag: 1.6 })
+        if (Math.random() < 0.5) {
+          const green = Math.random() < 0.55
+          fx.sparks.emit(ix + (Math.random() - 0.5) * 0.15, iy - 0.05, iz + (Math.random() - 0.5) * 0.15,
+            (Math.random() - 0.5) * 0.3, -0.2 - Math.random() * 0.2, (Math.random() - 0.5) * 0.3,
+            {
+              life: 0.4, size: 0.04, sizeEnd: 0.012,
+              r: green ? 0.5 : 0.72, g: green ? 0.9 : 0.45, b: green ? 0.55 : 1,
+              alpha: 0.75, drag: 1.6,
+            })
+        }
       } else {
         // 白热芯（贴核快熄）+ 橙红焰（外层缓淡）
         fx.sparks.emit(ix, iy, iz, -p.vel.x * 0.03 + (Math.random() - 0.5) * 0.3, -p.vel.y * 0.03 + 0.2 + Math.random() * 0.3, -p.vel.z * 0.03 + (Math.random() - 0.5) * 0.3,

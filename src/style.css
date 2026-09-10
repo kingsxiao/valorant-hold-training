@@ -76,12 +76,12 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
   background: radial-gradient(ellipse at center, transparent 58%, rgba(4, 8, 14, 0.32) 100%); }
 
 /* 闪光致盲白屏：FlashSystem 插在 #hud 首位——准星/弹药等 HUD 按层序叠于其上
-   （与游戏内"被闪时 HUD 仍可见"一致）。径向渐变：中心纯白、边缘略透——渐褪
-   时边缘先透出一点视野，接近游戏闪屏的收束观感；透明度每帧直写（0.06s 快速
-   拉满 → 到期 1s 线性渐褪），不用 CSS 过渡 */
+   （与游戏内"被闪时 HUD 仍可见"一致）。纯白平铺：本体被闪即整屏纯白无渐变
+   边缘、无残像色；透明度每帧直写（0.06s 快速拉满 → 到期 1s 线性渐褪），
+   不用 CSS 过渡 */
 .flash-blind {
   position: absolute; inset: 0;
-  background: radial-gradient(ellipse at center, #fff 0%, #fff 58%, rgba(255, 255, 255, 0.86) 100%);
+  background: #fff;
   opacity: 0;
   will-change: opacity;
 }
@@ -99,18 +99,19 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
   will-change: opacity;
 }
 
-/* Gekko Dizzy 等离子糊屏：紫粉浆块糊满全屏、边缘留一圈可见（游戏同款
-   "covers the screen but leaves some visibility around the edges"） */
+/* Gekko Dizzy 等离子糊屏：绿紫史莱姆浆块糊满全屏、边缘留一圈可见（本体 goop
+   为绿紫色外星黏液，非纯紫；wiki "covers the screen but leaves some
+   visibility around the edges"） */
 .plasma-blind {
   position: absolute; inset: 0;
   backdrop-filter: blur(7px) saturate(0.6) brightness(0.72);
   -webkit-backdrop-filter: blur(7px) saturate(0.6) brightness(0.72);
   background:
-    radial-gradient(ellipse 34% 30% at 22% 30%, rgba(196, 108, 255, 0.85) 0%, rgba(196, 108, 255, 0) 100%),
-    radial-gradient(ellipse 30% 34% at 74% 24%, rgba(150, 84, 244, 0.8) 0%, rgba(150, 84, 244, 0) 100%),
-    radial-gradient(ellipse 38% 30% at 66% 72%, rgba(214, 96, 236, 0.82) 0%, rgba(214, 96, 236, 0) 100%),
-    radial-gradient(ellipse 32% 36% at 30% 76%, rgba(158, 96, 250, 0.8) 0%, rgba(158, 96, 250, 0) 100%),
-    radial-gradient(ellipse 50% 46% at 50% 48%, rgba(120, 62, 210, 0.62) 0%, rgba(120, 62, 210, 0) 100%);
+    radial-gradient(ellipse 34% 30% at 22% 30%, rgba(108, 236, 158, 0.85) 0%, rgba(108, 236, 158, 0) 100%),
+    radial-gradient(ellipse 30% 34% at 74% 24%, rgba(86, 210, 146, 0.8) 0%, rgba(86, 210, 146, 0) 100%),
+    radial-gradient(ellipse 38% 30% at 66% 72%, rgba(160, 108, 244, 0.82) 0%, rgba(160, 108, 244, 0) 100%),
+    radial-gradient(ellipse 32% 36% at 30% 76%, rgba(120, 228, 160, 0.8) 0%, rgba(120, 228, 160, 0) 100%),
+    radial-gradient(ellipse 50% 46% at 50% 48%, rgba(58, 158, 108, 0.62) 0%, rgba(58, 158, 108, 0) 100%);
   opacity: 0;
   will-change: opacity;
 }

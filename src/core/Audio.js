@@ -52,6 +52,17 @@ export class AudioSys {
     this.clip.oversample = '2x'
     this.master = this.ctx.createGain()
     this.master.gain.value = Math.pow(this.volume, 0.62) // 感知补偿曲线（见 setVolume）
+    // Deafened 出口链（维基 Status Effect：Nearsight 者同时 deafened）：master 后串
+    // lowpass + 增益，平时 20kHz/1.0 直通零音染；近视时压到 ~800Hz + 音量减 70%
+    // ——脚步/枪机/语音全糊掉，只留闷壳。k 由 FlashSystem.renderSync 按近视
+    // 透明度逐帧驱动（0..1），此处直接写值（60fps 小步进无拉链噪声）
+    this.deafenLP = this.ctx.createBiquadFilter()
+    this.deafenLP.type = 'lowpass'
+    this.deafenLP.frequency.value = 20000
+    this.deafenLP.Q.value = 0.5
+    this.deafenG = this.ctx.createGain()
+    this.deafenG.gain.value = 1
+    this.master.connect(this.deafenLP).connect(this.deafenG).connect(this.ctx.destination)
     // 干声直通：空间音效（_spatial/_movingVoice）与 UI/反馈音（爆头叮、击杀
     // 确认、倒计时等）接入这里——统一过压缩器+tanh 软限幅（多声叠加不破音），
     // 且不吃 bus 的混响发送（反馈要贴耳）；曾直连 master 绕过压限，击杀瞬间
@@ -59,7 +70,6 @@ export class AudioSys {
     this.dryBus = this.ctx.createGain()
     this.dryBus.connect(this.hpf)
     this.bus.connect(this.hpf).connect(this.comp).connect(this.clip).connect(this.master)
-      .connect(this.ctx.destination)
     // 混响（生成的脉冲响应：指数衰减噪声）→ 并入压缩器前，不回流 bus（避免反馈回路）
     this.reverb = this.ctx.createConvolver()
     this.reverb.buffer = this._makeIR(1.2, 3.4)
@@ -96,6 +106,16 @@ export class AudioSys {
   setVolume(v) {
     this.volume = v
     if (this.master) this.master.gain.value = Math.pow(v, 0.62)
+  }
+
+  // Deafened（Nearsight 附带状态）：k=0 清晰 → k=1 全闷。低通 20kHz→800Hz +
+  // 音量 1→0.3，调用方逐帧传值（FlashSystem 按近视屏效透明度同曲线驱动，
+  // 闷化与视野收束同步起/褪）
+  setDeafened(k) {
+    if (!this.ctx || !this.deafenLP) return
+    const c = Math.max(0, Math.min(1, k))
+    this.deafenLP.frequency.value = 20000 * Math.pow(800 / 20000, c) // 对数扫频：中段就有明显闷感
+    this.deafenG.gain.value = 1 - 0.7 * c
   }
 
   _makeIR(seconds, decay) {

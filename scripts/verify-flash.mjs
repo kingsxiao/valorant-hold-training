@@ -97,7 +97,9 @@ const destr = await page.evaluate(() => {
   if (hit) f.damage(40)
   const hp1 = f.proj?.hp
   if (hit) f.damage(40)
-  return { phase: f.proj?.phase, hitT: hit ? +hit.t.toFixed(2) : null, hp0, hp1, despawned: !f.proj, projType: f.proj?.type ?? null }
+  const hp2 = f.proj?.hp ?? null
+  if (hit) f.damage(40) // 眼 100HP（维基）：三发 40 才打空
+  return { phase: f.proj?.phase, hitT: hit ? +hit.t.toFixed(2) : null, hp0, hp1, hp2, despawned: !f.proj, projType: f.proj?.type ?? null }
 })
 console.log('destructible:', JSON.stringify(destr))
 await page.evaluate(() => window.__game.flashes.endRound())

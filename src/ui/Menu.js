@@ -4,6 +4,7 @@ import {
   sanitizeCrosshair, isLegacyCrosshair, migrateLegacyCrosshair,
 } from './crosshairCode.js'
 import { paintCrosshair } from './Crosshair.js'
+import { SKINS, sanitizeSkin } from '../weapons/skinMap.js'
 
 // 设置 / 暂停面板（DOM），设置持久化 localStorage；回合结算在 ResultPanel
 const LS_KEY = 'vht-settings-v1'
@@ -111,6 +112,7 @@ export class Menu {
       rampUp: false,
       gapSide: 'left',      // 缺口位置：左 / 右（切换即重建静态地图）
       peekSide: CONFIG.training.peekSide, // Bot 出场侧：left / right 固定一侧 / random 两侧随机
+      weaponSkin: 'default',  // Vandal 皮肤：default / aristocrat（官方商城皮肤，GLB 缺失自动回退默认）
       flash: 'off',         // 闪光干扰：off / kayo / skye / phoenix / yoru / breach / reyna / gecko / mix（敌方道具按维基数值 1:1）
       // 出厂默认 = 游戏默认形态（青十字，见 crosshairDefaults）；已有存档由
       // _sanitizeCfg 迁移/清洗后覆盖
@@ -147,6 +149,7 @@ export class Menu {
     for (const k of ['showFps', 'shadows', 'autoRes', 'rampUp', 'heatShimmer']) c[k] = !!c[k]
     c.gapSide = c.gapSide === 'right' ? 'right' : 'left' // 旧存档里的 doubleGap 一并失效忽略
     c.peekSide = ['left', 'right', 'random'].includes(c.peekSide) ? c.peekSide : CONFIG.training.peekSide
+    c.weaponSkin = sanitizeSkin('vandal', c.weaponSkin)
     c.flash = ['kayo', 'skye', 'phoenix', 'yoru', 'breach', 'reyna', 'gecko', 'mix'].includes(c.flash) ? c.flash : 'off'
     // 旧版简化准星模型（length/gap/tShape）→ 游戏同款模型；再全量清洗防手改
     if (isLegacyCrosshair(c.crosshair)) c.crosshair = migrateLegacyCrosshair(c.crosshair)
@@ -193,6 +196,8 @@ export class Menu {
       <div class="opt-grid" data-group="primary"></div>
       <div style="height:8px"></div>
       <div class="opt-grid" data-group="secondary"></div>
+      <div style="height:8px"></div>
+      <div class="opt-grid" data-group="weaponSkin"></div>
 
       <h2>参数</h2>
       <div class="slider-grid">
@@ -356,6 +361,18 @@ export class Menu {
       b.dataset.value = v
       b.onclick = () => { this.cfg.gapSide = v; this.syncButtons(); saveSettings({ gapSide: v }); this.applyAll?.() }
       gsBox.appendChild(b)
+    }
+
+    // Vandal 皮肤（官方商城皮肤，GLB 缺位自动回退默认）：实时生效——玩家枪
+    // 立即换，Bot 后续波次的挂枪跟着换（在场的不变）
+    const skBox = p.querySelector('[data-group=weaponSkin]')
+    for (const s of SKINS.vandal) {
+      const b = document.createElement('button')
+      b.className = 'opt-btn'
+      b.textContent = `Vandal 皮肤 · ${s.label}`
+      b.dataset.value = s.id
+      b.onclick = () => { this.cfg.weaponSkin = s.id; this.syncButtons(); saveSettings({ weaponSkin: s.id }); this.applyAll?.() }
+      skBox.appendChild(b)
     }
 
     // Bot 出场侧：固定左/右（练同向预瞄），或保留两侧随机（读局训练）；
@@ -689,6 +706,9 @@ export class Menu {
     }
     for (const b of this.panel.querySelectorAll('[data-group=peekSide] .opt-btn')) {
       b.classList.toggle('active', b.dataset.value === this.cfg.peekSide)
+    }
+    for (const b of this.panel.querySelectorAll('[data-group=weaponSkin] .opt-btn')) {
+      b.classList.toggle('active', b.dataset.value === this.cfg.weaponSkin)
     }
     for (const b of this.panel.querySelectorAll('[data-group=flashMode] .opt-btn')) {
       b.classList.toggle('active', b.dataset.value === this.cfg.flash)

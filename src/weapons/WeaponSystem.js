@@ -4,6 +4,7 @@ import { CONFIG, makeSprayPattern } from '../core/Config.js'
 import { damageFor, spreadAt, spreadParts } from './ballistics.js'
 import { buildWeaponModels, buildCustomArms } from './ViewmodelFactory.js'
 import { poseGloveHands, poseCustomHands } from './HandsRig.js'
+import { vmKeyFor, baseWeaponOf } from './skinMap.js'
 
 // ============================================================================
 // 武器系统：命中判定（射线）+ 散布 + 后坐力弹道 + 切枪 + 第一人称持枪动画。
@@ -107,7 +108,8 @@ export class WeaponSystem {
     this.vmSwing = 0  // 挥刀相位 0..1（sin 包络弧线）
     this.idleT = 0    // 呼吸微摆计时
     this.muzzleOffset = new THREE.Vector3()
-    this.customVms = {} // per-weapon 自有枪模（vandal/phantom → GLB 场景）
+    this.customVms = {} // per-weapon 自有枪模（vandal/phantom → GLB 场景；皮肤键 'vandal:aristocrat'）
+    this.skin = 'default' // 当前皮肤 id（skinMap.SKINS；activeCustomVm 按此解析键）
     this.customHands = null
     this.handsAnim = null // glove 路径的手部动画基准（HandsRig.poseGloveHands 注入）
     this._gloveAssets = null // {scene, arms}：切枪重摆（双枪各自握姿）用
@@ -115,9 +117,19 @@ export class WeaponSystem {
   }
 
   // 当前武器的自有枪模（无则 null）。双枪（vandal/phantom）各有 GLB；
-  // 旧单模型路径把同一场景挂在两把步枪名下，取值逻辑一致
+  // 旧单模型路径把同一场景挂在两把步枪名下，取值逻辑一致。
+  // 皮肤（vandal:aristocrat 等）也住在 customVms 里，按 this.skin 解析键；
+  // 皮肤键缺失自动回退武器本体（GLB 没加载也不至于没枪）
   activeCustomVm(id = this.currentVmId) {
-    return (id === 'vandal' || id === 'phantom') ? (this.customVms[id] ?? null) : null
+    if (id !== 'vandal' && id !== 'phantom') return null
+    return this.customVms[vmKeyFor(id, this.skin, this.customVms)] ?? null
+  }
+
+  // 皮肤切换（设置面板实时生效）：只换 activeCustomVm 解析结果 + 显隐，
+  // 握姿/取景不动 —— 皮肤与默认皮肤共用同一把枪的全部标定
+  setSkin(skin) {
+    this.skin = skin
+    this.weaponMeshFor(this.currentVmId)
   }
 
   weaponMeshFor(id) {
@@ -211,13 +223,14 @@ export class WeaponSystem {
     }
     scene.userData.eject ??= new THREE.Vector3(bb.min.x + size.x * 0.56, bb.min.y + size.y * 0.62, bb.min.z)
     // 各枪取景（2026-09-04 双枪联调）：vandal 枪口 NDC (0.26,-0.52)、phantom 消音器
-    // 更长取景压低 —— 默认值沿旧单模型；逐枪 pos/scale 在此覆盖
+    // 更长取景压低 —— 默认值沿旧单模型；逐枪 pos/scale 在此覆盖。
+    // 皮肤键（vandal:aristocrat）按底层武器取景 —— 同一把枪
     const FRAMING = {
       vandal: { pos: new THREE.Vector3(0.10, 0, -0.40), scale: 0.94 },
       phantom: { pos: new THREE.Vector3(0.10, -0.02, -0.42), scale: 0.88 },
     }
-    scene.userData.pos = FRAMING[id]?.pos ?? new THREE.Vector3(0.15, -0.13, -0.5)
-    scene.userData.scale = FRAMING[id]?.scale ?? 1
+    scene.userData.pos = FRAMING[baseWeaponOf(id)]?.pos ?? new THREE.Vector3(0.15, -0.13, -0.5)
+    scene.userData.scale = FRAMING[baseWeaponOf(id)]?.scale ?? 1
     // 活动机件：优先绑模型自带枪机框（Phantom 的 bolt carrier —— 网格节点名可直配）。
     // attach 挂到枪组根（作者系）后其 position 轴向即作者系，可沿 +X 后坐；
     // 无命名机件时退回程序化拉机柄（白模/命名不明的模型仍要有机件动画）

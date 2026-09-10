@@ -146,6 +146,7 @@ export const CONFIG = {
     peekDelayMinMs: 600,    // 架枪模式：Bot 出现前的随机等待
     peekDelayMaxMs: 2600,
     peekSide: 'left',       // Bot 出场侧：left / right 固定一侧练同向预瞄，random 保留两侧随机
+    weaponSkin: 'default',  // Vandal 皮肤：default / aristocrat（官方商城 Aristocrat 收藏集，镀金）
     peekStopChance: 0.35,   // 横移中急停一瞬的概率（模拟真人 swing 抖动）
     crossChance: 0.5,       // 每波风格：侧面跑过（贯穿缺口顺跑向）vs 横向拉出（肩peek 拉出对枪）
     pullJiggleChance: 0.3,  // 拉出波里"露头即缩"jiggle-peek 的概率（拉到中段折返）
@@ -187,8 +188,9 @@ export const CONFIG = {
     breach: { windup: 0.5, maxBlind: 2.25 },
     // Reyna Leer：近视（非白闪）——Missile 穿地形到固定 10m 部署距（0.55s，未确认值），
     // 到位 0.4s 预备（v5.07）后施加近视 1.6s（看清瞳孔即持续命中，6m 视界，
-    // game files）；60HP 可击毁
-    reyna: { deployDist: 10, travel: 0.55, arrivalWindup: 0.4, nearsight: 1.6, visionRadius: 6, hp: 60, radius: 0.32 },
+    // game files）；100HP 可击毁（维基）。近视附带 Deafened：音频被闷（维基
+    // Status Effect：Nearsight 者同时 deafened——脚步/枪声全糊，只能贴脸听）
+    reyna: { deployDist: 10, travel: 0.55, arrivalWindup: 0.4, nearsight: 1.6, visionRadius: 6, hp: 100, radius: 0.32 },
     // Gekko Dizzy：Class 2 投掷（同 KAY/O 18m/s、g2.94）——0.65s 激活预备（未确认值）
     // 后减速悬停，活跃 1s（v9.08）内对 45m 视线内目标 0.35s 锁定（v7.12）喷等离子：
     // 溅射 2.5m，全屏遮蔽 2s = 1s 满效 + 1s 渐褪（game files；转身不可避——

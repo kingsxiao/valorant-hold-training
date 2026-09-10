@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js'
 import { applyAgentTextures, applyViewmodelTextures, applyHandsTextures } from '../world/ModelTexturing.js'
+import { buildLocomotion } from './Locomotion.js'
 
 // 手指修长化：J-Toastie 手为卡通比例（指节粗短）。该骨架指骨沿本地 +Y 延伸，
 // 平移 y 分量拉伸 12% 改善长宽比；Wrist/Hand 不动（手掌宽度不变）。
@@ -31,7 +32,8 @@ function smoothSkinGeometry(root) {
 // 用户/开源模型加载：
 //   public/models/agent-{jett,phoenix,sage,sova}.glb → 无畏契约英雄池（每 bot 随机一名，
 //                                          UE 风格骨架 + 内嵌 PBR 贴图 + kamae 持枪待机 clip；
-//                                          走/跑 clip 由 core/GaitBake 步态数学现场烘焙）
+//                                          走/跑/横移优先官方 .psa 曲线（locomotion.json），
+//                                          缺数据才由 core/GaitBake 步态数学现场烘焙）
 //   public/models/agent.glb              → 训练机器人外观（当前内置：Mixamo "X Bot"，CC-BY，
 //                                          含骨骼走路动画；英雄池缺位时的单模板回退；自动缩放到
 //                                          总高 1.8m、脚底对地、面向 -Z）
@@ -41,6 +43,8 @@ function smoothSkinGeometry(root) {
 //   public/models/viewmodel-phantom.glb  → Phantom 第一人称枪模（"AK 47 Tactical Upgrade" by
 //                                          Mateusz Woliński, Sketchfab, CC-BY 4.0；带消音器/导轨，
 //                                          含 bolt carrier / magazine / suppressor 独立网格）
+//   public/models/viewmodel-vandal-aristocrat.glb → Vandal 官方皮肤（Aristocrat 收藏集，
+//                                          内部代号 ArtDeco；Rocklan 包 .blend 转换，镀金 + RedDot 瞄具）
 //   public/models/viewmodel.glb          → 旧版单枪模回退（Quaternius AK47，CC0 白模，
 //                                          无贴图 → 程序化盒式投影 UV + 材质）
 //   public/models/glove.glb              → 第一人称高精度手套（当前内置：J-Toastie "Gloved Hand"，CC-BY 3.0，
@@ -72,11 +76,12 @@ export async function loadUserAssets() {
   const loaded = await Promise.all([
     tryLoad('agent.glb'), ...AGENT_POOL.map(tryLoad),
     tryLoad('viewmodel-vandal.glb'), tryLoad('viewmodel-phantom.glb'),
+    tryLoad('viewmodel-vandal-aristocrat.glb'),
     tryLoad('viewmodel.glb'), tryLoad('hands.glb'), tryLoad('glove.glb'),
   ])
   const agentGltf = loaded[0]
   const agentPoolGltfs = loaded.slice(1, 1 + AGENT_POOL.length)
-  const [vandalGltf, phantomGltf, legacyVmGltf, handsGltf, gloveGltf] = loaded.slice(1 + AGENT_POOL.length)
+  const [vandalGltf, phantomGltf, aristocratGltf, legacyVmGltf, handsGltf, gloveGltf] = loaded.slice(1 + AGENT_POOL.length)
 
   // agent 归一化：匿名节点命名/轨道引用重写（BrainStem 类模型）→ 缩放 1.8m →
   // 居中贴地 → 白模补程序化贴图（自带 PBR 贴图的英雄 GLB 原生材质直接保留）
@@ -116,8 +121,22 @@ export async function loadUserAssets() {
     if (!hasRealTextures(agent)) applyAgentTextures(agent) // GLB 白模 → 程序化装甲/关节贴图
     return { root: agent, clips: animations }
   }
-  for (const gltf of agentPoolGltfs) {
-    if (gltf?.scene) out.agents.push(normalizeAgent(gltf))
+  for (let i = 0; i < agentPoolGltfs.length; i++) {
+    const gltf = agentPoolGltfs[i]
+    if (!gltf?.scene) continue
+    const entry = normalizeAgent(gltf)
+    entry.hero = AGENT_POOL[i].replace(/^agent-/, '').replace(/\.glb$/, '')
+    out.agents.push(entry)
+  }
+  // 官方 .psa 走/跑/横移曲线（scripts/psa2clips.mjs 从 Rocklan 官方动画转出）：
+  // 每英雄按 GLB 骨名后缀解析成 AnimationClip——有官方数据就直接播官方骨骼曲线，
+  // 没有才退回 GaitBake 的步态数学烘焙
+  if (out.agents.length) {
+    let locoJson = null
+    try {
+      locoJson = await (await fetch(new URL('models/locomotion.json', document.baseURI).href)).json()
+    } catch { /* 缺文件静默退回烘焙 */ }
+    if (locoJson) for (const e of out.agents) e.locomotion = buildLocomotion(locoJson, e.hero, e.root)
   }
   if (!out.agents.length && agentGltf?.scene) {
     const a = normalizeAgent(agentGltf)
@@ -140,7 +159,8 @@ export async function loadUserAssets() {
     vm.position.z -= c.z
     return vm
   }
-  for (const [key, gltf] of [['vandal', vandalGltf], ['phantom', phantomGltf]]) {
+  for (const [key, gltf] of [['vandal', vandalGltf], ['phantom', phantomGltf],
+    ['vandal:aristocrat', aristocratGltf]]) {
     if (!gltf?.scene) continue
     const vm = normalizeViewmodel(gltf.scene)
     if (!hasRealTextures(vm)) applyViewmodelTextures(vm) // 白模才盒式投影 + 程序化材质

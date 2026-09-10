@@ -4,7 +4,8 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { CONFIG } from '../core/Config.js'
 import { groundStep, accelFor } from '../core/GroundMotion.js'
 import { peekFacingYaw, leanInto, strafeRampW, strafeStepPose } from '../core/PeekPose.js'
-import { matchRigBones, bakeLocomotionClips, bakeDeathClips } from '../core/GaitBake.js'
+import { matchRigBones, bakeLocomotionClips, bakeDeathClips, smoothW } from '../core/GaitBake.js'
+import { locoWeights, stepFootPinState } from '../core/Locomotion.js'
 import { solveGunAim, pickAimTarget, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK } from '../core/WeaponAim.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
@@ -57,6 +58,11 @@ const _ikT = new THREE.Vector3()
 const _ikDir = new THREE.Vector3()
 const _chainW = new THREE.Quaternion() // 腿链覆盖：髋世界 → 逐骨下传的父级世界
 const _curW = new THREE.Quaternion()
+const _fpHip = new THREE.Vector3() // 脚钉地：髋/膝/脚世界位置 + 锚点
+const _fpKnee = new THREE.Vector3()
+const _fpFoot = new THREE.Vector3()
+const _fpAnchor = new THREE.Vector3()
+const _IDENTITY = new THREE.Quaternion()
 
 export class Bot {
   static customTemplate = null   // 用户 GLB 模板（UserAssets 注入）
@@ -363,6 +369,16 @@ export class Bot {
       let idle = find(/idle|stand|kamae/i) // kamae：无畏契约英雄 GLB 的持枪站姿待机 clip
       let walk = find(/walk/i)
       let run = find(/run|sprint/i)
+      const official = tpl.locomotion ?? null // 官方 .psa 曲线集（UserAssets 按 hero 解析）
+      if (!walk && !run && official) {
+        // 官方骨骼曲线直接播放（Rocklan 官方 .psa：Jett/Sova 走跑 + Sova 横移
+        // E/W；与英雄 GLB 同源同约定——kamae=psa Aim 站姿逐骨 0.0° 实测）。
+        // 播放头同样由步态相位锁定（周期=官方时长，速率恒等于实际移速；
+        // STEP_LEN 1.55 取官方步距 1.44~1.62 中值，≤5% 滑步与烘焙口径一致）
+        walk = official.walk
+        run = official.run
+        this._officialLo = true
+      }
       if (!walk && !run && rig) {
         // 无畏契约英雄 GLB 只有 kamae 待机：走/跑 clip 用步态数学现场烘焙
         // （周期 2×STEP_LEN/参考速度，_setAnimWeights 从步态相位锁定播放头，
@@ -388,6 +404,18 @@ export class Bot {
       this.anim.walk.timeScale = 0
       if (idle && idle !== walk) this.anim.idle = mk(idle)
       if (run) { this.anim.run = mk(run); this.anim.run.timeScale = 0 }
+      // 官方横移 E/W 动作对（pull 面向玩家侧移时取代程序化侧移腿覆盖）
+      if (official?.strafe) {
+        this.anim.strafe = {}
+        for (const side of ['E', 'W']) {
+          this.anim.strafe[side] = {
+            walk: mk(official.strafe[side].walk),
+            run: mk(official.strafe[side].run),
+          }
+          this.anim.strafe[side].walk.timeScale = 0
+          this.anim.strafe[side].run.timeScale = 0
+        }
+      }
       if (this.deathClip) { // 死亡塌倒 clip：常态零权重，startDeath 时接管
         this.deathAction = this.mixer.clipAction(this.deathClip)
         this.deathAction.play()
@@ -422,28 +450,49 @@ export class Bot {
     for (const geo of this._ownGeos ?? []) geo.dispose()
   }
 
-  // 骨骼动画权重：idle ↔ walk ↔ run 按移速平滑过渡。
-  // clip 播放头由步态相位直接驱动（walkPhase → time，周期 2×STEP_LEN/参考速度：
-  // walk ≈3.39m/s、run ≈5.4m/s 官方口径）——播放速率恒等于实际移速（不滑步），且
-  // 走/跑/侧移三套步态同相（混合中落脚帧一致）、站定相位停走 = 冻结在当前帧
-  // （单 clip 老模型的冻结语义），恢复移动不跳相位。timeScale 恒 0：mixer.update
-  // 不再自行推进播放头（否则会在两次锁定之间漂移）
-  _setAnimWeights(speed) {
+  // 骨骼动画权重：idle ↔ walk ↔ run 按移速平滑过渡 × 前进(N)/横移(E/W) 正交分配
+  // （locoWeights 纯函数）。clip 播放头由步态相位直接驱动（walkPhase → time，
+  // 官方曲线周期=官方时长、烘焙曲线周期=2×STEP_LEN/参考速度）——播放速率恒等
+  // 于实际移速（不滑步），走/跑/横移同相（混合中落脚帧一致）、站定相位停走 =
+  // 冻结在当前帧，恢复移动不跳相位。timeScale 恒 0：mixer.update 不自行推进。
+  // 权重本身过 smoothW 时间常数：纯速度映射在摩擦急停下会瞬跳（速度带
+  // 1.15→0.25 只占急停最后 ~30ms，腿从中摆位「瞬移」到站姿）；淡出 ~143ms 让
+  // 收腿读作一次干净的并步（起步淡入仍跟速度，即走即起）
+  _setAnimWeights(speed, dt = 0) {
     const A = this.anim
     if (!A) return
-    const moveW = THREE.MathUtils.clamp((speed - 0.25) / 0.9, 0, 1)   // 起步/急停的淡入淡出
-    const runW = A.run ? THREE.MathUtils.clamp((speed - 3.0) / 1.6, 0, 1) : 0
-    if (A.idle) A.idle.setEffectiveWeight(1 - moveW)
-    A.walk.setEffectiveWeight(moveW * (1 - runW) + (A.idle ? 0 : 1 - moveW))
-    if (A.run) A.run.setEffectiveWeight(moveW * runW)
+    const moveTarget = THREE.MathUtils.clamp((speed - 0.25) / 0.9, 0, 1)   // 起步/急停的淡入淡出
+    const runTarget = A.run ? THREE.MathUtils.clamp((speed - 3.0) / 1.6, 0, 1) : 0
+    this._moveW = smoothW(this._moveW ?? 0, moveTarget, dt)
+    this._runW = smoothW(this._runW ?? 0, runTarget, dt)
+    const W = locoWeights({
+      moveW: this._moveW, runW: this._runW,
+      strafeW: this._strafeW, hasStrafe: !!A.strafe,
+    })
+    if (A.idle) A.idle.setEffectiveWeight(W.idle)
+    A.walk.setEffectiveWeight(A.idle ? W.walkN : W.walkNoIdle)
+    if (A.run) A.run.setEffectiveWeight(W.runN)
     const ph = ((this.walkPhase % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
     A.walk.time = (ph / (Math.PI * 2)) * A.walk.getClip().duration
     if (A.run) A.run.time = (ph / (Math.PI * 2)) * A.run.getClip().duration
+    // 横移 E/W：官方曲线与前进同相位基准（官方横移步距≈前进步距，无需
+    // STRAFE_STEP_LEN 换算——那套 1.15m 节奏只属于程序化侧移覆盖）
+    if (A.strafe) {
+      const S = A.strafe[this._strafeSide ?? 'E']
+      S.walk.setEffectiveWeight(W.walkS)
+      S.run.setEffectiveWeight(W.runS)
+      S.walk.time = (ph / (Math.PI * 2)) * S.walk.getClip().duration
+      S.run.time = (ph / (Math.PI * 2)) * S.run.getClip().duration
+      // 非当前侧的对侧动作压零（防 _strafeSide 切换后残留权重）
+      const other = A.strafe[this._strafeSide === 'W' ? 'E' : 'W']
+      other.walk.setEffectiveWeight(0)
+      other.run.setEffectiveWeight(0)
+    }
   }
 
   _stepAnim(speed, dt) {
     if (!this.mixer) return
-    this._setAnimWeights(speed)
+    this._setAnimWeights(speed, dt)
     // 60Hz 采样足够平滑，省一半蒙皮计算（逻辑帧 128Hz）。每次 update 后快照
     // 腿骨骼的 clip 原值——程序化侧移覆盖以它为混合基准（未跑 update 的帧
     // 沿用最近快照，≤16ms 滞后与整体位姿一致）
@@ -494,7 +543,12 @@ export class Bot {
     const moving = Math.abs(this.velX) > 0.4
     _gaim.copy(_gv1).addScaledVector(_gv2, 4) // 手线远点（默认目标）
     if (pickAimTarget({ style: this.peek?.style, stopped, moving }) === 'player') {
-      _gaim.lerp(_v.set(player.pos.x, player.pos.y + player.eyeHeight, player.pos.z), 0.5)
+      // 站定对枪：枪口全权重钉玩家眼位——瞄准里只要混着手线分量，待机呼吸摆动
+      // 胸廓 → 手线转 → 瞄准跟转 → 左手 IK 又追新枪轴，闭环在部分英雄臂展下
+      // 增益≈1，枪口会画几度的圈；本体表现是身体微动、枪口纪律性压住目标。
+      // 拉出/跑动中保留 0.5 扫入过渡（枪从携枪位压向玩家的进入感）
+      const k = moving ? 0.5 : 1
+      _gaim.lerp(_v.set(player.pos.x, player.pos.y + player.eyeHeight, player.pos.z), k)
     }
     solveGunAim(_gv1, _gaim, _gq3)
     if (!G.init) { G.aimQ.copy(_gq3); G.init = true } // 出场首帧直接落位不甩枪
@@ -599,6 +653,12 @@ export class Bot {
     const leanRate = Math.abs(leanTarget) > Math.abs(this.lean) ? 8 : 18
     this.lean += (leanTarget - this.lean) * Math.min(1, dt * leanRate)
     this.mesh.rotation.z = this.lean
+    // 官方横移 E/W clip：腿/盆骨曲线全部来自 mixer 播放（权重在 _setAnimWeights），
+    // 程序化腿覆盖退休——只保留身体侧倾与急停高度收敛（起伏在 clip 的盆骨轨道里）
+    if (this.anim?.strafe) {
+      if (w <= 0) this.mesh.position.y *= 1 - Math.min(1, dt * 22)
+      return
+    }
     if (w > 0) {
       // 横移相位保持 1 步/1.15m 的出场节奏（全局 STEP_LEN 1.55 是走/跑官方口径，
       // 拉出横移若跟着变会慢 26%，节奏感尽失——见 STRAFE_STEP_LEN）
@@ -662,6 +722,62 @@ export class Bot {
       _q3.copy(this.mesh.quaternion).multiply(rig.hipsBind)
       _q3.premultiply(_q4.copy(_chainW).invert())
       rig.hips.quaternion.copy(hq).slerp(_q3, w)
+    }
+  }
+
+  // 官方曲线防滑步：支撑期脚钉地 IK。官方 .psa 导出剥离了根位移——脚相对骨盆
+  // 无净后退（实测支撑脚随身体全速滑地 ~5.4m/s，N/E/W 三套全中），相位锁定只保
+  // 步频「节奏」，保不住落点「位置」。每个支撑期把脚钉在落地点：低脚记锚 →
+  // 两骨 IK（髋-膝，与左手持枪同款 solveTwoBoneIK）把脚世界位置拉回锚点 →
+  // 抬脚释放（权重 20/s ramp 防跳变，超臂展连续解钳时也放——脚跟离地的蹬地
+  // 段允许少量滑动）。每 tick 先从 _clipQ 快照还原本帧 clip 姿态再叠加 IK——
+  // mixer 只在 60Hz 门控里写骨骼，缺这一步 IK 会在自家输出上累积（快照反馈坑，
+  // 与站定微动同款教训）。摆动腿不受影响（官方曲线原样）；站定时双脚入锚 =
+  // 钉住站姿（自然）。烘焙近似路径数学上已防滑（步幅=大腿摆幅覆盖），不启用。
+  _stepFootPin(dt) {
+    const rig = this._strafeRig
+    if (!rig || !this._officialLo) return
+    this._loMinY = 9
+    for (const leg of rig.legs) {
+      const st = leg.foot.userData._pin ??= { anchor: new THREE.Vector3(), has: false, w: 0 }
+      const snap = leg.up.userData._clipQ
+      if (!snap) continue // 首帧快照未建
+      // 1) 还原本帧 clip 姿态（60Hz 快照，两次 update 之间沿用最近值）
+      leg.up.quaternion.copy(leg.up.userData._clipQ)
+      leg.knee.quaternion.copy(leg.knee.userData._clipQ)
+      leg.foot.quaternion.copy(leg.foot.userData._clipQ)
+      leg.foot.updateWorldMatrix(true, false) // 含祖先链：还原后的膝/脚矩阵一并刷新
+      leg.foot.getWorldPosition(_fpFoot)
+      // mesh 局部脚高（扣除当前身体偏移）——直接量世界高会把上一 tick 的偏移喂回
+      // 量测，定点迭代只收敛到所需偏移的一半
+      this._loMinY = Math.min(this._loMinY, _fpFoot.y - this.mesh.position.y)
+      if (this._pinOff) continue // 调试/曲线比对：只量高度不钉地
+      // 2) 支撑判定 + 权重坡（迟滞带防边界抖动，语义锁在 Locomotion.stepFootPinState
+      //    单测）；入锚沿记录锚点（IK 把脚拉回世界落点）
+      const was = st.has
+      stepFootPinState(st, _fpFoot.y, dt)
+      if (st.has && !was) st.anchor.copy(_fpFoot)
+      if (st.w <= 0) continue
+      // 3) IK 目标 = 当前脚位与锚点按 w 过渡（进入/退出都平滑），解髋-膝两骨链
+      _fpAnchor.copy(_fpFoot).lerp(st.anchor, st.w)
+      leg.up.matrixWorld.decompose(_fpHip, _q1, _gscl)
+      leg.knee.matrixWorld.decompose(_fpKnee, _q2, _gscl)
+      const sol = solveTwoBoneIK({ shoulder: _fpHip, elbow: _fpKnee, hand: _fpFoot, target: _fpAnchor })
+      if (!sol) continue
+      // clamped（腿全伸）照常应用：clamped 解 = 指向锚点方向的满展位，脚沿可达
+      // 弧后扫 = 蹬地推移的自然表现（跑步支撑期腿本就接近全伸，按 clamped 放锚
+      // 会让锚点 4tick 内乒乓）。真正释放只看抬脚（y>0.26）与异常远锚
+      if (_fpAnchor.distanceTo(_fpFoot) > 0.5) { st.has = false; continue }
+      // 4) 共轭落骨局部（与 _stepHandIK 同款：父级世界 Q 前乘 meshQ 升场景系）
+      const hipParentW = this._boneWorldQ(leg.up.parent, _chainW).premultiply(this.mesh.quaternion)
+      _q3.setFromUnitVectors(sol.abDirCur, sol.dirAb)
+      _q3.slerp(_IDENTITY, 1 - st.w)
+      leg.up.quaternion.premultiply(_q4.copy(hipParentW).invert().multiply(_q3).multiply(hipParentW))
+      _gq1.copy(hipParentW).multiply(leg.up.quaternion)
+      _ikDir.copy(leg.foot.position).normalize().applyQuaternion(_gq2.copy(_gq1).multiply(leg.knee.quaternion))
+      _q3.setFromUnitVectors(_ikDir, sol.dirCb)
+      _q3.slerp(_IDENTITY, 1 - st.w)
+      leg.knee.quaternion.premultiply(_q4.copy(_gq1).invert().multiply(_q3).multiply(_gq1))
     }
   }
 
@@ -788,6 +904,11 @@ export class Bot {
     this._prevSpeed = 0
     this._wasFast = false
     if (this.legL) { this.legL.rotation.set(0, 0, 0); this.legR.rotation.set(0, 0, 0) }
+    if (this._strafeRig) for (const leg of this._strafeRig.legs) { // 不带上一条的脚钉锚点
+      const st = leg.foot.userData._pin
+      if (st) { st.has = false; st.w = 0 }
+    }
+    this._loY = 0 // 官方曲线贴地高度偏移归零
     this.setOpacity(1)
     this.blobMat.opacity = 1
     this.spawnGuardUntil = this.now() + CONFIG.bot.spawnGuardMs / 1000
@@ -803,6 +924,14 @@ export class Bot {
       if (this.deathAction) this.deathAction.stop() // 先停死亡 clip，update(0) 才是干净重摆
       this.anim.walk.time = 0
       if (this.anim.run) this.anim.run.time = 0
+      if (this.anim.strafe) {
+        for (const side of ['E', 'W']) {
+          this.anim.strafe[side].walk.time = 0
+          this.anim.strafe[side].run.time = 0
+        }
+        this._strafeSide = null
+      }
+      this._moveW = this._runW = this._strafeW = 0 // 平滑权重归零（不带旧淡出尾巴）
       this._setAnimWeights(0)
       this.mixer.update(0)
       this._animAcc = 0
@@ -873,6 +1002,10 @@ export class Bot {
         A.walk.setEffectiveWeight(0)
         if (A.idle) A.idle.setEffectiveWeight(0)
         if (A.run) A.run.setEffectiveWeight(0)
+        if (A.strafe) for (const side of ['E', 'W']) {
+          A.strafe[side].walk.setEffectiveWeight(0)
+          A.strafe[side].run.setEffectiveWeight(0)
+        }
       }
       this.deathAction.reset()
       this.deathAction.setEffectiveWeight(1)
@@ -1005,13 +1138,36 @@ export class Bot {
     if (this.legL && this.legR) {
       this._stepLegs(speed, dt)
     } else if (this.mixer) {
-      const w = strafeRampW({ style: this.peek?.style, speed })
-      // 步态相位随位移推进（每 STEP_LEN 米 = π）——烘焙 clip 播放头（_setAnimWeights
-      // 相位锁定）与侧移姿态都由它驱动；mixer 假人统一在这里推进（不含
-      // _stepStrafeGait：骨链不齐的老模型 rig=null 提前返回，相位也不能停）
+      // 横移权重与走跑权重同过时间常数（急停收腿不瞬移，见 _setAnimWeights）
+      const wT = strafeRampW({ style: this.peek?.style, speed })
+      this._strafeW = smoothW(this._strafeW ?? 0, wT, dt)
+      const w = this._strafeW
+      // 官方横移 E/W 侧别选择：模型局部横向速度 +X（右）= E。起步阶段面向未转正
+      // 时 lx 符号会错（从 yaw0 转向面向玩家的过程中 cos 变号）——权重混合段
+      // （w<0.85，基本还在墙后）持续重估，速度立起来后才锁定；换向（leave 折返）
+      // 时 w 淡出自然重新解锁
+      if (this.anim?.strafe && w < 0.85 && Math.abs(this.velX) > 0.5) {
+        const lx = this.velX * Math.cos(this.mesh.rotation.y)
+        this._strafeSide = lx > 0 ? 'E' : 'W'
+      }
+      // 步态相位随位移推进（每 STEP_LEN 米 = π）——官方/烘焙 clip 播放头
+      // （_setAnimWeights 相位锁定）与侧移姿态都由它驱动；mixer 假人统一在这里
+      // 推进（不含 _stepStrafeGait：骨链不齐的老模型 rig=null 提前返回，相位也
+      // 不能停）
       this.walkPhase += speed * dt * Math.PI / STEP_LEN
-      this._stepAnim(speed * (1 - w), dt)
+      this._stepAnim(speed, dt)
       this._stepStrafeGait(speed, w, dt)
+      this._stepFootPin(dt) // 官方曲线支撑脚钉地（防全速滑步）
+      // 官方曲线垂直根运动重建：导出剥离根位移时把盆骨的支撑期下落也剥掉了
+      // （实测 runN 全周期脚在 0.45~0.96m = 悬空跑）——身体高度跟随「最低脚贴地」
+      // 目标，跑步固有的周期起伏随之回归；钉地 IK 与它配合：一个管水平钉位，
+      // 一个管整体贴地。受击下沉/踉跄在其后叠加（本 tick 生效，下 tick 重算）
+      if (this._officialLo) {
+        // 直通跟踪：目标本身就是 clip 相位的平滑函数（无需再滤波；一阶跟踪在
+        // 3.5Hz 的支撑期下落上滞后会让低点悬空 5cm+、钉地入不了锚）
+        this._loY = 0.09 - this._loMinY
+        this.mesh.position.y = this._loY
+      }
       this._stepGun(dt, ctx.player, stopped)
     } else if (speed > 0.3) {
       // 无动画的自定义模型兜底：至少保留位移节奏的起伏

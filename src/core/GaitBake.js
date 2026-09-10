@@ -92,6 +92,15 @@ export const GAIT = {
   run: { thigh: 0.82, knee: 1.55, kneeBase: 0.38, foot: 0.45, toe: 0.13, bob: 0.012, hipsYaw: 0.201, hipsRoll: 0.176, hipsPitch: -0.15, lean: 0.05, neck: -0.08 },
 }
 
+// 动画权重的时间常数平滑（线性限速：每 tick 最多向目标走 dt×rate）：rise 快
+// （起步即走，45ms 到位）/ fall 慢（急停收腿 ~143ms 给一次干净的并步）。纯速度
+// 映射的权重在摩擦急停下会瞬跳——5.4→0 全程 ~0.15s，速度带 1.15→0.25 只占最后
+// ~30ms，腿从中摆位「瞬移」到站姿
+export function smoothW(cur, target, dt, rise = 22, fall = 7) {
+  const maxStep = dt * (target > cur ? rise : fall)
+  return cur + THREE.MathUtils.clamp(target - cur, -maxStep, maxStep)
+}
+
 // 单腿三关节角：大腿正弦摆动；膝 = 基础屈曲（官方走/跑全程不屈直）+ 后摆段踢腿
 // 折膝（脚跟离地）；脚 = 落脚前勾脚尖/蹬地压脚尖的小幅摆动；趾 = 蹬地屈伸（官方
 // L_Toe 2× 步频谐波主导：跑 7.5°/走 8.85°，峰值在膝摆动峰前 ~0.5rad = 蹬地瞬间，

@@ -2,7 +2,7 @@
 // 骨名映射（UE/Mixamo 双口径 + 辅助骨排除）与程序化 walk/run clip 烘焙
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
-import { RIG_MATCH, matchRigBones, legAngles, bakeLocomotionClips, GAIT } from '../src/core/GaitBake.js'
+import { RIG_MATCH, matchRigBones, legAngles, bakeLocomotionClips, GAIT, smoothW } from '../src/core/GaitBake.js'
 
 const m = (re, s) => re.test(s)
 
@@ -236,5 +236,24 @@ describe('bakeLocomotionClips 烘焙', () => {
     expect(hips.quaternion.x).toBeDefined()
     // 播放后骨骼确实离开 bind 姿态（步态在动）
     expect(hips.position.y).not.toBe(0.1)
+  })
+})
+
+describe('smoothW 权重时间常数（急停收腿不瞬移）', () => {
+  it('淡出 ~0.14s：30ms 一档只退 ~21%，60ms 后仍有可观残余（速度映射下早已归零）', () => {
+    expect(smoothW(1, 0, 0.03)).toBeCloseTo(0.79, 4)
+    let w = 1
+    for (let i = 0; i < 20; i++) w = smoothW(w, 0, 0.003) // 60ms @128Hz
+    expect(w).toBeGreaterThan(0.3)
+    for (let i = 0; i < 47; i++) w = smoothW(w, 0, 0.003) // ~200ms 收完
+    expect(w).toBeLessThan(0.02)
+  })
+
+  it('淡入快（起步即走）：45ms 内到位；已在目标值不漂移', () => {
+    let w = 0
+    for (let i = 0; i < 15; i++) w = smoothW(w, 1, 0.003)
+    expect(w).toBeGreaterThan(0.95)
+    expect(smoothW(0.5, 0.5, 0.05)).toBe(0.5)
+    expect(smoothW(0.5, 0.5, 0)).toBe(0.5)
   })
 })

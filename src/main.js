@@ -13,6 +13,7 @@ import { BotManager, MODE_INFO } from './entities/BotManager.js'
 import { Crosshair } from './ui/Crosshair.js'
 import { HUD } from './ui/HUD.js'
 import { Menu, loadBests, saveBest, loadLastRound, saveLastRound, loadFastest, saveFastest, loadHistory, saveHistory, loadTotalKills, saveTotalKills } from './ui/Menu.js'
+import { sanitizeSkin } from './weapons/skinMap.js'
 import { ResultPanel } from './ui/ResultPanel.js'
 import { computeStats } from './core/stats.js'
 import { loadUserAssets } from './core/UserAssets.js'
@@ -253,6 +254,8 @@ menu.applyAll = () => {
   // Bot 出场侧：left/right 固定一侧（同向预瞄训练）/ random 两侧随机（读局）。
   // 只影响之后排程的波次——本波在场的 Bot 不瞬移，跑完这一条横移线
   bots.params.peekSide = ['left', 'right', 'random'].includes(cfg.peekSide) ? cfg.peekSide : 'random'
+  // Vandal 皮肤：玩家枪即时换；Bot 模板池 vandal 项替换（后续波次生效）
+  applyWeaponSkin(cfg.weaponSkin)
   // 缺口左右切换：重建静态地图（PBR 纹理单例缓存，重排几何开销极小）。
   // 场上 Bot 的横移线是旧缺口的，就地回收重排，避免从已封死的墙段穿出
   if (map.side !== cfg.gapSide) {
@@ -408,6 +411,17 @@ if (import.meta.env.DEV) {
   window.__game = { engine, input, audio, world, map, player, weapons, bots, flashes, hud, menu, result, fx, state, CONFIG }
 }
 
+// 皮肤资产（loadUserAssets 填充）：base=默认 vandal 归一化件，skins={'vandal:aristocrat': …}。
+// Bot 模板换肤要克隆归一化件（setCustomViewmodel 原件会被改造，不能复用）
+const vmSkinAssets = { base: null, skins: {} }
+function applyWeaponSkin(skin) {
+  const valid = sanitizeSkin('vandal', skin)
+  weapons.setSkin(valid)
+  if (!Bot.weaponTemplates) return // 资产未到（开局菜单先于 GLB 加载）：setSkin 已记账，到货后补
+  const src = valid !== 'default' ? (vmSkinAssets.skins[`vandal:${valid}`] ?? vmSkinAssets.base) : vmSkinAssets.base
+  if (src) Bot.weaponTemplates.vandal = src.clone(true)
+}
+
 // 用户/开源资产（可选）：public/models/ 下的无畏契约英雄池 agent-{jett,phoenix,
 // sage,sova}.glb（命中即取代单模板，每 bot 随机一名英雄）、agent.glb（单模板回退，
 // 当前内置 Mixamo X Bot）、viewmodel-vandal/phantom.glb（双枪各有高模；旧
@@ -423,7 +437,15 @@ loadUserAssets().then(({ agent, agentAnimations, agents, viewmodel, viewmodels, 
     // Bot 挂枪模板先克隆存走——setCustomViewmodel 会把原件原位改造成第一人称
     // 枪模（pivot 重包裹 + 取景参数），克隆件保持归一化（枪口 -Z/0.85m/居中）
     Bot.weaponTemplates = Object.fromEntries(Object.entries(vmMap).map(([k, v]) => [k, v.clone(true)]))
-    weapons.setCustomViewmodel(vmMap); changed = true
+    // 皮肤枪模（键 'vandal:aristocrat'）并入 WeaponSystem，但不进 Bot 模板池——
+    // Bot 的 vandal 项由 applyWeaponSkin 按当前皮肤显式替换，两把枪 50/50 出场不变
+    const vmAll = { ...vmMap }
+    for (const k of Object.keys(viewmodels ?? {})) if (k.includes(':')) vmAll[k] = viewmodels[k]
+    weapons.setCustomViewmodel(vmAll); changed = true
+    vmSkinAssets.base = viewmodels?.vandal ?? null
+    vmSkinAssets.skins = Object.fromEntries(
+      Object.entries(viewmodels ?? {}).filter(([k]) => k.includes(':')))
+    applyWeaponSkin(state.cfg.weaponSkin) // 资产晚到：按已存设置补一次皮肤
   }
   // 手部方案（2026-09-03 定稿）：glove.glb 五指手套双手实例为主路径——五指独立
   // 骨骼可逐指贴合真实握枪姿势（合并指的 hands.glb 做不到逐指）；建模袖臂仍取

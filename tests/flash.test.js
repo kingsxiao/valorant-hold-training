@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { CONFIG } from '../src/core/Config.js'
+import { AudioSys } from '../src/core/Audio.js'
 import { angleFactor, distFactor, blindDuration, skyeMaxBlind, kayoFuseAfterBounce, arcBezier, leerAffects, dizzyPlasmaBlind } from '../src/world/flashMath.js'
 
 // 闪光干扰数值回归：口径 = Fandom 维基 2026-09（FLASH/drive / Guiding Light /
@@ -167,13 +168,14 @@ describe('新闪光类型：维基确认值锁死', () => {
     expect(F.breach.maxBlind).toBe(2.25)
   })
 
-  it('Reyna Leer：10m 部署距、到位 0.4s 预备（v5.07）、近视 1.6s、60HP 可击毁', () => {
+  it('Reyna Leer：10m 部署距、到位 0.4s 预备（v5.07）、近视 1.6s、100HP 可击毁、近视附带 Deafened', () => {
     expect(F.reyna.deployDist).toBe(10)
     expect(F.reyna.travel).toBe(0.55) // 未确认值（维基 0.55s@10m）
     expect(F.reyna.arrivalWindup).toBe(0.4)
     expect(F.reyna.nearsight).toBe(1.6)
     expect(F.reyna.visionRadius).toBe(6)
-    expect(F.reyna.hp).toBe(60)
+    expect(F.reyna.hp).toBe(100) // 维基：眼 100HP（Reddit 考据）
+    expect(typeof AudioSys.prototype.setDeafened).toBe('function') // Nearsight = deafened（维基 Status Effect）
   })
 
   it('Gekko Dizzy：Class 2 物理、激活 0.65s、锁定 0.35s（v7.12）、活跃 1s（v9.08）、等离子 1+1s', () => {

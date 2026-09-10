@@ -183,22 +183,36 @@ Blender 安装：官方源 `download.blender.org` 对 CN 网络常 HTTP/2 中断
 #   3) 贴图（DF 漫反射/NM 法线/MRS ORM/AEM 自发光遮罩）会自动内嵌
 ```
 
-转换后两个必须的修正（脚本用 @gltf-transform，项目自带依赖）：
+转换后三个必须的修正（脚本用 @gltf-transform，项目自带依赖）：
 
 1. **材质补丁**：Valorant 的 MRS 通道语义与 glTF ORM 不一致，导出结果全金属+全粗糙
    （= 纯黑剪影）。摘 `metallicRoughnessTexture`、写死 `metallicFactor 0.3 / roughnessFactor 0.5`
    （法线贴图保留）。注意漫反射贴图本来就是近黑的（Vandal 默认皮肤暗色系），黑 ≠ 损坏。
-2. **枪口朝向**：截面法检测（两端各 8% 顶点，横截面小的一端 = 细枪管 = 枪口）。
+2. **AEM 自发光补丁**（2026-09-10，`scripts/weapon-glb-patch.mjs`）：AEM 贴图（红通道=
+   环境遮罩响应；Vandal 整图近纯红、Phantom 近白）被 Blender 接到 emissive 输入后，
+   `emissiveFactor[1,1,1]` 全强度 → 整枪橘红/泛白自发光（用户所见"狂徒是橘色的"）。
+   摘 `emissiveTexture` + emissive 归零；Phantom 的 `Tritium_MI` 瞄具件导出成 alpha=0+MASK
+   整片被裁不可见 → 改 OPAQUE 深色底 + 绿色自发光（官方默认武器瞄具氚光小绿点）。
+3. **枪口朝向**：截面法检测（两端各 8% 顶点，横截面小的一端 = 细枪管 = 枪口）。
    枪口在 +X 时绕 Y 翻 180°（`Node.setRotation([0,1,0,0])` + 平移 xy 取反）对齐本项目
    「-X = 枪口」作者系约定。
 
 最后 `npm run optimize:models public/models/viewmodel-*.glb` 压缩（实测 -18% ~ -43%）。
 
-### 扩枪
+### 扩枪 / 扩皮肤
 
 同一 Drive 文件夹里的其余武器（Sheriff/Classic/Ghost 等本训练器的手枪槽、或新槽位）
 走完全相同的配方即可；材质/网格名是官方代号（Vandal=GN_AK、Phantom=GN_Carbine+Tritium
 氚光自发光），可用于识别与特效挂点。
+
+**皮肤变体**（2026-09-10 已落地 aristocratVandal = 商城 Aristocrat 收藏集，内部代号
+ArtDeco）：配方与基础武器完全一致（blend2glb → weapon-glb-patch --flip-y → optimize），
+另有两个皮肤专属坑：①**悬浮玻璃盘**——皮肤件按材质拆 primitive 时镜片（1P_Weapon_Glass）
+会被错分层进弹匣对象、世界位置卡在机匣中部，blend2glb.py 已按材质名删面（官方 Vandal
+系无光学件）；②RedDot 壳体件节点无 RX90、网格数据自带朝向，属正常。运行时接入走
+`src/weapons/skinMap.js`（SKINS 目录 + vmKeyFor 键解析）：皮肤 GLB 键 '<武器>:<皮肤>'
+挂进 customVms，取景/握姿/机件推导按 ':' 前的武器 id 复用；Bot 模板池对应武器项由
+main.applyWeaponSkin 克隆替换（敌我同步换肤）。
 
 ## 附：官方第三人称动画（.psa）获取与解析（2026-09-09）
 

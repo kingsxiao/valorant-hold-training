@@ -386,6 +386,23 @@ describe('蹲姿命中区缩放（raycast _zoneYK）', () => {
     const hit = raycast.call(stub(1), 0, 1.63, 5, 0, 0, -1, 50)
     expect(hit.zone).toBe('head')
   })
+  it('蹲姿头部区跟随 Head 骨（前倾前移建模）：命中中心 = 骨世界位 + 0.06', async () => {
+    const raycast = await getRaycast()
+    // 假 Head 骨：骨原点在 (0.3, 0.75, -0.4)（蹲姿前倾前移后的真实渲染头位）
+    const m = { elements: [1,0,0,0, 0,1,0,0, 0,0,1,0, 0.3, 0.75, -0.4, 1] }
+    const s = {
+      invulnerable: false,
+      zones: [{ y: 1.63, r: 0.13, zone: 'head' }],
+      _zoneYK: 0.7, _crouchW: 1,
+      _headBone: { updateWorldMatrix() {}, matrixWorld: m },
+      mesh: { quaternion: { get x() { return 0 }, get y() { return 0 }, get z() { return 0 }, get w() { return 1 } }, position: { x: 0, y: 0, z: 0 } },
+    }
+    // 站立缩放线（1.14）打空；头部骨位（+0.06 颅心偏移）命中
+    expect(raycast.call(s, 0, 1.14, 5, 0, 0, -1, 50)).toBeNull()
+    const hit = raycast.call(s, 0.3, 0.81, 5, 0, 0, -1, 50)
+    expect(hit.zone).toBe('head')
+  })
+
   it('蹲满（zoneK=0.70）头部区下沉到 ~1.14m：站立爆头线打空、下压命中', async () => {
     const raycast = await getRaycast()
     const s = stub(0.70)

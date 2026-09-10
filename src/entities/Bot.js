@@ -304,6 +304,8 @@ export class Bot {
     g.updateMatrixWorld(true)
     const rig = matchRigBones(clone)
     const bindOf = (b) => b.getWorldQuaternion(new THREE.Quaternion()) // g 为恒等根 = mesh 空间
+    // 蹲姿头部命中区跟随用：Head 骨（蹲姿躯干前倾/下沉时头部区随真实渲染头位）
+    clone.traverse(o => { if (!this._headBone && o.isBone && o.name.replace(/_\d+$/, '') === 'Head') this._headBone = o })
     let rigLegs = []
     if (rig) {
       rigLegs = rig.legs.map(l => ({
@@ -1570,9 +1572,23 @@ export class Bot {
   // 实际生效的是后仰（rot.x）与侧倾（rot.z）
   raycast(ox, oy, oz, dx, dy, dz, maxT) {
     if (this.invulnerable) return null
+    const zk = this._zoneYK ?? 1
+    const cw = this._crouchW ?? 0
+    // 蹲姿头部区跟随 Head 骨：官方蹲姿躯干前倾/下沉时头部既降又前移（实测
+    // mesh 局部偏移 ~0.4m），线性缩放模型盖不住——直接用渲染头位做命中中心
+    let headOverride = null
+    if (cw > 0.01 && this._headBone) {
+      this._headBone.updateWorldMatrix(true, false)
+      const he = this._headBone.matrixWorld.elements
+      headOverride = { x: he[12], y: he[13] + 0.06, z: he[14] } // 骨原点微上移 ≈ 颅心
+    }
     let bestT = maxT, bestZone = null
     for (const z of this.zones) {
-      _v.set(0, z.y * (this._zoneYK ?? 1), 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
+      if (headOverride && z.zone === 'head') {
+        _v.set(headOverride.x, headOverride.y, headOverride.z)
+      } else {
+        _v.set(0, z.y * zk, 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
+      }
       const t = raySphere(ox, oy, oz, dx, dy, dz, _v.x, _v.y, _v.z, z.r)
       if (t !== null && t < bestT) { bestT = t; bestZone = z.zone }
     }

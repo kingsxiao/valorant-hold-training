@@ -369,48 +369,49 @@ describe('bakeDeathClips 死亡烘焙', () => {
   })
 })
 
-describe('蹲姿命中区逐区缩放（raycast 逐区 cr 插值）', () => {
-  // Bot.prototype.raycast 用最小桩直测：zones 高度按 1−0.30·蹲姿权重缩放
-  // crouchW：蹲姿权重（逐区高度 = 1 + (cr−1)·crouchW 插值）
-  const stub = (crouchW) => ({
+describe('蹲姿命中区骨锚跟随（raycast 逐区 _boneObj 插值）', () => {
+  // Bot.prototype.raycast 最小桩直测：蹲姿权重 >0 时区中心 lerp 到解剖骨世界位
+  const fakeBone = (x, y, z) => ({
+    updateWorldMatrix() {},
+    matrixWorld: { elements: [1,0,0,0, 0,1,0,0, 0,0,1,0, x, y, z, 1] },
+  })
+  const stub = (crouchW, bones) => ({
     invulnerable: false,
-    // 逐区蹲姿比：head 0.70 / leg 0.70
     zones: [
-      { y: 1.63, r: 0.13, zone: 'head', cr: 0.7 },
-      { y: 0.22, r: 0.14, zone: 'leg', cr: 0.7 },
+      { y: 1.63, r: 0.13, zone: 'head', bone: 'Head', lift: 0, _boneObj: bones?.Head },
+      { y: 0.22, r: 0.14, zone: 'leg', bone: 'L_Foot', lift: 0, _boneObj: bones?.L_Foot },
     ],
     _crouchW: crouchW,
     mesh: { quaternion: { get x() { return 0 }, get y() { return 0 }, get z() { return 0 }, get w() { return 1 } }, position: { x: 0, y: 0, z: 0 } },
   })
   const getRaycast = async () => (await import('../src/entities/Bot.js')).Bot.prototype.raycast
-  it('站定（crouchW=0）头部命中区在 1.63m', async () => {
+
+  it('站定（crouchW=0）走站姿静态位：头部命中区在 1.63m', async () => {
     const raycast = await getRaycast()
     const hit = raycast.call(stub(0), 0, 1.63, 5, 0, 0, -1, 50)
     expect(hit.zone).toBe('head')
   })
-  it('蹲姿头部区跟随 Head 骨（前倾前移建模）：命中中心 = 骨世界位 + 0.06', async () => {
+
+  it('蹲姿（crouchW=1）头部区跟随 Head 骨渲染位：站立爆头线打空、骨位命中', async () => {
     const raycast = await getRaycast()
-    // 假 Head 骨：骨原点在 (0.3, 0.75, -0.4)（蹲姿前倾前移后的真实渲染头位）
-    const m = { elements: [1,0,0,0, 0,1,0,0, 0,0,1,0, 0.3, 0.75, -0.4, 1] }
-    const s = {
-      invulnerable: false,
-      zones: [{ y: 1.63, r: 0.13, zone: 'head' }],
-      _crouchW: 1,
-      _headBone: { updateWorldMatrix() {}, matrixWorld: m },
-      mesh: { quaternion: { get x() { return 0 }, get y() { return 0 }, get z() { return 0 }, get w() { return 1 } }, position: { x: 0, y: 0, z: 0 } },
-    }
-    // 站立缩放线（1.14）打空；头部骨位（+0.06 颅心偏移）命中
-    expect(raycast.call(s, 0, 1.14, 5, 0, 0, -1, 50)).toBeNull()
-    const hit = raycast.call(s, 0.3, 0.81, 5, 0, 0, -1, 50)
+    const s = stub(1, { Head: fakeBone(0.3, 0.75, -0.4) })
+    expect(raycast.call(s, 0, 1.63, 5, 0, 0, -1, 50)).toBeNull()
+    const hit = raycast.call(s, 0.3, 0.75, 5, 0, 0, -1, 50)
     expect(hit.zone).toBe('head')
   })
 
-  it('蹲满（crouchW=1，cr=0.70）头部区下沉到 ~1.14m：站立爆头线打空、下压命中', async () => {
+  it('过渡（crouchW=0.5）中心 = 站姿位与骨位的中点', async () => {
     const raycast = await getRaycast()
-    const s = stub(1)
-    const miss = raycast.call(s, 0, 1.63, 5, 0, 0, -1, 50) // 站立爆头线
-    expect(miss).toBeNull()
-    const hit = raycast.call(s, 0, 1.14, 5, 0, 0, -1, 50)
+    const s = stub(0.5, { Head: fakeBone(0.3, 0.75, -0.4) })
+    // 混合中心 x = lerp(0, 0.3, 0.5) = 0.15：射线对准混合中心 x
+    const mid = raycast.call(s, 0.15, 1.19, 5, 0, 0, -1, 50)
+    expect(mid.zone).toBe('head')
+  })
+
+  it('无骨区（程序化假人）走站姿静态位', async () => {
+    const raycast = await getRaycast()
+    const s = stub(1, {})
+    const hit = raycast.call(s, 0, 1.63, 5, 0, 0, -1, 50)
     expect(hit.zone).toBe('head')
   })
 })

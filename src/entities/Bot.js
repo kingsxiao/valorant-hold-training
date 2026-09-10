@@ -109,16 +109,17 @@ export class Bot {
     this._yBase = 0      // 步态/急停的高度基线（呼吸偏移在其上绝对合成，防累积）
 
     // 命中区域：{ y, r, zone }
-    // cr = 蹲姿高度比（蹲/站世界系稳态 16 帧均值实测，规避地面跟踪反馈）：
-    // 官方蹲姿是「收拢球」——头 0.51、盆骨 0.64、膝 1.21、踝 1.11（腿折叠上收）。
-    // 胸 Spine2 0.628/1.141=0.55、腹 Spine1 0.639/1.041=0.61、膝 1.212/0.55=1.72、
-    // 踝 1.111/0.22=5.05；头部区不走 cr，蹲姿时按权重插值跟随 Head 骨真实渲染位
+    // 命中区骨锚跟随：每区锚定其解剖骨（官方蹲姿=收拢球，头部/躯干/腿全部随
+    // 骨位走，站姿 lift = 站姿区中心 − 站姿骨高实测）。蹲姿权重插值：
+    // 中心 = lerp(站姿位, 骨世界位, 蹲姿权重)——蹲/起全程连续，render 即真相
     this.zones = [
-      { y: 1.63, r: 0.13, zone: 'head', cr: 0.70 },
-      { y: 1.3, r: 0.21, zone: 'body', cr: 0.55 },
-      { y: 0.95, r: 0.2, zone: 'body', cr: 0.61 },
-      { y: 0.55, r: 0.16, zone: 'leg', cr: 1.72 },
-      { y: 0.22, r: 0.14, zone: 'leg', cr: 5.05 },
+      { y: 1.63, r: 0.13, zone: 'head', bone: 'Head', lift: -0.024 },
+      { y: 1.3, r: 0.21, zone: 'body', bone: 'Spine2', lift: 0.159 },
+      { y: 0.95, r: 0.2, zone: 'body', bone: 'Spine1', lift: -0.091 },
+      { y: 0.55, r: 0.16, zone: 'leg', bone: 'L_Knee', lift: -0.153 },
+      { y: 0.55, r: 0.16, zone: 'leg', bone: 'R_Knee', lift: -0.153 },
+      { y: 0.22, r: 0.14, zone: 'leg', bone: 'L_Foot', lift: 0.11 },
+      { y: 0.22, r: 0.14, zone: 'leg', bone: 'R_Foot', lift: 0.11 },
     ]
 
     this._buildMesh()
@@ -306,8 +307,13 @@ export class Bot {
     g.updateMatrixWorld(true)
     const rig = matchRigBones(clone)
     const bindOf = (b) => b.getWorldQuaternion(new THREE.Quaternion()) // g 为恒等根 = mesh 空间
-    // 蹲姿头部命中区跟随用：Head 骨（蹲姿躯干前倾/下沉时头部区随真实渲染头位）
-    clone.traverse(o => { if (!this._headBone && o.isBone && o.name.replace(/_\d+$/, '') === 'Head') this._headBone = o })
+    // 命中区骨锚解析：psa 无后缀名 ↔ GLB _NNNN 后缀（蹲姿命中区跟随骨位）
+    for (const z of this.zones) {
+      if (!z.bone) continue
+      clone.traverse(o => {
+        if (!z._boneObj && o.isBone && o.name.replace(/_\d+$/, '') === z.bone) z._boneObj = o
+      })
+    }
     let rigLegs = []
     if (rig) {
       rigLegs = rig.legs.map(l => ({
@@ -1090,6 +1096,7 @@ export class Bot {
       if (st) { st.has = false; st.w = 0 }
     }
     this._loY = 0 // 官方曲线贴地高度偏移归零
+    this._loMinY = 0 // 最低脚局部高（贴地跟踪量测，首帧前归零防 NaN）
     this.setOpacity(1)
     this.blobMat.opacity = 1
     this.spawnGuardUntil = this.now() + CONFIG.bot.spawnGuardMs / 1000
@@ -1514,7 +1521,15 @@ export class Bot {
       // 若先解 IK 再挪 mesh，脚会跟着 mesh 每帧前跳一次（系统性拖尾 = 钉住的
       // 脚恰好以体速滑行）。水平位本帧精确；贴地高度用上一 tick 的量测（8ms
       // 滞后不可见），本 tick 的新量测由 _stepFootPin 顺带写下帧用
-      if (this._officialLo) this.mesh.position.y = this._loY
+      if (this._officialLo) {
+        // 贴地高度限速：过渡期（蹲走起立等）混合骨位的 footLocal 变化快，直通
+        // 跟踪会让整帧竖直 twitch。限速 0.03m/tick（≈3.8m/s）——跑动固有起伏峰
+        // 速 ~0.4m/s 远低于限，过渡期的快速变化被拉平为一次快速沉降
+        const targetY = 0.09 - this._loMinY
+        const maxStep = 0.03 * (dt * 128)
+        this._loY += Math.max(-maxStep, Math.min(maxStep, targetY - this._loY))
+        this.mesh.position.y = this._loY
+      }
       _v.copy(this.prevPos).lerp(this.pos, ctx.alpha ?? 1)
       this.mesh.position.x = _v.x
       this.mesh.position.z = _v.z
@@ -1585,25 +1600,18 @@ export class Bot {
   // 实际生效的是后仰（rot.x）与侧倾（rot.z）
   raycast(ox, oy, oz, dx, dy, dz, maxT) {
     if (this.invulnerable) return null
+    // 命中区骨锚跟随：蹲姿（cw>0）时每区中心 lerp 到其解剖骨世界位（官方蹲姿
+    // = 收拢球：头部/躯干/腿骨位全部随姿态走，固定高度区必错位）；cw=0 走
+    // 站姿静态位（程序化假人/无骨区自动回退）
     const cw = this._crouchW ?? 0
-    // 蹲姿头部区跟随 Head 骨：官方蹲姿躯干前倾/下沉时头部既降又前移（实测
-    // mesh 局部偏移 ~0.4m），线性缩放模型盖不住——按蹲姿权重在「站姿正上轴位」
-    // 与「渲染头位（骨原点 +0.06 颅心）」间插值，蹲/起全程连续
-    let headBoneW = null
-    if (this._headBone) {
-      this._headBone.updateWorldMatrix(true, false)
-      const he = this._headBone.matrixWorld.elements
-      headBoneW = _headC.set(he[12], he[13] + 0.06, he[14])
-    }
     let bestT = maxT, bestZone = null
     for (const z of this.zones) {
       _v.set(0, z.y, 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
-      if (z.zone === 'head' && headBoneW) {
-        _v.lerp(headBoneW, cw)
-      } else {
-        // 逐区蹲姿高度插值：站姿 1 → 蹲姿 cr，随蹲姿权重平滑过渡
-        const yk = 1 + ((z.cr ?? 1) - 1) * cw
-        _v.set(0, z.y * yk, 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
+      if (cw > 0.001 && z._boneObj) {
+        z._boneObj.updateWorldMatrix(true, false)
+        const be = z._boneObj.matrixWorld.elements
+        _headC.set(be[12], be[13] + z.lift, be[14])
+        _v.lerp(_headC, cw)
       }
       const t = raySphere(ox, oy, oz, dx, dy, dz, _v.x, _v.y, _v.z, z.r)
       if (t !== null && t < bestT) { bestT = t; bestZone = z.zone }

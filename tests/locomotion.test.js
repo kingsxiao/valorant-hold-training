@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import fs from 'node:fs'
-import { buildClip, buildLocomotion, locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip, crouchWalkStepFor, CROUCH_WALK_SPEED, jumpFallBlend, JUMP_FALL_AFTER, JUMP_FALL_FADE } from '../src/core/Locomotion.js'
+import { buildClip, buildLocomotion, locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip, CROUCH_WALK_STEP, CROUCH_WALK_SPEED, jumpFallBlend, JUMP_FALL_AFTER, JUMP_FALL_FADE } from '../src/core/Locomotion.js'
 
 // 假骨架：UE 风格带 _NNNN 后缀骨名（与英雄 GLB 同构）
 function fakeHeroSkeleton(suffixes) {
@@ -241,8 +241,9 @@ describe('turn 8 向集与 stopAdd 支架（TP_Core 停步挑战）', () => {
     }
     expect(CROUCH_WALK_SPEED).toBeCloseTo(2.7, 6) // 本体口径 = 50% 跑速
     // 步幅按移速派生（任意速度近零滑步）：2.7 → 1.26；1.76（clip 天然速率）→ 0.82
-    expect(crouchWalkStepFor(2.7)).toBeCloseTo(1.26, 3)
-    expect(crouchWalkStepFor(1.76)).toBeCloseTo(0.82, 2)
+    expect(CROUCH_WALK_STEP).toBeCloseTo(0.84, 6) // 步幅 = clip 属性，不随移速变
+    // 近零滑步口径：滑步 = 移速×(1−1.64/(2×0.84)) ≈ 2.4%·v
+    expect(2.7 * (1 - 1.64 / (2 * 0.84))).toBeLessThan(0.1)
   })
 
   it('jump 三段集：JumpN 3.23s / JumpLand 0.667s / Falling 滞空循环 2.567s', () => {

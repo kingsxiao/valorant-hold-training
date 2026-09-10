@@ -97,7 +97,6 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
 // 蹲走拉出移速口径：本体蹲走 = 50% 跑速（5.4）≈ 2.7m/s（Config 可调，试玩
 // 档位）
 export const CROUCH_WALK_SPEED = 2.7
-const CROUCH_WALK_DUR = 0.9333 // 官方蹲走循环时长（s）
 
 // 滞空换层混合比（纯函数，Bot 跳跃块与单测共用）：JumpN 空中段 → Falling 循
 // 环的 crossfade 权重。airT = 滞空时间（s）；FALL_AFTER 起淡入、+FADE_S 完成
@@ -109,12 +108,12 @@ export function jumpFallBlend(airT) {
   return x * x * (3 - 2 * x) // smoothstep
 }
 
-// 蹲走锁相步幅（纯函数，Bot/BotManager 与单测共用）：步幅 = 速度×循环时长/2
-// ——相位按此步幅锁相时，clip 播放速率自动等于 移速/天然速率（任意移速近零
-// 滑步；2.7m/s 时播放 1.53×，步频 3.2 步/s ≈ 走路同档）
-export function crouchWalkStepFor(speed) {
-  return (speed * CROUCH_WALK_DUR) / 2
-}
+// 蹲走锁相步幅（纯常量，Bot 与单测共用）：步幅是 clip 的几何属性（官方蹲走
+// 扫幅 0.82m 实测），与移速无关——移速只改步频（cadence = 移速/步幅），滑步 =
+// 移速×(1−1.64/(2×0.84)) ≈ 2.4%·v，任意移速近零滑步。
+// ⚠ 141 轮曾把步幅改成「随移速派生」（speed×0.4667）——那会让 T_locked 恒定
+// = 步频恒定、滑步随移速线性放大（2.7m/s 时 0.94m/s），是回归，勿改回
+export const CROUCH_WALK_STEP = 0.84
 
 // 停步转身选型（纯函数）：deltaYaw = 朝向差（最短角，rad，正=左转）。
 // 命名约定：E=向右转（yaw 减）、W=向左转（yaw 增），角度取最近档。

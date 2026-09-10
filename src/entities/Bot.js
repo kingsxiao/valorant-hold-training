@@ -448,6 +448,19 @@ export class Bot {
           this.deathActions[side] = a
         }
       }
+      // 跑动上身叠加层（加法，官方胸口随步频运动 + 枪锚随动）：播放头随 run
+      // 相位锁拍（_setAnimWeights），权重随跑态
+      if (official?.runAdd) {
+        this.anim.runAdd = {}
+        for (const [side, clip] of Object.entries(official.runAdd)) {
+          if (!clip) continue
+          const a = this.mixer.clipAction(clip)
+          a.play()
+          a.setEffectiveWeight(0)
+          a.timeScale = 0
+          this.anim.runAdd[side] = a
+        }
+      }
       // 停步转身踏步（8 向）：自然速率自走（选型时 reset 重播），权重由停步坡控制
       if (official?.turn) {
         this.anim.turn = {}
@@ -535,6 +548,16 @@ export class Bot {
       other.walk.setEffectiveWeight(0)
       other.run.setEffectiveWeight(0)
     }
+    // 跑动上身叠加层（不在 strafe 块内：cross 无横移集也要吃 N 向）：E/W 侧别
+    // 与横移跑同侧，播放头同相位锁拍（加法层随跑态淡入淡出——权重即
+    // W.runN/W.runS，与前进/横移跑严格同源）
+    if (A.runAdd) {
+      const addSide = this._strafeW > 0.5 ? (this._strafeSide ?? 'E') : 'N'
+      for (const [s, a] of Object.entries(A.runAdd)) {
+        a.time = (ph / (Math.PI * 2)) * a.getClip().duration
+        a.setEffectiveWeight(s === addSide ? W.runN + W.runS : 0)
+      }
+    }
   }
 
   _stepAnim(speed, dt) {
@@ -591,7 +614,10 @@ export class Bot {
     // （枪口纪律不受扰，方向偏移仅 8mm/4m≈0.1°），左手 IK 随握点自动跟随 =
     // 手臂给枪让位的真实弹性，后手让位 ≤8mm 读作握持旷量。幅度随移速渐强、
     // 急停随速度淡出（gunBobPose 纯函数，单测锁值）
-    const bob = gunBobPose({ phase: this.walkPhase, speed: Math.abs(this.velX) })
+    // 官方 runAdd 加法层激活时枪锚骨（WeaponPoint）自己随步频动 = 官方武器
+    // 随动；程序化 bob 退位（两套叠加会双重起伏），只在不官方时兜底
+    const bob = this.anim?.runAdd ? { dip: 0, sway: 0, roll: 0 }
+      : gunBobPose({ phase: this.walkPhase, speed: Math.abs(this.velX) })
     if (bob.dip !== 0 || bob.sway !== 0) {
       _gBob.set(-_gv2.z, 0, _gv2.x).normalize() // 手线的水平垂直向（重心横摆方向）
       _gBob.multiplyScalar(bob.sway)

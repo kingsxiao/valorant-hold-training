@@ -120,6 +120,14 @@ const SRC = {
     back: { path: 'assets-raw/core-psa/TP_Core_Death_Land_BackSplat_Big.psa', full: true },
     front: { path: 'assets-raw/core-psa/TP_Core_Death_Land_FrontSplat_Big.psa', full: true },
   },
+  // 跑动上身叠加层（加法：Spine1-3/Neck/Head/锁骨 + 枪锚骨，37f/0.6s 与 RunN
+  // 同相）——本体跑动胸口随步频起伏/反向扭转，枪锚骨跟着动 = 官方武器随动
+  runAdd: {
+    N: { path: 'assets-raw/core-psa/TP_Core_RunAddN_UB.psa', full: true },
+    E: { path: 'assets-raw/core-psa/TP_Core_RunAddE_UB.psa', full: true },
+    W: { path: 'assets-raw/core-psa/TP_Core_RunAddW_UB.psa', full: true },
+  },
+
   // 停步转身踏步（E=向右 / W=向左 × 45/90/135/180°，全部 1.0s）：clip 本体不带
   // 根旋转（Splitter/Pelvis Y 转角≈0）——本体引擎程序化转根，腿只出「转身踏步」
   // 步型；我们同样保持 yaw lerp 权威、clip 只出腿

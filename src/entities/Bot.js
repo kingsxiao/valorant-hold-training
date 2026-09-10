@@ -41,8 +41,6 @@ const JUMP_FALL_AFTER = 0.35 // 滞空 0.35s 后从 JumpN 空中段切 Falling �
 const JUMP_V0 = 7.098      // 起跳竖直初速（m/s）：本体社区逐帧推导值（r/VALORANT
                            // "Valorant Physics, Derived"：跳高 1.2m = v0²/2g）
 const JUMP_G = 21          // 空中重力（m/s²）：同源推导值；滞空 = 2·v0/g ≈ 0.676s
-const CROUCH_ZONE_DROP = 0.30 // 蹲姿命中区下沉比：官方根高 79.6/114.1cm（CrouchIdle vs RunN
-                              // 实测），头/胸/腹/腿区高度按 1−0.30·蹲姿权重缩放，半径不变
 const STRAFE_STEP_LEN = 1.15 // 横移步距保持既有调校口径（pull 出场节奏 1 步/1.15m 已验收）
 const _v = new THREE.Vector3()
 const _up = new THREE.Vector3(0, 1, 0)
@@ -111,12 +109,16 @@ export class Bot {
     this._yBase = 0      // 步态/急停的高度基线（呼吸偏移在其上绝对合成，防累积）
 
     // 命中区域：{ y, r, zone }
+    // cr = 蹲姿高度比（蹲满时的高度/站姿高度，官方蹲姿 clip 骨位实测）：
+    // 胸 Spine2 0.761/1.141=0.67、腹 Pelvis 0.762/1.02=0.75、腿维持 0.70（蹲姿
+    // 腿部折叠的逐区测量受地面跟踪反馈干扰，保守取统一值）；头部区不走 cr，
+    // 蹲姿时跟随 Head 骨真实渲染位
     this.zones = [
-      { y: 1.63, r: 0.13, zone: 'head' },
-      { y: 1.3, r: 0.21, zone: 'body' },
-      { y: 0.95, r: 0.2, zone: 'body' },
-      { y: 0.55, r: 0.16, zone: 'leg' },
-      { y: 0.22, r: 0.14, zone: 'leg' },
+      { y: 1.63, r: 0.13, zone: 'head', cr: 0.70 },
+      { y: 1.3, r: 0.21, zone: 'body', cr: 0.67 },
+      { y: 0.95, r: 0.2, zone: 'body', cr: 0.75 },
+      { y: 0.55, r: 0.16, zone: 'leg', cr: 0.70 },
+      { y: 0.22, r: 0.14, zone: 'leg', cr: 0.70 },
     ]
 
     this._buildMesh()
@@ -1105,7 +1107,7 @@ export class Bot {
       for (const a of Object.values(this.anim?.turn ?? {})) a.stop()
       this.anim?.stopAdd?.stop()
       this._turnKey = null; this._turnW = 0; this._braceW = 0
-      this._crouchPlanned = false; this._crouching = false; this._crouchW = 0; this._zoneYK = 1
+      this._crouchPlanned = false; this._crouching = false; this._crouchW = 0
       this._crouchWW = 0; this._cwPhase = 0
       if (this.anim.crouchWalk) for (const a of Object.values(this.anim.crouchWalk)) a.setEffectiveWeight(0)
       this._jump = null
@@ -1395,7 +1397,6 @@ export class Bot {
     const cwNow = !!(this.peek?.crouchWalk && this.peek?.phase === 'out' && this.anim?.crouchWalk)
     this._crouching = !!(stopped && this._crouchPlanned && this.anim?.crouchIdle && !this._jump)
     this._crouchW = smoothW(this._crouchW ?? 0, (this._crouching || cwNow) ? 1 : 0, dt)
-    this._zoneYK = 1 - CROUCH_ZONE_DROP * this._crouchW
     // 停步挑战的官方转身/支架选型（先算好，mixer 分支消费）：急停且朝向差够大
     // → 出「转身踏步」clip（E=右转/W=左转，角度最近档）；朝向已对 → 出「急停
     // 支架」加法层。走路/移动中不触发（stopped 才算）；跳跃中全部让位
@@ -1572,7 +1573,6 @@ export class Bot {
   // 实际生效的是后仰（rot.x）与侧倾（rot.z）
   raycast(ox, oy, oz, dx, dy, dz, maxT) {
     if (this.invulnerable) return null
-    const zk = this._zoneYK ?? 1
     const cw = this._crouchW ?? 0
     // 蹲姿头部区跟随 Head 骨：官方蹲姿躯干前倾/下沉时头部既降又前移（实测
     // mesh 局部偏移 ~0.4m），线性缩放模型盖不住——直接用渲染头位做命中中心
@@ -1587,7 +1587,9 @@ export class Bot {
       if (headOverride && z.zone === 'head') {
         _v.set(headOverride.x, headOverride.y, headOverride.z)
       } else {
-        _v.set(0, z.y * zk, 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
+        // 逐区蹲姿高度插值：站姿 1 → 蹲姿 cr，随蹲姿权重平滑过渡
+        const yk = 1 + ((z.cr ?? 1) - 1) * cw
+        _v.set(0, z.y * yk, 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
       }
       const t = raySphere(ox, oy, oz, dx, dy, dz, _v.x, _v.y, _v.z, z.r)
       if (t !== null && t < bestT) { bestT = t; bestZone = z.zone }

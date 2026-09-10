@@ -369,21 +369,23 @@ describe('bakeDeathClips 死亡烘焙', () => {
   })
 })
 
-describe('蹲姿命中区缩放（raycast _zoneYK）', () => {
+describe('蹲姿命中区逐区缩放（raycast 逐区 cr 插值）', () => {
   // Bot.prototype.raycast 用最小桩直测：zones 高度按 1−0.30·蹲姿权重缩放
-  const stub = (zoneYK) => ({
+  // crouchW：蹲姿权重（逐区高度 = 1 + (cr−1)·crouchW 插值）
+  const stub = (crouchW) => ({
     invulnerable: false,
+    // 逐区蹲姿比：head 0.70 / leg 0.70
     zones: [
-      { y: 1.63, r: 0.13, zone: 'head' },
-      { y: 0.22, r: 0.14, zone: 'leg' },
+      { y: 1.63, r: 0.13, zone: 'head', cr: 0.7 },
+      { y: 0.22, r: 0.14, zone: 'leg', cr: 0.7 },
     ],
-    _zoneYK: zoneYK,
+    _crouchW: crouchW,
     mesh: { quaternion: { get x() { return 0 }, get y() { return 0 }, get z() { return 0 }, get w() { return 1 } }, position: { x: 0, y: 0, z: 0 } },
   })
   const getRaycast = async () => (await import('../src/entities/Bot.js')).Bot.prototype.raycast
-  it('站定（zoneK=1）头部命中区在 1.63m', async () => {
+  it('站定（crouchW=0）头部命中区在 1.63m', async () => {
     const raycast = await getRaycast()
-    const hit = raycast.call(stub(1), 0, 1.63, 5, 0, 0, -1, 50)
+    const hit = raycast.call(stub(0), 0, 1.63, 5, 0, 0, -1, 50)
     expect(hit.zone).toBe('head')
   })
   it('蹲姿头部区跟随 Head 骨（前倾前移建模）：命中中心 = 骨世界位 + 0.06', async () => {
@@ -393,7 +395,7 @@ describe('蹲姿命中区缩放（raycast _zoneYK）', () => {
     const s = {
       invulnerable: false,
       zones: [{ y: 1.63, r: 0.13, zone: 'head' }],
-      _zoneYK: 0.7, _crouchW: 1,
+      _crouchW: 1,
       _headBone: { updateWorldMatrix() {}, matrixWorld: m },
       mesh: { quaternion: { get x() { return 0 }, get y() { return 0 }, get z() { return 0 }, get w() { return 1 } }, position: { x: 0, y: 0, z: 0 } },
     }
@@ -403,9 +405,9 @@ describe('蹲姿命中区缩放（raycast _zoneYK）', () => {
     expect(hit.zone).toBe('head')
   })
 
-  it('蹲满（zoneK=0.70）头部区下沉到 ~1.14m：站立爆头线打空、下压命中', async () => {
+  it('蹲满（crouchW=1，cr=0.70）头部区下沉到 ~1.14m：站立爆头线打空、下压命中', async () => {
     const raycast = await getRaycast()
-    const s = stub(0.70)
+    const s = stub(1)
     const miss = raycast.call(s, 0, 1.63, 5, 0, 0, -1, 50) // 站立爆头线
     expect(miss).toBeNull()
     const hit = raycast.call(s, 0, 1.14, 5, 0, 0, -1, 50)

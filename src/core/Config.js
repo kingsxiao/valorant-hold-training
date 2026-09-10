@@ -152,6 +152,9 @@ export const CONFIG = {
                             // 命中区随官方蹲姿根高 ×0.70 缩放，逼玩家下压准星）
     jumpChance: 0.18,       // 每波掷定跳 peek 的概率（中途随机进度起跳：官方 Jump 蹬伸 +
                             // 抛物线弧（命中区随 mesh 跟随）+ JumpLand 落地恢复）
+    crouchWalkChance: 0.2,  // pull 波掷定蹲走拉出的概率（官方蹲走循环，速度锁
+                            // 1.76m/s ≈ clip 天然跑步机速率近零滑步，命中区 ×0.70）       // 每波掷定跳 peek 的概率（中途随机进度起跳：官方 Jump 蹬伸 +
+                            // 抛物线弧（命中区随 mesh 跟随）+ JumpLand 落地恢复）
     crossChance: 0.5,       // 每波风格：侧面跑过（贯穿缺口顺跑向）vs 横向拉出（肩peek 拉出对枪）
     pullJiggleChance: 0.3,  // 拉出波里"露头即缩"jiggle-peek 的概率（拉到中段折返）
     pullHoldMaxMs: 2400,    // 拉出后站定对枪的兜底时长（可见判负之外防挂场，如玩家挪位断 LOS）

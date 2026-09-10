@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import fs from 'node:fs'
-import { buildClip, buildLocomotion, locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip } from '../src/core/Locomotion.js'
+import { buildClip, buildLocomotion, locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip, CROUCH_WALK_STEP, CROUCH_WALK_SPEED } from '../src/core/Locomotion.js'
 
 // 假骨架：UE 风格带 _NNNN 后缀骨名（与英雄 GLB 同构）
 function fakeHeroSkeleton(suffixes) {
@@ -231,6 +231,18 @@ describe('stepFootPinState 脚钉地状态机（迟滞 + 权重坡）', () => {
 
 describe('turn 8 向集与 stopAdd 支架（TP_Core 停步挑战）', () => {
   const locoJson = JSON.parse(fs.readFileSync('public/models/locomotion.json', 'utf8'))
+  it('crouch 蹲走集：walkE/W 0.933s 蹲高根骨在；蹲走步幅/速度常数锁值', () => {
+    expect(locoJson.crouch.walkE.duration).toBeCloseTo(0.9333, 3)
+    expect(locoJson.crouch.walkW.duration).toBeCloseTo(0.9333, 3)
+    for (const c of [locoJson.crouch.walkE, locoJson.crouch.walkW]) {
+      const bones = c.tracks.map(t => t.b)
+      expect(bones).toContain('Splitter')
+      expect(bones).toContain('L_Knee')
+    }
+    expect(CROUCH_WALK_STEP).toBeCloseTo(0.84, 6)
+    expect(CROUCH_WALK_SPEED).toBeCloseTo(1.76, 6)
+  })
+
   it('jump 三段集：JumpN 3.23s / JumpLand 0.667s / Falling 滞空循环 2.567s', () => {
     expect(locoJson.jump.jumpN.duration).toBeCloseTo(3.2333, 3)
     expect(locoJson.jump.jumpLand.duration).toBeCloseTo(0.6667, 3)

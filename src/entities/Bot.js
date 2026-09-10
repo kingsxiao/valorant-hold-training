@@ -5,7 +5,7 @@ import { CONFIG } from '../core/Config.js'
 import { groundStep, accelFor } from '../core/GroundMotion.js'
 import { peekFacingYaw, leanInto, strafeRampW, strafeStepPose } from '../core/PeekPose.js'
 import { matchRigBones, bakeLocomotionClips, bakeDeathClips, smoothW } from '../core/GaitBake.js'
-import { locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip } from '../core/Locomotion.js'
+import { locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip, CROUCH_WALK_STEP } from '../core/Locomotion.js'
 import { solveGunAim, pickAimTarget, gunBobPose, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK, deriveGunHoldPoints, solveGripMount } from '../core/WeaponAim.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
@@ -485,6 +485,18 @@ export class Bot {
         a.play()
         a.setEffectiveWeight(0)
         this.anim.crouchIdle = a
+      }
+      // 蹲走拉出 E/W（官方蹲走循环，播放头由专用蹲走步幅相位锁定）
+      if (official?.crouchWalk) {
+        this.anim.crouchWalk = {}
+        for (const [side, clip] of Object.entries(official.crouchWalk)) {
+          if (!clip) continue
+          const a = this.mixer.clipAction(clip)
+          a.play()
+          a.setEffectiveWeight(0)
+          a.timeScale = 0
+          this.anim.crouchWalk[side] = a
+        }
       }
       // 跳 peek：JumpN（起跳蹬伸→空中收腿，LoopOnce 保持）+ JumpLand（落地恢复）
       if (official?.jump) {
@@ -1091,6 +1103,8 @@ export class Bot {
       this.anim?.stopAdd?.stop()
       this._turnKey = null; this._turnW = 0; this._braceW = 0
       this._crouchPlanned = false; this._crouching = false; this._crouchW = 0; this._zoneYK = 1
+      this._crouchWW = 0; this._cwPhase = 0
+      if (this.anim.crouchWalk) for (const a of Object.values(this.anim.crouchWalk)) a.setEffectiveWeight(0)
       this._jump = null
       if (this.anim.jump) this.anim.jump.setEffectiveWeight(0)
       if (this.anim.jumpLand) this.anim.jumpLand.setEffectiveWeight(0)
@@ -1375,8 +1389,9 @@ export class Bot {
     // 蹲姿对枪（BotManager 在急停时按 crouchChance 掷定）：蹲下压低命中区，
     // 逼玩家下压准星——本体对枪蹲。蹲姿优先：蹲下时不出转身踏步/支架（腿部
     // 五五混合会吃掉蹲姿的根高沉降）
+    const cwNow = !!(this.peek?.crouchWalk && this.peek?.phase === 'out' && this.anim?.crouchWalk)
     this._crouching = !!(stopped && this._crouchPlanned && this.anim?.crouchIdle && !this._jump)
-    this._crouchW = smoothW(this._crouchW ?? 0, this._crouching ? 1 : 0, dt)
+    this._crouchW = smoothW(this._crouchW ?? 0, (this._crouching || cwNow) ? 1 : 0, dt)
     this._zoneYK = 1 - CROUCH_ZONE_DROP * this._crouchW
     // 停步挑战的官方转身/支架选型（先算好，mixer 分支消费）：急停且朝向差够大
     // → 出「转身踏步」clip（E=右转/W=左转，角度最近档）；朝向已对 → 出「急停
@@ -1409,6 +1424,20 @@ export class Bot {
           a.setEffectiveWeight(key === turnKey ? this._turnW : 0)
         }
         this._turnKey = turnKey
+      }
+      // 蹲走拉出（pull 变体）：专用蹲走步幅相位锁播（CROUCH_WALK_STEP=官方扫
+      // 幅，跑步机近零滑步），侧别跟横移方向；蹲姿权重复用 _crouchW（idle 退
+      // 缩 + 命中区 ×0.70 同源）
+      const cwActive = !!(this.peek?.crouchWalk && this.peek?.phase === 'out' && this.anim.crouchWalk && !this._jump)
+      this._crouchWW = smoothW(this._crouchWW ?? 0, cwActive ? 1 : 0, dt)
+      if (this.anim.crouchWalk) {
+        this._cwPhase = (this._cwPhase ?? 0) + speed * dt * Math.PI / CROUCH_WALK_STEP
+        const cwSide = this.velX * Math.cos(this.mesh.rotation.y) >= 0 ? 'E' : 'W'
+        const cwPh = ((this._cwPhase % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
+        for (const [s, a] of Object.entries(this.anim.crouchWalk)) {
+          a.time = (cwPh / (Math.PI * 2)) * a.getClip().duration
+          a.setEffectiveWeight(s === cwSide ? this._crouchWW : 0)
+        }
       }
       // 跳跃：空中 JumpN 独占腿部（走/跑/idle 压零防五五混合），落地 JumpLand
       // 恢复（权重 ~0.33s 淡出交接回走跑）；弧线偏移加在 mesh.y 上（命中区随

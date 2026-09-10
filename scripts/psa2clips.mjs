@@ -132,6 +132,9 @@ const SRC = {
   // 30%——下蹲过渡由权重坡合成，命中区按同比例缩放）
   crouch: {
     idle: 'assets-raw/core-psa/TP_Core_CrouchIdle_LB.psa',
+    // 蹲走拉出（pull 变体，速度锁 1.76m/s ≈ clip 天然跑步机速率——近零滑步）
+    walkE: 'assets-raw/core-psa/TP_Core_CrouchWalkE_LB.psa',
+    walkW: 'assets-raw/core-psa/TP_Core_CrouchWalkW_LB.psa',
   },
   // 跳 peek：JumpN=预备蹲(0.13s)→蹬伸(峰值 0.63s)→空中收腿保持（3.2s，过截
   // 断）；抛物线本体走引擎（clip 无弧线）——由 Bot 的 mesh.y 弧线偏移驱动，

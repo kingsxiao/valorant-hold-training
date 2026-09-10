@@ -54,6 +54,13 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
     : null
   // 蹲踞待机循环（官方蹲姿根高，全程蹲姿的 4.5s 循环）：缺席不阻塞
   const crouchIdle = locoJson?.crouch?.idle ? build(locoJson.crouch.idle, 'crouch-idle') : null
+  // 蹲走拉出 E/W（官方蹲走循环）：缺席不阻塞
+  const crouchWalk = locoJson?.crouch?.walkE
+    ? {
+      E: build(locoJson.crouch.walkE, 'crouch-walkE'),
+      W: build(locoJson.crouch.walkW, 'crouch-walkW'),
+    }
+    : null
   // 跳 peek（JumpN 起跳保持 + Falling 滞空循环 + JumpLand 落地恢复）：缺席不阻塞
   const jump = locoJson?.jump
     ? {
@@ -84,8 +91,15 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
     THREE.AnimationUtils.makeClipAdditive(c, 0)
     c.blendMode = THREE.AdditiveAnimationBlendMode
   }
-  return { walk, run, strafe, death, turn, stopAdd, runAdd, crouchIdle, jump }
+  return { walk, run, strafe, death, turn, stopAdd, runAdd, crouchIdle, crouchWalk, jump }
 }
+
+// 蹲走拉出的锁相参数（纯常量，BotManager/Bot 与单测共用）：官方蹲走扫幅实测
+// 0.82m ≈ 步幅 0.84——相位按此步幅锁相时跑步机速率 ≈ clip 天然速率
+// （2×0.84/0.933 ≈ 1.8m/s），支撑脚近零滑步；CROUCH_WALK_SPEED 为蹲走拉出的
+// 移动速度档（pull 波蹲走变体的速度）
+export const CROUCH_WALK_STEP = 0.84
+export const CROUCH_WALK_SPEED = 1.76
 
 // 停步转身选型（纯函数）：deltaYaw = 朝向差（最短角，rad，正=左转）。
 // 命名约定：E=向右转（yaw 减）、W=向左转（yaw 增），角度取最近档。

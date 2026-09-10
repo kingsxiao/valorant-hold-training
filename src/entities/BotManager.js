@@ -1,4 +1,5 @@
 import { Bot } from './Bot.js'
+import { CROUCH_WALK_SPEED } from '../core/Locomotion.js'
 import { CONFIG } from '../core/Config.js'
 
 // 纯架枪对枪训练：随机延迟后 Bot 以两种姿势交替出掩体（连出两波同风格强制换）
@@ -192,8 +193,10 @@ export class BotManager {
           ? startX + dir * rand(0.5, 0.72) * Math.abs(holdX - startX)
           : 0
         b.peek = { style: 'pull', startX, holdX, endX: startX, dir, phase: 'out', holdUntil: 0, jiggleAt,
-        jumpPlanned: Math.random() < CONFIG.training.jumpChance,
-        jumpAt: rand(0.35, 0.6), jumped: false }
+          // 蹲走拉出掷定（非 jiggle 波；官方蹲走循环 + 命中区 ×0.70，速度锁 1.76）
+          crouchWalk: !jiggleAt && Math.random() < CONFIG.training.crouchWalkChance,
+          jumpPlanned: Math.random() < CONFIG.training.jumpChance,
+          jumpAt: rand(0.35, 0.6), jumped: false }
       }
       b.place(startX, this.map.peekLineZ, 'peek')
       b.slot = slot
@@ -213,7 +216,8 @@ export class BotManager {
         // 拉出状态机：out（拉出到窗口）→ hold（站定对枪，胜负由可见时限判定）
         // → leave（向 exitX 撤离：常规缩回原掩体；判负后改为跑向对面掩体）
         if (pk.phase === 'out') {
-          activeBot.moveToward(pk.dir * speed, dt)
+          // 蹲走拉出：速度锁官方蹲走天然速率 1.76（近零滑步），非全局跑速
+          activeBot.moveToward(pk.dir * (pk.crouchWalk ? CROUCH_WALK_SPEED : speed), dt)
           // 跳 peek（拉出中概率跳）
           const spanOut = Math.abs(pk.holdX - pk.startX)
           if (pk.jumpPlanned && !pk.jumped && spanOut > 0.01) {

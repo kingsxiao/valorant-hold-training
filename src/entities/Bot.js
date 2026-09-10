@@ -5,7 +5,7 @@ import { CONFIG } from '../core/Config.js'
 import { groundStep, accelFor } from '../core/GroundMotion.js'
 import { peekFacingYaw, leanInto, strafeRampW, strafeStepPose } from '../core/PeekPose.js'
 import { matchRigBones, bakeLocomotionClips, bakeDeathClips, smoothW } from '../core/GaitBake.js'
-import { locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide } from '../core/Locomotion.js'
+import { locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip } from '../core/Locomotion.js'
 import { solveGunAim, pickAimTarget, gunBobPose, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK, deriveGunHoldPoints, solveGripMount } from '../core/WeaponAim.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
@@ -447,6 +447,26 @@ export class Bot {
           a.setEffectiveWeight(0)
           this.deathActions[side] = a
         }
+      }
+      // 停步转身踏步（8 向）：自然速率自走（选型时 reset 重播），权重由停步坡控制
+      if (official?.turn) {
+        this.anim.turn = {}
+        for (const [key, clip] of Object.entries(official.turn)) {
+          if (!clip) continue
+          const a = this.mixer.clipAction(clip)
+          a.play()
+          a.setEffectiveWeight(0)
+          this.anim.turn[key] = a
+        }
+      }
+      // 急停支架（加法层叠在 kamae 上）：播完定格（clampWhenFinished）= 支架保持
+      if (official?.stopAdd) {
+        const a = this.mixer.clipAction(official.stopAdd)
+        a.loop = THREE.LoopOnce
+        a.clampWhenFinished = true
+        a.play()
+        a.setEffectiveWeight(0)
+        this.anim.stopAdd = a
       }
       this._animAcc = 0
       this._setAnimWeights(0)
@@ -1006,6 +1026,9 @@ export class Bot {
     if (this.mixer) { // 骨骼假人归位站姿，不带上一条的残留步态
       if (this.deathAction) this.deathAction.stop() // 先停死亡 clip，update(0) 才是干净重摆
       for (const a of Object.values(this.deathActions ?? {})) a.stop()
+      for (const a of Object.values(this.anim?.turn ?? {})) a.stop()
+      this.anim?.stopAdd?.stop()
+      this._turnKey = null; this._turnW = 0; this._braceW = 0
       this.anim.walk.time = 0
       if (this.anim.run) this.anim.run.time = 0
       if (this.anim.strafe) {
@@ -1252,6 +1275,13 @@ export class Bot {
     dy = Math.atan2(Math.sin(dy), Math.cos(dy)) // 取最短角差
     this.mesh.rotation.y += dy * Math.min(1, dt * 14)
 
+    // 停步挑战的官方转身/支架选型（先算好，mixer 分支消费）：急停且朝向差够大
+    // → 出「转身踏步」clip（E=右转/W=左转，角度最近档）；朝向已对 → 出「急停
+    // 支架」加法层。走路/移动中不触发（stopped 才算）
+    let turnKey = null
+    if (stopped && this.anim?.turn) turnKey = pickTurnClip(dy)
+    const braceTarget = stopped && this.anim?.stopAdd && !turnKey ? 1 : 0
+
     // 移动表现：程序化假人 = VALORANT 横移步态；骨骼假人播放混合动画，pull 波
     // 横移时腿由程序化侧移覆盖、上身动画速度压向 0（退到 idle：持枪横移不甩臂）
     const speed = Math.abs(this.velX)
@@ -1262,6 +1292,28 @@ export class Bot {
       const wT = strafeRampW({ style: this.peek?.style, speed })
       this._strafeW = smoothW(this._strafeW ?? 0, wT, dt)
       const w = this._strafeW
+      // 停步转身/急停支架：权重过时间常数（停步进入淡入 ~143ms、恢复移动淡出
+      // 不留残步）；换选型（转身角跨档）立即切 action——淡入刚起不会跳
+      const turnActive = !!(turnKey && this.anim.turn?.[turnKey])
+      this._turnW = smoothW(this._turnW ?? 0, turnActive ? 1 : 0, dt)
+      if (this.anim.turn) {
+        if (turnKey !== this._turnKey && turnActive) {
+          const a = this.anim.turn[turnKey]
+          a.reset() // 从头播（踏步型与转身角绑定，半程续播会错步）
+          a.play()
+        }
+        for (const [key, a] of Object.entries(this.anim.turn)) {
+          a.setEffectiveWeight(key === turnKey ? this._turnW : 0)
+        }
+        this._turnKey = turnKey
+      }
+      if (this.anim.stopAdd) {
+        this._braceW = smoothW(this._braceW ?? 0, braceTarget, dt)
+        const sa = this.anim.stopAdd
+        sa.setEffectiveWeight(this._braceW)
+        if (this._braceW === 0 && !braceTarget) sa.reset() // 定格→归零后回卷，下次从头播
+        else if (!sa.isRunning()) sa.play() // place() stop() 过的动作要重新起播
+      }
       // 官方横移 E/W 侧别选择：模型局部横向速度 +X（右）= E。起步阶段面向未转正
       // 时 lx 符号会错（从 yaw0 转向面向玩家的过程中 cos 变号）——权重混合段
       // （w<0.85，基本还在墙后）持续重估，速度立起来后才锁定；换向（leave 折返）

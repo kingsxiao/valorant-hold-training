@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import fs from 'node:fs'
-import { buildClip, buildLocomotion, locoWeights, stepFootPinState, sampleIkAnchor } from '../src/core/Locomotion.js'
+import { buildClip, buildLocomotion, locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip } from '../src/core/Locomotion.js'
 
 // 假骨架：UE 风格带 _NNNN 后缀骨名（与英雄 GLB 同构）
 function fakeHeroSkeleton(suffixes) {
@@ -144,6 +144,28 @@ describe('sampleIkAnchor 官方落地锚采样', () => {
   })
 })
 
+describe('pickDeathSide / pickTurnClip 死亡倒向与转身选型', () => {
+  it('玩家在正面（dot>0，弹道向后打）→ 背摔；背面/侧后 → 前扑', () => {
+    expect(pickDeathSide(1)).toBe('back')
+    expect(pickDeathSide(0.01)).toBe('back')
+    expect(pickDeathSide(0)).toBe('front')
+    expect(pickDeathSide(-0.7)).toBe('front')
+  })
+
+  it('转身选型：正角=左转 W / 负角=右转 E，角度取最近档，<20° 不出步', () => {
+    expect(pickTurnClip(0.5)).toBe('W45')    // +28.6° 左转 45 档
+    expect(pickTurnClip(-0.5)).toBe('E45')
+    expect(pickTurnClip(1.0)).toBe('W45')    // 57° 仍属 45 档
+    expect(pickTurnClip(1.8)).toBe('W90')    // 103° → 90
+    expect(pickTurnClip(-2.4)).toBe('E135')  // -137° → 135
+    expect(pickTurnClip(-3.1)).toBe('E180')  // -178° → 180
+    expect(pickTurnClip(3.1)).toBe('W180')
+    expect(pickTurnClip(0.2)).toBeNull()     // 11°：不出转身踏步（走急停支架）
+    expect(pickTurnClip(-0.34)).toBeNull()
+    expect(pickTurnClip(0.36)).toBe('W45')
+  })
+})
+
 describe('locoWeights 走/跑/横移权重分配', () => {
   it('纯前进：idle↔walk↔run 传统三态；横移权重把 moveW 按 wS 正交分给 N 与侧移', () => {
     const w = locoWeights({ moveW: 1, runW: 0, strafeW: 0 })
@@ -204,5 +226,29 @@ describe('stepFootPinState 脚钉地状态机（迟滞 + 权重坡）', () => {
     const st4 = { has: true, w: 1 }
     stepFootPinState(st4, 0.259, 0.01)
     expect(st4.has).toBe(true)
+  })
+})
+
+describe('turn 8 向集与 stopAdd 支架（TP_Core 停步挑战）', () => {
+  const locoJson = JSON.parse(fs.readFileSync('public/models/locomotion.json', 'utf8'))
+  it('结构锁值：官方时长（转身 1s / 支架 0.667s）、根骨轨道、stopAdd 含上身支架骨', () => {
+    expect(Object.keys(locoJson.turn).sort()).toEqual(['E135','E180','E45','E90','W135','W180','W45','W90'])
+    for (const c of Object.values(locoJson.turn)) {
+      expect(c.duration).toBeCloseTo(1, 3)
+      expect(c.n).toBe(31)
+      expect(c.tracks.map(t => t.b)).toContain('Splitter')
+    }
+    expect(locoJson.stopAdd.duration).toBeCloseTo(0.6667, 3)
+    const bones = locoJson.stopAdd.tracks.map(t => t.b)
+    expect(bones).toContain('Spine1')
+    expect(bones).toContain('Neck')
+  })
+
+  it('运行时：turn 8 动作齐备、stopAdd 转加法混合（叠在 kamae 上不替换）', () => {
+    const root = fakeHeroSkeleton([['Pelvis', '9'], ['L_Hip', '9'], ['L_Knee', '9'], ['L_Foot', '9'], ['L_Toe', '9'], ['R_Hip', '9'], ['R_Knee', '9'], ['R_Foot', '9'], ['R_Toe', '9'], ['Splitter', '9'], ['Spine1', '9'], ['Neck', '9']])
+    const built = buildLocomotion(locoJson, 'jett', root)
+    expect(Object.keys(built.turn).sort()).toEqual(['E135','E180','E45','E90','W135','W180','W45','W90'])
+    expect(built.turn.E90.duration).toBeCloseTo(1, 3)
+    expect(built.stopAdd.blendMode).toBe(THREE.AdditiveAnimationBlendMode)
   })
 })

@@ -120,6 +120,19 @@ const SRC = {
     back: { path: 'assets-raw/core-psa/TP_Core_Death_Land_BackSplat_Big.psa', full: true },
     front: { path: 'assets-raw/core-psa/TP_Core_Death_Land_FrontSplat_Big.psa', full: true },
   },
+  // 停步转身踏步（E=向右 / W=向左 × 45/90/135/180°，全部 1.0s）：clip 本体不带
+  // 根旋转（Splitter/Pelvis Y 转角≈0）——本体引擎程序化转根，腿只出「转身踏步」
+  // 步型；我们同样保持 yaw lerp 权威、clip 只出腿
+  turn: {
+    E45: 'assets-raw/core-psa/TP_Core_TurnE45_LB.psa',
+    E90: 'assets-raw/core-psa/TP_Core_TurnE90_LB.psa',
+    E135: 'assets-raw/core-psa/TP_Core_TurnE135_LB.psa',
+    E180: 'assets-raw/core-psa/TP_Core_TurnE180_LB.psa',
+    W45: 'assets-raw/core-psa/TP_Core_TurnW45_LB.psa',
+    W90: 'assets-raw/core-psa/TP_Core_TurnW90_LB.psa',
+    W135: 'assets-raw/core-psa/TP_Core_TurnW135_LB.psa',
+    W180: 'assets-raw/core-psa/TP_Core_TurnW180_LB.psa',
+  },
 }
 const out = {}
 for (const [hero, files] of Object.entries(SRC)) {
@@ -128,6 +141,9 @@ for (const [hero, files] of Object.entries(SRC)) {
     out[hero][k] = typeof spec === 'string' ? clipFrom(spec) : clipFromFull(spec.path)
   }
 }
+// 急停支架（Spine1-3+Neck 上身后压 + 腿，0.667s）：加法层，叠在 kamae 上——
+// 单条目全骨骼 clip（SRC 循环是「集合→多 clip」语义，stopAdd 不适用故单独导出）
+out.stopAdd = clipFromFull('assets-raw/core-psa/TP_Core_StopAdd.psa')
 // 横移 E/W 集：TP_Core 的真方向性循环（摆动腿跨向、支撑腿蹬伸各方向不同）
 out.strafe = { walkE: out.core.walkE, runE: out.core.runE, walkW: out.core.walkW, runW: out.core.runW }
 // 死亡集提到顶层（与 strafe 平级），供 Locomotion.buildLocomotion 消费
@@ -137,6 +153,8 @@ const size = fs.statSync('public/models/locomotion.json').size
 console.log(`written public/models/locomotion.json (${(size / 1024).toFixed(1)} KB)`)
 for (const [hero, clips] of Object.entries(out)) {
   for (const [k, c] of Object.entries(clips)) {
+    if (!c?.tracks) continue // stopAdd 是单 clip（挂在 hero 位上），在下面单独打印
     console.log(`${hero}.${k}: ${c.n}f ${c.duration}s tracks=${c.tracks.length} bones=[${c.tracks.map(t => t.b).join(',')}]`)
   }
 }
+console.log(`stopAdd: ${out.stopAdd.n}f ${out.stopAdd.duration}s tracks=${out.stopAdd.tracks.length}`)

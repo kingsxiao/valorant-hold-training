@@ -52,7 +52,32 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
   const death = deathSet
     ? { back: build(deathSet.back, 'death-back'), front: build(deathSet.front, 'death-front') }
     : null
-  return { walk, run, strafe, death }
+  // 停步转身踏步（8 向）+ 急停支架（加法层）：缺席不阻塞
+  const turnSet = locoJson?.turn
+  const turn = turnSet
+    ? Object.fromEntries(Object.entries(turnSet).map(([k, c]) => [k, build(c, `turn-${k}`)]))
+    : null
+  let stopAdd = locoJson?.stopAdd ? build(locoJson.stopAdd, 'stop-add') : null
+  if (stopAdd) {
+    // psa 导出是绝对姿态；转成相对首帧的偏移 + 加法混合，才能叠在 kamae 上
+    // （急停支架 = 上身后压，叠加而非替换：kamae 持枪手形不丢）
+    THREE.AnimationUtils.makeClipAdditive(stopAdd, 0)
+    stopAdd.blendMode = THREE.AdditiveAnimationBlendMode
+  }
+  return { walk, run, strafe, death, turn, stopAdd }
+}
+
+// 停步转身选型（纯函数）：deltaYaw = 朝向差（最短角，rad，正=左转）。
+// 命名约定：E=向右转（yaw 减）、W=向左转（yaw 增），角度取最近档。
+// |deltaYaw| < 0.35rad（~20°）不值得出转身踏步 → null（走急停支架）
+export function pickTurnClip(deltaYaw) {
+  const deg = Math.abs(deltaYaw) * 180 / Math.PI
+  if (deg < 20) return null
+  let best = 45
+  for (const a of [45, 90, 135, 180]) {
+    if (Math.abs(a - deg) < Math.abs(best - deg)) best = a
+  }
+  return (deltaYaw < 0 ? 'E' : 'W') + best
 }
 
 // 死亡倒向选择（纯函数）：dot = 「bot 朝向」与「bot→玩家」的前向点积。

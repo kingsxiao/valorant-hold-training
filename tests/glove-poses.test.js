@@ -45,14 +45,17 @@ describe('GLOVE_POSES 握姿表结构', () => {
 })
 
 describe('已收敛握姿数值锁定（穿插清零与零缝隙的成果）', () => {
-  it('vandal 腕锚：右腕 z=-0.317（腕口穿插清零）、左腕 x=-1.35', () => {
-    expect(GLOVE_POSES.vandal.handR.wrist).toEqual([1.7, 0.1, -0.317])
-    expect(GLOVE_POSES.vandal.handL.wrist[0]).toBeCloseTo(-1.35, 3)
+  // 腕锚 2026-09-11 重校：GLB 原始单位换版（vandal 3.5u→1.285u、phantom 2.4u→1.17u），
+  // 旧单位锚全部失效（手投到枪外悬空）；新值按当前几何顶点切片重推（握把顶右后 /
+  // 护木底下中段）。curls/掌向为角度与相机系量，单位无关，沿用 09-07 收敛值
+  it('vandal 腕锚：右腕握把顶右后、左腕护木底下中段（当前单位）', () => {
+    expect(GLOVE_POSES.vandal.handR.wrist).toEqual([0.24, 0.005, -0.055])
+    expect(GLOVE_POSES.vandal.handL.wrist).toEqual([-0.27, 0.065, 0])
   })
 
-  it('phantom 腕锚：右腕保持原始 -0.09（让位已回退）、左腕 z=0.016', () => {
-    expect(GLOVE_POSES.phantom.handR.wrist).toEqual([0.42, 0.1, -0.09])
-    expect(GLOVE_POSES.phantom.handL.wrist).toEqual([-0.2, 0.05, 0.016])
+  it('phantom 腕锚：右腕握把顶右后、左腕护木底下中段（当前单位）', () => {
+    expect(GLOVE_POSES.phantom.handR.wrist).toEqual([0.25, -0.02, -0.05])
+    expect(GLOVE_POSES.phantom.handL.wrist).toEqual([-0.22, 0.02, 0])
   })
 
   it('vandal 左手四指中节贴面（Y+20° 或 Z 轴指向在数组第 2/3 位）', () => {

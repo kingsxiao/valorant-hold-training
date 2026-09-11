@@ -73,8 +73,10 @@ export class Crosshair {
     this.ctx.scale(DPR, DPR)
     this.settings = sanitizeCrosshair({})
     this._sm = { move: 0, fire: 0, fadeF: 1, fadeM: 1 } // 平滑后的显示状态
+    this._ads = { x: 0, y: 0 } // ADS 准星跟随（后坐弹道表偏移）平滑值
     this._lastT = 0
     this._lastSig = ''
+    this._lastAdsSig = ''
     this.flashUntil = 0
     this._draw(true)
   }
@@ -103,6 +105,25 @@ export class Crosshair {
     this._sm.fadeF = ease(this._sm.fadeF, this.settings.fadeFire && fireDeg > 0.04 ? 0 : 1, 14)
     this._sm.fadeM = ease(this._sm.fadeM, this.settings.fadeMove && moveDeg > 0.05 ? 0 : 1, 14)
     this._draw()
+  }
+
+  // ADS 准星跟随（维基 ADS 注记 "Crosshair follows recoil"）：WeaponSystem 把
+  // 最近一发弹道表累计偏移按缩放后 FOV 投影成 px 喂进来，这里平移整个准星元素。
+  // 平滑与误差扩张同款：外扩瞬时可见（跟上弹道不迟滞）、回中缓动（复位读作
+  // 弹道恢复）。腰射喂 {0,0} —— 准星钉屏心（游戏腰射即如此）
+  setAdsOffset({ x = 0, y = 0 }) {
+    const now = performance.now()
+    const dt = Math.min(0.05, Math.max(0, (now - this._lastT) / 1000))
+    // 跟随方向瞬时、回中缓动（k=16 ≈ 60ms 级收拢）
+    const ease = (cur, target) => Math.abs(target) >= Math.abs(cur)
+      ? target
+      : cur + (target - cur) * Math.min(1, dt * 16)
+    this._ads.x = ease(this._ads.x, x)
+    this._ads.y = ease(this._ads.y, y)
+    const sig = this._ads.x.toFixed(1) + ',' + this._ads.y.toFixed(1)
+    if (sig === this._lastAdsSig) return
+    this._lastAdsSig = sig
+    this.el.style.transform = `translate(calc(-50% + ${this._ads.x.toFixed(1)}px), calc(-50% + ${this._ads.y.toFixed(1)}px))`
   }
 
   _draw(force = false) {

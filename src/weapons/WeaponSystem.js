@@ -61,6 +61,14 @@ export class WeaponSystem {
     this.equipUntil = 0
     this.now = 0
 
+    // ADS（右键开镜，对齐 Valorant Alt Fire）：blend 0→1 恒速过渡（固定时长动画）；
+    // 射速/散布/移速惩罚按维基数值生效（见 CONFIG.weapons.*.ads）。灵敏度不动 ——
+    // 游戏 ADS 灵敏度倍率默认 1.0 = 每 count 旋转角与腰射一致（无 FOV 自动补偿）
+    this.adsHeld = false // 右键按住且当前武器有 ADS
+    this.adsBlend = 0    // 开镜混合系数（驱动 FOV 缩放/持枪位姿/准星跟随）
+    this.patOff = { p: 0, y: 0 } // 最近一发弹道表累计偏移（度）：ADS 准星跟随用
+    this._punchCum = 0; this._punchCumY = 0 // punch 增量差分基准（阶跃保持模型）
+
     // 事件回调（main 注入）
     this.onHitBot = null    // (bot, zone, dmg, killed)
     this.onShotFired = null // () → 统计
@@ -71,6 +79,22 @@ export class WeaponSystem {
   }
 
   get weapon() { return CONFIG.weapons[this.currentId] }
+  get adsOn() { return this.adsBlend > 0.5 } // 开镜态判定（射速/散布切换阈值）
+
+  // 当前有效射速：ADS 打九折（维基 altrate：Vandal 9.75→8.775 / Phantom 11→9.9）
+  effectiveFireRate() {
+    const w = this.weapon
+    return w.fireRate * (this.adsOn && w.ads ? w.ads.fireRateMult : 1)
+  }
+
+  // ADS 移速乘数（维基 move 76% = 4.104 m/s）。按住即生效（开镜瞬间就慢下来，
+  // 与游戏一致——移动惩罚不等人把镜子抬到位）
+  adsMoveMult() {
+    const w = this.weapon
+    return this.adsHeld && w.ads ? w.ads.moveMult : 1
+  }
+
+  get adsZoom() { return this.weapon.ads?.zoom ?? 1 }
 
   // ---- 第一人称持枪模型：工厂建模 + 挂载到 vmCamera ----
   // 支持 public/models/viewmodel.glb 用户自有模型整体替换（见 setCustomViewmodel）
@@ -224,7 +248,9 @@ export class WeaponSystem {
     scene.userData.eject ??= new THREE.Vector3(bb.min.x + size.x * 0.56, bb.min.y + size.y * 0.62, bb.min.z)
     // 各枪取景（2026-09-04 双枪联调）：vandal 枪口 NDC (0.26,-0.52)、phantom 消音器
     // 更长取景压低 —— 默认值沿旧单模型；逐枪 pos/scale 在此覆盖。
-    // 皮肤键（vandal:aristocrat）按底层武器取景 —— 同一把枪
+    // 皮肤键（vandal:aristocrat）按底层武器取景 —— 同一把枪。
+    // 开镜取景不在此手调：_solveAdsHolder 按本枪实测几何解算（枪局部偏移开镜不动，
+    // 全部位姿走 holder —— 手套按腰射姿态装配，枪局部一动就脱手）
     const FRAMING = {
       vandal: { pos: new THREE.Vector3(0.10, 0, -0.40), scale: 0.94 },
       phantom: { pos: new THREE.Vector3(0.10, -0.02, -0.42), scale: 0.88 },
@@ -254,6 +280,9 @@ export class WeaponSystem {
     }
     scene.position.copy(scene.userData.pos) // 应用持枪位置（内部模型已归一化居中）
     scene.scale.multiplyScalar(scene.userData.scale) // 逐枪取景缩放（0.85m 归一化之上的微调）
+    // 开镜 holder 位解算：腰射取景（pos/scale/归一化旋转）落定后按实测锚点解，
+    // 任何枪模/皮肤 GLB 的机瞄线都自动对准星（见 _solveAdsHolder）
+    scene.userData.adsHolder = this._solveAdsHolder(scene, bb, size)
     // 自有枪模手臂：挂 holder（保证 -Z 朝枪口的坐标系），按模型包围盒中心对齐持握姿势
     if (!this.customArms) {
       this.customArms = buildCustomArms(this.armMats)
@@ -265,6 +294,45 @@ export class WeaponSystem {
     this.vmHolder.add(scene)
   }
 
+  // ---- ADS 开镜 holder 位解算（_attachCustomVm 末尾调用）----
+  // 几何链：vmCamera 固定原点无旋转（fovV = viewmodelFov），枪+手+袖臂全挂
+  // vmHolder → 锚点 p（作者系）到相机系 = H + (baseVmScale·scale)·R_h·(scene 局部
+  // 矩阵去 holder 前的部份)。R_h = Euler(pitch, yaw, 0)，yaw=0 时枪管轴与视线平行，
+  // 机瞄线整列落在同一相机 x 列 → H.x 一步定列（瞄线取中）；H.y/H.z 对两个 NDC_y
+  // 目标是分式线性函数，2×2 数值牛顿两三步收敛。
+  // 2026-09-11 手调常数的历史教训：holder 位与枪局部 adsPos 双重偏移互相打架，
+  // 且手（按腰射姿态装配在 holder 下）不跟枪局部插值 → 开镜脱手。此后枪局部
+  // 偏移开镜恒不动，全部位姿走 holder 刚体变换，握姿永不脱开。
+  _solveAdsHolder(scene, bb, size) {
+    const t = Math.tan(CONFIG.graphics.viewmodelFov * Math.PI / 360)
+    const S = this.baseVmScale * WeaponSystem.ADS_HOLDER.scale
+    const R = new THREE.Matrix4().makeRotationFromEuler(
+      new THREE.Euler(WeaponSystem.ADS_HOLDER.pitch, WeaponSystem.ADS_HOLDER.yaw, 0, 'XYZ'))
+    const q = scene.quaternion, G = scene.position, s = scene.scale
+    const toH = (p, out) => out.set(p.x * s.x, p.y * s.y, p.z * s.z)
+      .applyQuaternion(q).add(G).applyMatrix4(R).multiplyScalar(S)
+    const muzzle = scene.userData.muzzle
+    const rear = { x: bb.min.x + size.x * WeaponSystem.ADS_SIGHT_NDC.rearFrac, y: muzzle.y, z: 0 }
+    const a = new THREE.Vector3(), b = new THREE.Vector3()
+    toH(muzzle, a); toH(rear, b)
+    const H = new THREE.Vector3(-a.x, this.vmBase.y, this.vmBase.z) // H.x 定瞄线列
+    const ndcY = (v, hy, hz) => (hy + v.y) / (t * -(hz + v.z))
+    const tm = WeaponSystem.ADS_SIGHT_NDC.muzzle, tr = WeaponSystem.ADS_SIGHT_NDC.rear
+    const F = (hy, hz) => [ndcY(a, hy, hz) - tm, ndcY(b, hy, hz) - tr]
+    for (let i = 0; i < 8; i++) {
+      const f = F(H.y, H.z)
+      if (Math.abs(f[0]) < 1e-7 && Math.abs(f[1]) < 1e-7) break
+      const e = 1e-4
+      const fy = F(H.y + e, H.z), fz = F(H.y, H.z + e)
+      const j00 = (fy[0] - f[0]) / e, j01 = (fz[0] - f[0]) / e
+      const j10 = (fy[1] - f[1]) / e, j11 = (fz[1] - f[1]) / e
+      const det = j00 * j11 - j01 * j10
+      H.y -= (f[0] * j11 - f[1] * j01) / det
+      H.z -= (f[1] * j00 - f[0] * j10) / det
+    }
+    return H
+  }
+
   // ---- 切枪 ----
   switchTo(id, instant = false) {
     if (id === this.currentId && !instant) return
@@ -272,6 +340,9 @@ export class WeaponSystem {
     this.burstLeft = 0
     this.equipUntil = this.now + CONFIG.weapons[id].equipTime * (instant ? 0 : 1)
     this.sprayIndex = 0
+    this.patOff.p = this.patOff.y = 0 // 切枪弹道表清零，准星跟随偏移一并复位
+    this._punchCum = this._punchCumY = 0 // punch 增量基准复位
+    this.adsBlend = 0                // 换枪从腰射开始（游戏中切枪即出镜）
     // 两段式切枪（2026-09-07）：旧枪先在装备动画前 35% 内下移出画，到边界帧才
     // 换枪+重摆手姿，再托起新枪——旧版切换帧旧枪原地消失、新枪瞬移到下方，
     // 手腕单帧跳变 0.56 NDC（实测），硬切可见
@@ -294,6 +365,7 @@ export class WeaponSystem {
       crouched: this.player.crouchAmt > 0.5,
       grounded: this.player.grounded,
       sprayIndex: this.sprayIndex,
+      ads: this.adsOn,
     })
   }
 
@@ -304,6 +376,7 @@ export class WeaponSystem {
       crouched: this.player.crouchAmt > 0.5,
       grounded: this.player.grounded,
       sprayIndex: this.sprayIndex,
+      ads: this.adsOn,
     })
   }
 
@@ -333,10 +406,10 @@ export class WeaponSystem {
     if (this.burstLeft > 0) this.burstLeft--
 
     this._fireOne()
-    // 下一发时刻 = max(上一次限定, 当前时刻) + 射击间隔。
+    // 下一发时刻 = max(上一次限定, 当前时刻) + 射击间隔（ADS 打九折，见 effectiveFireRate）。
     // 若写成 max(上一次限定 + 间隔, 当前时刻)，停火后再次开火的首发会把下一发
     // 放到"现在"，第二个逻辑帧立刻击发 → 前两发仅隔 1 tick（射速超标）
-    this.nextShotAt = Math.max(this.nextShotAt, this.now) + 1 / w.fireRate
+    this.nextShotAt = Math.max(this.nextShotAt, this.now) + 1 / this.effectiveFireRate()
   }
 
   _fireOne() {
@@ -350,10 +423,15 @@ export class WeaponSystem {
     const pattern = patterns[this.currentId] ?? (patterns[this.currentId] = makeSprayPattern(30, {
       prot: w.recoil.protected ?? 6,
       swing: (w.recoil.swingTime ?? 0.6) * w.fireRate,
+      climb: w.recoil.climb ?? 4.03, // 防御性 fallback（现行全武器已标定 climb）
     }))
     const pi = Math.min(this.sprayIndex, pattern.length - 1)
     const pat = pattern[pi]
     this.sprayIndex++
+
+    // ADS 后坐削减（维基定性"Slight recoil reduction"，×0.85 近似）：弹道表幅度
+    // 垂直/水平同乘 —— 开镜扫射上爬更缓，与首发散布收紧合成"更准"的读数
+    const arm = this.adsOn && w.ads ? w.ads.recoilMult : 1
 
     const spreadDeg = this.currentSpread()
     const p = this.player
@@ -362,8 +440,11 @@ export class WeaponSystem {
     const sr = Math.min(1, Math.max(0, p.moveSpeed / (CONFIG.movement.runSpeed * (w.moveSpeedMult ?? 1))))
     const rmul = 1 + ((w.recoil.runMult ?? 1) - 1) * Math.pow(sr, 1.4)
     _right.set(1, 0, 0).applyEuler(_euler)
-    _dir.applyAxisAngle(UP, THREE.MathUtils.degToRad(pat.y))
-    _dir.applyAxisAngle(_right, THREE.MathUtils.degToRad(pat.p * rmul))
+    _dir.applyAxisAngle(UP, THREE.MathUtils.degToRad(pat.y * arm))
+    _dir.applyAxisAngle(_right, THREE.MathUtils.degToRad(pat.p * rmul * arm))
+    // ADS 准星跟随的弹道表偏移记账（最近一发累计偏移，度；随 sprayIndex 复位清零）
+    this.patOff.p = pat.p * rmul * arm
+    this.patOff.y = pat.y * arm
     // 随机散布（圆盘均匀 → 锥面）
     if (spreadDeg > 0) {
       const r = Math.sqrt(Math.random()) * spreadDeg
@@ -373,8 +454,18 @@ export class WeaponSystem {
       _dir.applyAxisAngle(UP, THREE.MathUtils.degToRad(r * Math.sin(az)))
     }
 
-    // 视觉上踢（不影响弹道，弹道由表驱动 —— 与游戏一致；跑动乘数同样作用于上踢）
-    p.addPunch(THREE.MathUtils.degToRad(pat.p * rmul) * w.recoil.viewPunch * 0.25 + 0.002, THREE.MathUtils.degToRad(pat.y) * w.recoil.viewPunch * 0.12)
+    // 视觉上踢（不影响弹道，弹道由表驱动 —— 与游戏一致；跑动乘数同样作用于上踢）。
+    // 2026-09-11 实测重构（all-recoil 60fps 帧级边缘追踪）：Valorant 的视角上踢为
+    // 阶跃保持模型 —— 每发上踢 = 弹道【增量】×viewPunch×0.25（全弹匣累计视角爬升
+    // ≈1.0-1.5°，与弹道累计 18° 解耦），停火后偏移 750ms 内零回稳（σ=0.1px 平直）
+    // —— 玩家自己下拉回中。故 punch 按增量给、punchRecover≈0（近保持）。
+    // ADS 时 ×0.45（镜稳线走，准星跟随由 HUD 平移承担）
+    const punchScale = this.adsOn && w.ads ? 0.45 : 1
+    const dPunch = Math.max(0, pat.p * rmul * arm - this._punchCum) // 本发增量（累计差分）
+    this._punchCum = pat.p * rmul * arm
+    p.addPunch((THREE.MathUtils.degToRad(dPunch) * w.recoil.viewPunch * 0.25 + 0.002) * punchScale,
+      THREE.MathUtils.degToRad((pat.y * arm - this._punchCumY)) * w.recoil.viewPunch * 0.12 * punchScale)
+    this._punchCumY = pat.y * arm
 
     // 命中判定：世界 vs 可击毁技能道具 vs 机器人取最近（射线原点用当前逻辑帧的
     // 玩家眼睛，而非渲染帧相机位置——后者在固定步长内最多滞后一帧）
@@ -405,7 +496,7 @@ export class WeaponSystem {
     const muzzleStyle = sup
       ? SUPPRESSOR_FX.muzzle
       : w.sound === 'handcannon'
-        ? { scale: 1.3, lightPeak: 22, lightDur: 0.075, flashColor: 0xfff2dc }
+        ? { scale: 1.3, lightPeak: 22, lightDur: 0.038, flashColor: 0xfff2dc } // 实测标定（FX_TIMING.lightHeavy）
         : {}
     this.fx.muzzle(_muzzle, muzzleStyle)
     this.fx.muzzleSmoke(_muzzle, _dir, this.heat * (sup ? SUPPRESSOR_FX.smoke : 1))
@@ -446,11 +537,13 @@ export class WeaponSystem {
     // 微抖（yaw/roll 各自独立弹簧 → 每发的枪身姿态都有细微差别，连射不呆板）
     // + 手部滞后冲量（刚度低于枪身 → 开火时手比枪慢半拍，读出"顶手"重量感）
     const kick = w.vmKick ?? 0.032 // 每把枪独立开火冲量（重枪锤感 / 消音轻感）
+    // ADS 时枪身后坐冲量随后坐削减收敛（过渡期内按 blend 插值，无跳变）
+    const kickScale = w.ads ? THREE.MathUtils.lerp(1, w.ads.recoilMult, this.adsBlend) : 1
     // 冲量标定：×62 → 峰值 ≈ vmKick（Vandal 0.032 = 33ms 峰值 0.030， Sheriff 0.047）
-    this.sKick.impulse(kick * 62)
-    this.sYaw.impulse((Math.random() * 2 - 1) * kick * 7.5)
-    this.sRoll.impulse((Math.random() * 2 - 1) * kick * 10)
-    this.sFlinch.impulse(kick * 50)
+    this.sKick.impulse(kick * 62 * kickScale)
+    this.sYaw.impulse((Math.random() * 2 - 1) * kick * 7.5 * kickScale)
+    this.sRoll.impulse((Math.random() * 2 - 1) * kick * 10 * kickScale)
+    this.sFlinch.impulse(kick * 50 * kickScale)
     this.grip = 1
     this.heat = Math.min(1, this.heat + 0.13)
     this.vmBolt = 1
@@ -487,14 +580,20 @@ export class WeaponSystem {
     this.now += dt
     // 手部动画用的扳机状态（渲染帧 _animateHands 消费）
     this._trigHeld = !!input.mouse0
+    // ADS：右键按住且当前武器有开镜（Classic 右键是三连发、Sheriff/刀无副功能）
+    this.adsHeld = !!input.mouse1 && !!this.weapon.ads
     // 鼠标边沿由渲染帧 queueEdges 喂入，这里消费
     const edges = this.pendingEdges ?? (this.pendingEdges = { fireEdge: false, altEdge: false })
     this.tryFire(edges.fireEdge, input.mouse0, edges.altEdge)
     edges.fireEdge = edges.altEdge = false
 
-    // 停火重置弹道（刀无后坐力参数）
+    // 停火重置弹道（刀无后坐力参数）；准星跟随偏移随表复位一并清零
     const rec = this.weapon.recoil
-    if (!rec || this.now - this.lastFireTime > rec.recoverTime) this.sprayIndex = 0
+    if (!rec || this.now - this.lastFireTime > rec.recoverTime) {
+      this.sprayIndex = 0
+      this.patOff.p = this.patOff.y = 0
+      this._punchCum = this._punchCumY = 0
+    }
   }
 
   queueEdges(fireEdge, altEdge) {
@@ -507,9 +606,36 @@ export class WeaponSystem {
   // 基础持枪姿势对齐 Valorant：枪在右下、贴近相机，枪身向内偏转使枪口朝准星汇聚
   static vmBaseYaw = 0.20     // 向内偏航（枪口指向屏幕中心）
   static vmBaseRoll = -0.06   // 轻微侧倾（露出枪顶）
+  // ADS 位姿常量（2026-09-11 对官方 ADS 实拍帧 /tmp/ads-frames/f020 标定）：
+  // 枪管轴经 normalizeViewmodel 的 Ry(-π/2) 已指 holder -Z → 开镜不做枪身旋转，
+  // 只做：内偏/侧倾归零 + 微仰（前瞄抬到准星正下方）+ 贴近放大（×scale）。
+  // holder 位置不进常数表 —— 逐枪按实测机瞄锚点解算（_solveAdsHolder），换皮肤
+  // GLB / 换枪模自动适配；pos 仅作无解算数据时的兜底（内置白模路径）
+  // 枪口缓升系数（2026-09-11 实测）：官方开火中 viewmodel 每发缓升 ~2.4px@1080p
+  // （质心 cy 漂移实测），25 发累计 ≈4° ≈ 弹道爬升 18° ×0.22 —— 与视角 punch（阶跃
+  // 保持 ~1°）分离的枪体俯仰累积；随 patOff 复位自动归零
+  static VM_RISE = 0.0035 // rad 每度弹道累计
+
+  static ADS_HOLDER = {
+    pos: new THREE.Vector3(0, -0.12, -0.30),
+    yaw: 0,
+    pitch: 0.05,
+    scale: 1.5,
+  }
+  // 机瞄线目标（vmCamera NDC）：前瞄（膛线汇聚）在准星正下方、后瞄（机匣顶）
+  // 压到屏中下 —— 对官方帧量得（机匣+手约占屏下方 1/5~1/4，枪管向屏心透视汇聚）。
+  // rearFrac = 后瞄在枪长上的位置（自枪口起 77%，AK 系机匣尾照门）
+  static ADS_SIGHT_NDC = { muzzle: -0.045, rear: -0.42, rearFrac: 0.77 }
 
   updateViewmodel(dt, mouseDx, mouseDy) {
     const p = this.player
+    // ---- ADS 混合（恒速过渡 = 固定时长开镜动画，进出同速）----
+    if (this.weapon.ads) {
+      const t = this.weapon.ads.time
+      this.adsBlend = THREE.MathUtils.clamp(this.adsBlend + (this.adsHeld ? 1 : -1) * dt / t, 0, 1)
+    } else this.adsBlend = 0
+    const ak = this.adsBlend
+    const steadyK = 1 - 0.75 * ak // ADS 持枪稳度：摆动/起伏收敛（缩放下放大 1.25×，净观感 ≈ 腰射）
     // 摆动/侧倾的移速基准分武器化（副武器 5.73 满速时 bob/roll 与步枪各自归一）
     const baseSpeed = CONFIG.movement.runSpeed * (this.weapon.moveSpeedMult ?? 1)
     // ---- 弹簧组步进（后坐/随机微抖/落地颠簸/手部滞后）----
@@ -532,13 +658,13 @@ export class WeaponSystem {
       }
     }
     // 视角摆动（惯性延迟）
-    this.swayX += (-mouseDx * 0.00012 - this.swayX) * Math.min(1, dt * 12)
-    this.swayY += (-mouseDy * 0.00012 - this.swayY) * Math.min(1, dt * 12)
+    this.swayX += (-mouseDx * 0.00012 * steadyK - this.swayX) * Math.min(1, dt * 12)
+    this.swayY += (-mouseDy * 0.00012 * steadyK - this.swayY) * Math.min(1, dt * 12)
     // 移动起伏
     const speedRatio = Math.min(1, p.moveSpeed / baseSpeed)
     this.bobT += dt * (6 + speedRatio * 6)
-    const bob = p.grounded ? Math.sin(this.bobT) * 0.006 * speedRatio : 0
-    const bobX = p.grounded ? Math.cos(this.bobT * 0.5) * 0.004 * speedRatio : 0
+    const bob = p.grounded ? Math.sin(this.bobT) * 0.006 * speedRatio * steadyK : 0
+    const bobX = p.grounded ? Math.cos(this.bobT * 0.5) * 0.004 * speedRatio * steadyK : 0
     // 静止呼吸微摆（慢频小幅，速度越快越弱）
     this.idleT += dt
     const idleK = 1 - speedRatio
@@ -572,21 +698,38 @@ export class WeaponSystem {
     }
     // 侧移手感对：枪身轻微反向倾 + 平移滞后拖尾（急停时摆回）
     const strafe = p.vel.x * Math.cos(p.yaw) - p.vel.z * Math.sin(p.yaw)
-    const rollT = -strafe / baseSpeed * 0.045
+    const rollT = -strafe / baseSpeed * 0.045 * steadyK
     this.strafeRoll += (rollT - this.strafeRoll) * Math.min(1, dt * 9)
-    this.strafeLag += (-strafe / baseSpeed * 0.014 - this.strafeLag) * Math.min(1, dt * 8)
+    this.strafeLag += (-strafe / baseSpeed * 0.014 * steadyK - this.strafeLag) * Math.min(1, dt * 8)
+    // ADS 位姿混合（holder 层，纯刚体变换：枪+手+袖臂整体 → 握姿不脱手）。
+    // 位置逐枪取 userData.adsHolder（_solveAdsHolder 解算值），无则静态兜底；
+    // 枪局部偏移开镜不动（手按腰射装配，枪局部一动就脱手）
+    const AH = WeaponSystem.ADS_HOLDER
+    const adH = this.activeCustomVm()?.userData.adsHolder ?? AH.pos
     this.vmHolder.position.set(
-      this.vmBase.x + this.swayX + bobX + breatheX + this.strafeLag,
-      this.vmBase.y + this.swayY + bob - lower - crouchDrop + breatheY - this.sDip.x - this.airK * 0.016,
-      this.vmBase.z + this.sKick.x + swFwd,
+      THREE.MathUtils.lerp(this.vmBase.x, adH.x, ak) + this.swayX + bobX + breatheX + this.strafeLag,
+      THREE.MathUtils.lerp(this.vmBase.y, adH.y, ak) + this.swayY + bob - lower - crouchDrop + breatheY - this.sDip.x - this.airK * 0.016,
+      THREE.MathUtils.lerp(this.vmBase.z, adH.z, ak) + this.sKick.x + swFwd,
     )
+    this.vmHolder.scale.setScalar(this.baseVmScale * THREE.MathUtils.lerp(1, AH.scale, ak))
     this.vmHolder.rotation.set(
-      this.sKick.x * 2.2 - this.sDip.x * 2.0 + this.airK * 0.045 + raise * 1.2 + this.swayY * 2 - swPitch,
-      WeaponSystem.vmBaseYaw + this.sYaw.x + this.swayX * 2 + swYaw,
-      WeaponSystem.vmBaseRoll + this.strafeRoll + this.sRoll.x + this.airK * 0.03 + raise * 0.5,
+      THREE.MathUtils.lerp(0, AH.pitch, ak) + this.sKick.x * 2.2 - this.sDip.x * 2.0 + this.airK * 0.045 + raise * 1.2 + this.swayY * 2 - swPitch + this.patOff.p * WeaponSystem.VM_RISE,
+      THREE.MathUtils.lerp(WeaponSystem.vmBaseYaw, AH.yaw, ak) + this.sYaw.x + this.swayX * 2 + swYaw,
+      THREE.MathUtils.lerp(WeaponSystem.vmBaseRoll, 0, ak) + this.strafeRoll + this.sRoll.x + this.airK * 0.03 + raise * 0.5,
     )
     this._animateHands(dt)
     this._updateVmParts(dt)
+  }
+
+  // ADS 准星跟随偏移（px）：把最近一发弹道表累计偏移（度）按当前（已缩放的）
+  // 主相机 FOV 投影到屏幕像素 —— 维基 ADS 注记"Crosshair follows recoil"，
+  // 腰射不跟随（腰射准星钉在屏心，弹道偏移不可见）。y 左偏→屏 x 负、p 上爬→屏 y 负
+  adsCrosshairOffset(fovVDeg, viewH) {
+    const k = this.adsBlend
+    if (k <= 0.02) return { x: 0, y: 0 }
+    const toPx = (deg) => Math.tan(deg * Math.PI / 360)
+      / Math.max(1e-6, Math.tan(fovVDeg * Math.PI / 360)) * viewH * 0.5
+    return { x: -toPx(this.patOff.y) * k, y: -toPx(this.patOff.p) * k }
   }
 
   // ---- 手部动画（glove 五指路径）：扳机指扣动 + 握持收紧 + 手部滞后回弹 ----
@@ -701,7 +844,7 @@ const _eye = new THREE.Vector3()
 // 曳光更淡更细更低饱和、烟量减半 —— 远处看你的枪线更隐蔽，近处自己的反馈
 // 也不喧宾夺主（消音的意义）；音、焰、烟、曳光四线一致地"闷"
 const SUPPRESSOR_FX = {
-  muzzle: { scale: 0.5, opacity: 0.55, lightPeak: 5, lightDur: 0.05, color: 0xffd2a0 },
+  muzzle: { scale: 0.5, opacity: 0.55, lightPeak: 5, lightDur: 0.025, color: 0xffd2a0 }, // 实测标定（FX_TIMING.lightSuppressed）
   tracer: { opacity: 0.45, sat: 0.45, width: 0.7 },
   smoke: 0.5,
 }

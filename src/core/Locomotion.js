@@ -165,16 +165,34 @@ export function locoWeights({ moveW, runW, strafeW = 0, hasStrafe = false }) {
   }
 }
 
-// 脚钉地状态机（纯函数，Bot._stepFootPin 与单测共用）：支撑判定 + 权重坡。
-// 迟滞带（engageY < releaseY）防边界抖动；权重 ramp 让 IK 修正进入/退出平滑
-// （20/s ≈ 50ms 全幅）。y 用脚的世界高度（锚点由调用侧在入锚沿记录）。
-// 阈值口径：跑动支撑期脚踝 ~0.15m、摆动 0.4~1.0m，0.21/0.26 取分离带。
-export function stepFootPinState(st, y, dt, { engageY = 0.21, releaseY = 0.26, rate = 20 } = {}) {
-  if (!st.has) {
-    if (y < engageY) st.has = true
-  } else if (y > releaseY) {
-    st.has = false
-  }
-  st.w = Math.max(0, Math.min(1, st.w + (st.has ? dt * rate : -dt * rate)))
-  return st
+// 官方骨盆参考高（移动态）：runN 固定 mesh.y=-0.2 实测骨盆世界高 0.85~0.94m
+// 取中；支撑踝官方锚 0.125m + 载荷腿跨，全部官方走跑横移同高（骨盆轨道 ±7mm）
+export const PELVIS_REF_Y = 0.90
+// 蹲族（蹲走/蹲踞移动）骨盆参考降幅：官方蹲姿 = 踝锚 0.125 + 深屈膝支撑跨
+// ~0.48 + 髋偏移 0.115 ≈ 0.72（clip 自身骨盆轨道 ≈ 站高、蹲姿在腿/脊柱旋转
+// 里——不降参考 = 浮空深蹲，实测脚悬 0.3~0.6m）
+export const PELVIS_CROUCH_DROP = 0.18
+// 站定脚踝离地余量：kamae 双脚落clip自含（实测落地世界高 0.09m）
+export const FOOT_GROUND_Y = 0.09
+
+// 身体高度解算（纯函数，Bot.step 官方曲线路径与单测共用）：
+//  - 移动态参考 = 骨盆参考高（蹲族按 crouchW 降 PELVIS_CROUCH_DROP）− 骨盆局
+//    部高——官方起伏由 clip 自己的骨盆/Splitter 位置轨道携带（±7mm + 相位起
+//    伏），身体高度本身准静态
+//  - 站定参考 = 贴地余量 − 最低脚局部高（kamae 站姿脚高稳定无伪影；蹲踞待机
+//    的脚高含在 clip 里，sink 表现为下蹲）
+//  - 两参考按移动权重（调用侧已 smoothW）线性混合
+// ⚠ 绝不让身体追逐逐帧最低脚高：官方导出剥离根位移后 clip 内脚高含跑步机伪影
+//   （runN 实测全周期 0.45~0.96m 摆动），追逐它 = 每步 ±20cm 弹跳 + 长期沉入
+//   地下 0.5m（2026-09-11 抽搐回归根因，勿回退）
+export function locoBodyY({ hipsLocalY, loMinY, moveW, crouchW = 0 }) {
+  const stand = FOOT_GROUND_Y - loMinY
+  const move = PELVIS_REF_Y - PELVIS_CROUCH_DROP * Math.min(1, Math.max(0, crouchW)) - hipsLocalY
+  return stand + (move - stand) * Math.min(1, Math.max(0, moveW))
 }
+
+// 官方 IK 锚曲线的支撑/摆动落地窗（锚 z = 踝离地高，psa 实测）：支撑
+// 0.123~0.155、摆动 0.31+——脚步声/落地事件如需判定窗，用 0.21/0.26 分离带。
+// （旧「支撑窗钉地状态机」已在 2026-09-11 抽搐修复中移除：官方锚曲线全程
+// 驱动脚部，不存在释放回 clip 姿态的动作——释放窗内慢放=拖拽、快放=瞬移，
+// 双向都是跳变）

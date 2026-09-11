@@ -8,7 +8,7 @@ const worldStub = { moveAxis: () => ({ hit: false }) }
 const inputStub = { down: () => false }
 const mk = () => new Player(worldStub, {})
 
-describe('视角上踢（view punch）分武器恢复曲线', () => {
+describe('视角上踢（view punch）阶跃保持模型（2026-09-11 实测重构）', () => {
   it('恢复速率取 recoil.punchRecover，指数回落精确可算', () => {
     const p = mk()
     p.addPunch(0.1, 0.02)
@@ -16,13 +16,11 @@ describe('视角上踢（view punch）分武器恢复曲线', () => {
     expect(p.punchPitch).toBeCloseTo(0.1 * Math.exp(-0.2 * CONFIG.weapons.vandal.recoil.punchRecover), 5)
   })
 
-  it('重枪慢沉：Sheriff 恢复后残留上踢大于 Vandal', () => {
-    const rifle = mk(), cannon = mk()
-    rifle.addPunch(0.1, 0)
-    cannon.addPunch(0.1, 0)
-    rifle.step(0.3, inputStub, CONFIG.weapons.vandal)
-    cannon.step(0.3, inputStub, CONFIG.weapons.sheriff)
-    expect(cannon.punchPitch).toBeGreaterThan(rifle.punchPitch)
+  it('阶跃保持：停火 0.75s 残留 >99%（实测上界，全武器统一速率）', () => {
+    const p = mk()
+    p.addPunch(0.1, 0)
+    p.step(0.75, inputStub, CONFIG.weapons.sheriff)
+    expect(p.punchPitch).toBeGreaterThan(0.099)
   })
 
   it('武器无 recoil 参数（刀）回退默认恢复率 9/s', () => {

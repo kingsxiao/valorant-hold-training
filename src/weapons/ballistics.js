@@ -33,6 +33,14 @@ export function spreadAt(w, ctx) {
 export function spreadParts(w, ctx) {
   if (w.slot === 'melee') return { move: 0, fire: 0, total: 0 }
   const s = w.spread
+  // ctx.ads（开镜态）：静止基准/连射封顶换成维基 Alternate Fire 行的 ADS 值
+  // （首发更小、封顶反而略高于腰射）；移动加算惩罚（+°）维基标注与腰射同值，
+  // 锚点曲线沿腰射 walk/run 的"加算量"平移到 ADS 基准上
+  const a = ctx.ads && w.ads ? w.ads : null
+  const stand = a ? a.stand : s.stand
+  const crouchRest = a ? a.crouch : s.stand * s.crouchMult
+  const walkV = stand + (s.walk - s.stand)
+  const runV = stand + (s.run - s.stand)
   const r = Math.min(1, Math.max(0, ctx.speedRatio))
   // 锚点用 CONFIG.movement 的真实姿态速度：walk 值在静步速度处精确命中（62.8%），
   // 蹲走惩罚在蹲姿满速（34%）处满额 —— 散布曲线与移动模型同一套速度口径
@@ -40,16 +48,17 @@ export function spreadParts(w, ctx) {
   const crouchA = CONFIG.movement.crouchMult
   let sp
   if (ctx.crouched) {
-    sp = s.stand * s.crouchMult + s.crouchMove * Math.pow(Math.min(1, r / crouchA), 1.4)
+    sp = crouchRest + s.crouchMove * Math.pow(Math.min(1, r / crouchA), 1.4)
   } else if (r <= walkA) {
-    sp = s.stand + (s.walk - s.stand) * Math.pow(r / walkA, 1.4)
+    sp = stand + (walkV - stand) * Math.pow(r / walkA, 1.4)
   } else {
-    sp = s.walk + (s.run - s.walk) * Math.pow((r - walkA) / (1 - walkA), 1.4)
+    sp = walkV + (runV - walkV) * Math.pow((r - walkA) / (1 - walkA), 1.4)
   }
   // 静止基准随姿态走：蹲姿基准 = 蹲立散布（蹲得越低基准越低）；空中无基准，
   // 跳跃散布全额计入移动误差（游戏中跳跃即最大移动误差）
-  const rest = ctx.grounded ? (ctx.crouched ? s.stand * s.crouchMult : s.stand) : 0
+  const rest = ctx.grounded ? (ctx.crouched ? crouchRest : stand) : 0
   if (!ctx.grounded) sp = s.jump
-  const fire = Math.min(ctx.sprayIndex * 0.05, Math.max(0, (s.max ?? s.stand + 0.8) - s.stand))
+  const maxSp = a ? a.maxStand : (s.max ?? s.stand + 0.8)
+  const fire = Math.min(ctx.sprayIndex * 0.05, Math.max(0, maxSp - stand))
   return { move: Math.max(0, sp - rest), fire, total: sp + fire }
 }

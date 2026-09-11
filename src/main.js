@@ -329,7 +329,7 @@ engine.preFrame = () => {
 
 engine.simStep = (dt) => {
   if (!state.playing) return
-  player.step(dt, input, weapons.weapon)
+  player.step(dt, input, weapons.weapon, weapons.adsMoveMult()) // ADS 移速 76% 惩罚
   weapons.step(dt, input)
   bots.step(dt, 1)
   flashes.step(dt)
@@ -351,6 +351,11 @@ engine.renderFrame = (alpha, dtMs) => {
     engine.camera.updateMatrixWorld()
     engine.camera.matrixWorldInverse.copy(engine.camera.matrixWorld).invert()
   weapons.updateViewmodel(dt, frameMouse.dx, frameMouse.dy)
+  // ADS 视野缩放：103° ÷ 1.25 → 82.4°（维基 zoom），随 adsBlend 插值；灵敏度不动
+  // （游戏 ADS 灵敏度倍率默认 1.0 = 每 count 旋转角与腰射一致，无 FOV 补偿）。
+  // 必须在 fx.calibrate / 准星 update 之前 —— 两者都消费 camera.fov
+  engine.setFovH(THREE.MathUtils.lerp(CONFIG.graphics.fovH, CONFIG.graphics.fovH / weapons.adsZoom, weapons.adsBlend))
+  crosshair.setAdsOffset(weapons.adsCrosshairOffset(engine.camera.fov, innerHeight))
   fx.calibrate(innerWidth, innerHeight, engine.camera.fov) // 粒子点大小随窗口/FOV 校准
   fx.update(dt)
   hud.updateDamage(dt)

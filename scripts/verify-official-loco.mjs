@@ -151,6 +151,10 @@ const run = await page.evaluate(async ({ specs, locoJson }) => {
     const pinnedV = []
     for (let i = 1; i < samples.length; i++) {
       const sL = samples[i].yL <= samples[i].yR
+      // 支撑判定按该脚世界高 <0.21（官方锚支撑带 0.125-0.155）：全周期钉地下
+      // 「最低脚」会被摆动脚污染（2026-09-11 钉地改官方锚全程驱动后的口径修正）
+      const lowY = sL ? samples[i].yL : samples[i].yR
+      if (lowY >= 0.21) continue
       const x0 = sL ? samples[i - 1].xL : samples[i - 1].xR
       const x1 = sL ? samples[i].xL : samples[i].xR
       stanceV.push((x1 - x0) / dt)
@@ -199,7 +203,9 @@ const run = await page.evaluate(async ({ specs, locoJson }) => {
     { tag: 'E错配(左移)', style: 'pull', vx: -5.4, startX: 20, steps: 384, jsonSet: 'strafe', pinOff: true, forceSide: 'E' },
     { tag: 'W错配(右移)', style: 'pull', vx: 5.4, startX: -20, steps: 384, jsonSet: 'strafe', pinOff: true, forceSide: 'W' },
     { tag: 'runN 钉地', style: 'cross', vx: 5.4, startX: -20, steps: 512, jsonSet: 'run' },
-    { tag: 'strafe 钉地', style: 'pull', vx: 5.4, startX: -20, steps: 512, jsonSet: 'strafe', forceSide: 'E' },
+    // 256 步 ≈ 2s@5.4：拉出距离止于玩家坐标前（过中即进入朝向反平行退化区，
+    // 真实 pull 波在缺口内即停，勿驱动穿越）
+    { tag: 'strafe 钉地', style: 'pull', vx: 5.4, startX: -28, steps: 256, jsonSet: 'strafe', forceSide: 'E' },
   ],
 })
 console.log(JSON.stringify(run, null, 1))

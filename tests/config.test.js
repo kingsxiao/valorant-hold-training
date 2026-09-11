@@ -16,9 +16,9 @@ describe('武器数值表完整性（CONFIG.weapons）', () => {
         expect(w.equipTime, id).toBeGreaterThan(0)
         expect(w.spread.stand, id).toBeLessThan(w.spread.run)
         expect(w.recoil.recoverTime, id).toBeGreaterThan(0)
-        // 视角上踢恢复速率（分武器恢复曲线）
-        expect(w.recoil.punchRecover, id).toBeGreaterThan(0)
-        expect(w.recoil.punchRecover, id).toBeLessThanOrEqual(30)
+        // 视角上踢恢复：阶跃保持模型（实测 750ms 回稳 <1% → rate <0.013/s，取 0.01）
+        expect(w.recoil.punchRecover, id).toBeGreaterThan(0.005)
+        expect(w.recoil.punchRecover, id).toBeLessThan(0.02)
         // 散布锚点单调：静止 < 走路 < 全速 < 跳跃；连射上限高于首发
         expect(w.spread.stand, id).toBeLessThan(w.spread.walk)
         expect(w.spread.walk, id).toBeLessThan(w.spread.run)
@@ -64,6 +64,17 @@ describe('武器数值表完整性（CONFIG.weapons）', () => {
       else expect(w.range, id).toBeUndefined()
     }
   })
+
+  // 切枪时长 = 维基 equip 三档的 Normal（2026-09 复核）：步枪/Sheriff 1.0 ·
+  // 手枪 0.75 · 近战 0.6。Fast/Instant 档（技能后/特定能力交互）无对应路径不取
+  it('equipTime 锁维基 Normal 档（步枪 1.0 / 手枪 0.75 / 近战 0.6）', () => {
+    expect(CONFIG.weapons.vandal.equipTime).toBe(1.0)
+    expect(CONFIG.weapons.phantom.equipTime).toBe(1.0)
+    expect(CONFIG.weapons.sheriff.equipTime).toBe(1.0)
+    expect(CONFIG.weapons.classic.equipTime).toBe(0.75)
+    expect(CONFIG.weapons.ghost.equipTime).toBe(0.75)
+    expect(CONFIG.weapons.knife.equipTime).toBe(0.6)
+  })
 })
 
 describe('makeSprayPattern 后坐力弹道表', () => {
@@ -78,11 +89,56 @@ describe('makeSprayPattern 后坐力弹道表', () => {
     }
   })
 
-  it('首发无累计偏移；前段垂直上抬单调不减', () => {
+  it('首发无累计偏移；前段垂直上抬单调不减（默认 climb=16 实测标定）', () => {
     const pat = makeSprayPattern(30)
-    expect(pat[0].p).toBeCloseTo(0.18)
+    expect(pat[0].p).toBeCloseTo(0.71, 1) // 0.18 × 16/4.03（默认 climb=16）
     expect(pat[0].y).toBe(0)
     for (let i = 1; i < 9; i++) expect(pat[i].p).toBeGreaterThan(pat[i - 1].p)
+  })
+
+  it('实测标定锁值：Vandal 25 发累计爬升 ≈ 18°（四 take 双确认中位）、Phantom ≈ 17°（独立三样本）', () => {
+    const vd = makeSprayPattern(25, { prot: 6, swing: 5.85, climb: CONFIG.weapons.vandal.recoil.climb })
+    const ph = makeSprayPattern(25, { prot: 8, swing: 6.6, climb: CONFIG.weapons.phantom.recoil.climb })
+    expect(vd[24].p).toBeGreaterThan(17.5)
+    expect(vd[24].p).toBeLessThan(18.5)
+    expect(ph[24].p).toBeGreaterThan(16.5)
+    expect(ph[24].p).toBeLessThan(17.5)
+    // 曲线里程碑（保持原形状只放大总幅）：3 发 ~14%、9 发 ~87%、13 发 ~95%
+    expect(vd[2].p / vd[24].p).toBeGreaterThan(0.12)
+    expect(vd[2].p / vd[24].p).toBeLessThan(0.17)
+    expect(vd[8].p / vd[24].p).toBeGreaterThan(0.84)
+    expect(vd[8].p / vd[24].p).toBeLessThan(0.90)
+    expect(vd[12].p / vd[24].p).toBeGreaterThan(0.93)
+    expect(vd[12].p / vd[24].p).toBeLessThan(0.97)
+  })
+
+  it('水平摆幅包络点值锁（逐孔级复测确认）：Vandal 单侧 ≈1.0°±0.15（phantom 13 孔实测 0.45° 与模型段预测 0.42° 吻合、vandal T4 近零实现 → 随机化实现带 [0.1,2.4]，包络居中）', () => {
+    const vd = makeSprayPattern(30, { prot: 6, swing: 5.85, climb: 18 })
+    const maxY = Math.max(...vd.map(({ y }) => Math.abs(y)))
+    expect(maxY).toBeGreaterThan(0.85)
+    expect(maxY).toBeLessThan(1.15)
+    // phantom 13 发段模型单侧 ≈0.42°（实测 0.45 吻合）
+    const ph = makeSprayPattern(13, { prot: 8, swing: 6.6, climb: 17 })
+    const phMax = Math.max(...ph.map(({ y }) => Math.abs(y)))
+    expect(phMax).toBeGreaterThan(0.3)
+    expect(phMax).toBeLessThan(0.55)
+    // 方向结构先验（bo3.gg/VALTRAIN 记载，幅度与列形观测脱钩——倾斜为偏航伪影）
+    expect(Math.min(...vd.slice(6, 18).map(({ y }) => y))).toBeLessThan(-0.4)
+    expect(Math.max(...vd.slice(18).map(({ y }) => y))).toBeGreaterThan(0.4)
+  })
+
+  it('半自动武器多样本锁值：弹匣段累计（Sheriff ≈18.9 三样本压枪分离 / Classic ≈15.0 / Ghost ≈19.7 判据复核通过）', () => {
+    const seg = (climb, count) => makeSprayPattern(count, { prot: 6, swing: 5.9, climb })[count - 1].p
+    const sh = seg(CONFIG.weapons.sheriff.recoil.climb, 6)
+    const cl = seg(CONFIG.weapons.classic.recoil.climb, 12)
+    const gh = seg(CONFIG.weapons.ghost.recoil.climb, 13)
+    // Sheriff 带宽 = 无压枪对均值 ± 对内离散 ±0.95
+    expect(sh).toBeGreaterThan(17.9); expect(sh).toBeLessThan(19.9)
+    expect(cl).toBeGreaterThan(14.4); expect(cl).toBeLessThan(15.6)
+    expect(gh).toBeGreaterThan(18.7); expect(gh).toBeLessThan(20.7)
+    // per-shot 后坐排序（双样本维持）：Sheriff > Ghost > Classic
+    expect(sh / 6).toBeGreaterThan(gh / 13)
+    expect(gh / 13).toBeGreaterThan(cl / 12)
   })
 
   it('中后段出现水平摆动（非零 y）', () => {
@@ -130,7 +186,7 @@ describe('makeSprayPattern 后坐力弹道表', () => {
   it('累计偏移量级受控（不至于打穿天）', () => {
     const pat = makeSprayPattern(30)
     for (const { p, y } of pat) {
-      expect(p).toBeLessThan(15)
+      expect(p).toBeLessThan(20)
       expect(Math.abs(y)).toBeLessThan(10)
     }
   })
@@ -167,6 +223,36 @@ describe('Rng（mulberry32 可复现伪随机）', () => {
     reseed(0)
     const vals = new Set(Array.from({ length: 50 }, vary))
     expect(vals.size).toBeGreaterThan(40)
+  })
+})
+
+describe('vmKick 实测下修 + 枪口缓升（60fps 质心实测）', () => {
+  it('每发平移冲量 ≈0.004 量级（官方开火中枪体质心 σ≈0.1px，每发踢 <1px@1080p → ×0.125）', () => {
+    const k = CONFIG.weapons
+    expect(k.vandal.vmKick).toBeGreaterThan(0.002)
+    expect(k.vandal.vmKick).toBeLessThan(0.006)
+    expect(k.sheriff.vmKick).toBeGreaterThan(k.vandal.vmKick) // 左轮最重
+    expect(k.ghost.vmKick).toBeLessThan(k.vandal.vmKick)      // 消音最轻
+  })
+  it('枪口缓升系数 0.0035 rad/°弹道：25 发 ≈3.6°（官方 2.4px/发 ×25 ≈4°）', () => {
+    // 纯值锁（VM_RISE = 0.0035 rad/°，vandal 25 发弹道 18°）
+    expect(18 * 0.0035 * 180 / Math.PI).toBeGreaterThan(3.2)
+    expect(18 * 0.0035 * 180 / Math.PI).toBeLessThan(4.2)
+  })
+})
+
+describe('punchRecover 阶跃保持模型（60fps 实测）', () => {
+  it('全武器统一 ≈0.01/s：停火后偏移保持（750ms 回稳 <1% 实测上界）', () => {
+    for (const id of ['vandal', 'phantom', 'sheriff', 'classic', 'ghost']) {
+      expect(CONFIG.weapons[id].recoil.punchRecover).toBe(0.01)
+    }
+  })
+  it('视角爬升预算：每发 punch = 弹道增量×viewPunch×0.25 → vandal 全弹匣 ≈1.5°（实测 1.0-1.5°）', () => {
+    const pat = makeSprayPattern(25, { prot: 6, swing: 5.85, climb: 18 })
+    let sum = 0; let prev = 0
+    for (const { p } of pat) { sum += (p - prev) * 0.34 * 0.25; prev = p }
+    expect(sum).toBeGreaterThan(1.2)
+    expect(sum).toBeLessThan(1.8)
   })
 })
 

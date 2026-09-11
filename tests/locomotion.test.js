@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import fs from 'node:fs'
-import { buildClip, buildLocomotion, locoWeights, stepFootPinState, sampleIkAnchor, pickDeathSide, pickTurnClip, CROUCH_WALK_STEP, CROUCH_WALK_SPEED, jumpFallBlend, JUMP_FALL_AFTER, JUMP_FALL_FADE } from '../src/core/Locomotion.js'
+import { buildClip, buildLocomotion, locoWeights, sampleIkAnchor, pickDeathSide, pickTurnClip, CROUCH_WALK_STEP, CROUCH_WALK_SPEED, jumpFallBlend, JUMP_FALL_AFTER, JUMP_FALL_FADE, locoBodyY, PELVIS_REF_Y, PELVIS_CROUCH_DROP, FOOT_GROUND_Y } from '../src/core/Locomotion.js'
 
 // 假骨架：UE 风格带 _NNNN 后缀骨名（与英雄 GLB 同构）
 function fakeHeroSkeleton(suffixes) {
@@ -190,42 +190,38 @@ describe('locoWeights 走/跑/横移权重分配', () => {
   })
 })
 
-describe('stepFootPinState 脚钉地状态机（迟滞 + 权重坡）', () => {
-  it('低于入锚阈值入锚、高于释放阈值释放；两阈值之间保持（迟滞带防抖）', () => {
-    const st = { has: false, w: 0 }
-    stepFootPinState(st, 0.15, 1 / 128)
-    expect(st.has).toBe(true)
-    stepFootPinState(st, 0.24, 1 / 128) // 带内：保持已锚
-    expect(st.has).toBe(true)
-    stepFootPinState(st, 0.27, 1 / 128)
-    expect(st.has).toBe(false)
-    stepFootPinState(st, 0.24, 1 / 128) // 带内：不再入锚
-    expect(st.has).toBe(false)
+
+describe('locoBodyY 身体高度解算（状态混合准静态参考，2026-09-11 抽搐回归修复）', () => {
+  it('端点锁值：站定=贴地余量−最低脚高（kamae 双脚落clip 无伪影）；移动=骨盆参考高−骨盆局部高', () => {
+    // kamae 实测：双脚落局部高 0.127 → 站定 mesh.y ≈ −0.037；runN 实测骨盆
+    // 局部 1.05~1.14 → 移动 mesh.y ≈ −0.2±（骨盆世界 0.85~0.94）
+    expect(FOOT_GROUND_Y).toBeCloseTo(0.09, 5)
+    expect(PELVIS_REF_Y).toBeCloseTo(0.90, 5)
+    expect(locoBodyY({ hipsLocalY: 0.895, loMinY: 0.127, moveW: 0 })).toBeCloseTo(-0.037, 3)
+    expect(locoBodyY({ hipsLocalY: 1.10, loMinY: 0.6, moveW: 1 })).toBeCloseTo(-0.20, 3)
   })
 
-  it('权重 20/s 双向坡：16ms 一档 ~0.25，50ms 全幅；未入锚恒零', () => {
-    const st = { has: false, w: 0 }
-    stepFootPinState(st, 0.15, 0.016)
-    expect(st.w).toBeCloseTo(0.32, 5)
-    for (let i = 0; i < 5; i++) stepFootPinState(st, 0.15, 0.016) // ~96ms → 满
-    expect(st.w).toBe(1)
-    stepFootPinState(st, 0.3, 0.016) // 释放后衰减
-    expect(st.w).toBeCloseTo(0.68, 5)
-    const st2 = { has: false, w: 0 }
-    stepFootPinState(st2, 0.5, 0.5)
-    expect(st2.w).toBe(0)
+  it('moveW 混合连续单调：两参考间线性过渡，无跳变（追逐逐帧脚高的弹跳已根除）', () => {
+    const a = locoBodyY({ hipsLocalY: 1.10, loMinY: 0.127, moveW: 0 })
+    const mid = locoBodyY({ hipsLocalY: 1.10, loMinY: 0.127, moveW: 0.5 })
+    const b = locoBodyY({ hipsLocalY: 1.10, loMinY: 0.127, moveW: 1 })
+    expect(mid).toBeCloseTo((a + b) / 2, 6)
+    expect(mid).toBeGreaterThan(Math.min(a, b))
+    expect(mid).toBeLessThan(Math.max(a, b))
   })
 
-  it('阈值口径锁死：0.21/0.26（跑动支撑 ~0.15 / 摆动 0.4+ 的分离带）', () => {
-    const st = { has: false, w: 0 }
-    stepFootPinState(st, 0.209, 0.01)
-    expect(st.has).toBe(true)
-    const st3 = { has: false, w: 0 }
-    stepFootPinState(st3, 0.211, 0.01)
-    expect(st3.has).toBe(false)
-    const st4 = { has: true, w: 1 }
-    stepFootPinState(st4, 0.259, 0.01)
-    expect(st4.has).toBe(true)
+  it('移动态目标与最低脚高无关（跑步机伪影隔离）：loMinY 大幅摆动不动摇移动态高度', () => {
+    const y1 = locoBodyY({ hipsLocalY: 1.10, loMinY: 0.45, moveW: 1 })
+    const y2 = locoBodyY({ hipsLocalY: 1.10, loMinY: 0.96, moveW: 1 })
+    expect(y1).toBe(y2)
+  })
+
+  it('蹲族移动态降骨盆参考：crouchW=1 时目标低 0.18（官方蹲姿骨盆 ≈0.72）', () => {
+    const stand = locoBodyY({ hipsLocalY: 0.95, loMinY: 0.5, moveW: 1 })
+    const crouch = locoBodyY({ hipsLocalY: 0.95, loMinY: 0.5, moveW: 1, crouchW: 1 })
+    expect(stand - crouch).toBeCloseTo(PELVIS_CROUCH_DROP, 5)
+    // 蹲走实测：hipsLocal 0.947 → 骨盆世界 ≈ 0.72
+    expect(crouch).toBeCloseTo(0.90 - 0.18 - 0.95, 5)
   })
 })
 

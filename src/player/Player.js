@@ -62,8 +62,8 @@ export class Player {
     this.punchYaw += y
   }
 
-  // 固定 128Hz 物理步进
-  step(dt, input, weapon) {
+  // 固定 128Hz 物理步进。adsMult = ADS 移速乘数（开镜 76%，WeaponSystem 按右键态给出）
+  step(dt, input, weapon, adsMult = 1) {
     this.prevPos.copy(this.pos)
 
     const M = CONFIG.movement
@@ -74,7 +74,7 @@ export class Player {
     if (input.down('KeyD')) wishDir.x += 1
 
     // 目标速度
-    let maxSpeed = M.runSpeed * (weapon?.moveSpeedMult ?? 1)
+    let maxSpeed = M.runSpeed * (weapon?.moveSpeedMult ?? 1) * adsMult
     if (weapon?.slot === 'melee') maxSpeed = M.knifeSpeed
     const holdingWalk = input.down('ShiftLeft') || input.down('ShiftRight')
     const wantCrouch = input.down('ControlLeft') || input.down('KeyC')

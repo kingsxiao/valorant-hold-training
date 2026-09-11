@@ -122,6 +122,7 @@ export class Engine {
     this.accumulator = 0
     this.lastTime = 0
     this.running = false
+    this.fovH = CONFIG.graphics.fovH // 当前水平 FOV（ADS 开镜时被 setFovH 缩放）
 
     // 自适应分辨率：autoRes 总开关 + 自动乘数（与用户手动缩放相乘）
     this.autoRes = true
@@ -161,17 +162,28 @@ export class Engine {
     })
   }
 
-  // Valorant 锁定水平 FOV 103°，垂直 FOV 随宽高比换算（保证不同窗口下视野一致）
+  // Valorant 锁定水平 FOV 103°，垂直 FOV 随宽高比换算（保证不同窗口下视野一致）。
+  // this.fovH 可被 setFovH 改写（ADS 开镜 ÷zoom 缩放），_resize 沿用当前值
   _resize() {
     const w = innerWidth, h = innerHeight
     this.renderer.setSize(w, h, false)
     this.camera.aspect = w / h
-    const tanHalfH = Math.tan((CONFIG.graphics.fovH * Math.PI / 360))
+    const tanHalfH = Math.tan((this.fovH * Math.PI / 360))
     this.camera.fov = THREE.MathUtils.radToDeg(Math.atan(tanHalfH / this.camera.aspect)) * 2
     this.camera.updateProjectionMatrix()
     this.vmCamera.aspect = w / h
     this.vmCamera.updateProjectionMatrix()
     this._applyScale() // 跨屏拖动时 devicePixelRatio 变化，重设像素比防糊
+  }
+
+  // 水平 FOV 切换（ADS 开镜 103°→82.4°，随 adsBlend 每帧插值）。仅数值变化时
+  // 重算投影（每帧调用零开销路径 = 一次比较直接返回）
+  setFovH(degH) {
+    if (this.fovH === degH) return
+    this.fovH = degH
+    const tanHalfH = Math.tan(degH * Math.PI / 360)
+    this.camera.fov = THREE.MathUtils.radToDeg(Math.atan(tanHalfH / this.camera.aspect)) * 2
+    this.camera.updateProjectionMatrix()
   }
 
   // 天空穹顶：程序化渐变贴图 + 太阳精灵（跟随相机，永不触及雾）

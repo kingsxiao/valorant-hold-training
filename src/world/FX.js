@@ -344,17 +344,11 @@ export class FX {
     t.from.copy(a)
     t.to.copy(b)
     t.dist = a.distanceTo(b)
-    // 飞行曳光：短光段以 ~240m/s 掠过弹道（远距一段亮线飞向命中点）。
-    // 近距（<8m，本训练器的典型交战距）切"闪现"模式：整条快闪 50ms——
-    // 飞行段在短弹道上只是一次位置抖动，观感不如一道即逝的光痕
-    const SPEED = 240
-    if (t.dist < 8) {
-      t.dur = 0.05
-      t.seg = t.dist
-    } else {
-      t.dur = Math.max(0.028, t.dist / SPEED)
-      t.seg = Math.min(5, t.dist)
-    }
+    // 飞行曳光：短光段以 FX_TIMING.tracerSpeed（900m/s 实测标定）掠过弹道。
+    // 近距一帧内完成 → minDur 28ms 快闪光痕（官方"近距即逝亮线"读数）；
+    // 30m 外 2 帧级飞行段（33ms）仍可观测
+    t.dur = Math.max(FX_TIMING.tracerMinDur, t.dist / FX_TIMING.tracerSpeed)
+    t.seg = Math.min(5, t.dist)
     t.width = width * (this.tracerWScale ?? 1)
     t.baseOp = opacity
     t.impact = impact
@@ -401,18 +395,18 @@ export class FX {
   //  heavy：大口径（Sheriff）更大更亮的火球与更硬的照明
   // opacity=焰基准不透明度（update 按其比例衰减）；
   // lightPeak=照明峰值（绝对值）或 light=峰值倍率（×16，二者取先传者）
-  muzzle(worldPos, { scale = 1, opacity = 0.9, lightPeak = null, light = 1, lightDur = 0.06, color = 0xffbe7a, flashColor } = {}) {
+  muzzle(worldPos, { scale = 1, opacity = 0.9, lightPeak = null, light = 1, lightDur = FX_TIMING.lightRifle, color = 0xffbe7a, flashColor } = {}) {
     const peak = lightPeak ?? 16 * light
     const player = !!(worldPos?.isVector3 && this.vmFlashSprite)
     const sprite = player ? this.vmFlashSprite : this.flash
     if (player) {
-      this.vmFlashLife = 0.045 + 0.008
+      this.vmFlashLife = FX_TIMING.muzzleFlash + 0.008
       this.vmFlashBase = opacity
       // 点位在相机本地系（vmScene 世界系 == 相机本地系）：焰与枪口在屏上锁定，
       // 不随开火后的镜头移动漂移
       sprite.position.copy(this.camera.worldToLocal(worldPos.clone()))
     } else {
-      this.flashLife = 0.045 + 0.008
+      this.flashLife = FX_TIMING.muzzleFlash + 0.008
       this.flashBase = opacity
       if (worldPos) this.flash.position.copy(worldPos)
     }
@@ -501,7 +495,7 @@ export class FX {
       for (let i = 0; i < 6; i++) {
         _v.set(vary() - 0.5, vary() - 0.5, vary() - 0.5).normalize().multiplyScalar(0.8 + vary() * 1.6)
         this.sparks.emit(p.x, p.y, p.z, _v.x, _v.y, _v.z, {
-          life: 0.12 + vary() * 0.1, size: 0.06, r: 1, g: 1, b: 0.95, drag: 3,
+          life: FX_TIMING.hitCore + vary() * FX_TIMING.hitCoreVary, size: 0.06, r: 1, g: 1, b: 0.95, drag: 3,
         })
       }
     }
@@ -534,7 +528,7 @@ export class FX {
     for (let i = 0; i < coreN; i++) {
       _v.set(vary() - 0.5, vary() - 0.5, vary() - 0.5).normalize().multiplyScalar(0.8 + vary() * 1.4)
       this.sparks.emit(p.x, p.y, p.z, _v.x, _v.y, _v.z,
-        { life: 0.055 + vary() * 0.035, size: head ? 0.09 + vary() * 0.05 : 0.07 + vary() * 0.03, r: 1, g: 1, b: 0.96, drag: 3.5 })
+        { life: FX_TIMING.hitCore + vary() * FX_TIMING.hitCoreVary, size: head ? 0.09 + vary() * 0.05 : 0.07 + vary() * 0.03, r: 1, g: 1, b: 0.96, drag: 3.5 })
     }
     for (let i = 0; i < 6; i++) {
       this.puffs.emit(
@@ -682,14 +676,14 @@ export class FX {
     if (this.flashLife > 0) {
       this.flashLife -= dt
       if (this.flash.visible) {
-        this.flash.material.opacity = Math.min(1, Math.max(0, this.flashLife / 0.045)) * this.flashBase
+        this.flash.material.opacity = Math.min(1, Math.max(0, this.flashLife / FX_TIMING.muzzleFlash)) * this.flashBase
       }
       if (this.flashLife <= 0) this.flash.visible = false
     }
     if (this.vmFlashLife > 0) {
       this.vmFlashLife -= dt
       if (this.vmFlashSprite.visible) {
-        this.vmFlashSprite.material.opacity = Math.min(1, Math.max(0, this.vmFlashLife / 0.045)) * this.vmFlashBase
+        this.vmFlashSprite.material.opacity = Math.min(1, Math.max(0, this.vmFlashLife / FX_TIMING.muzzleFlash)) * this.vmFlashBase
       }
       if (this.vmFlashLife <= 0) this.vmFlashSprite.visible = false
     }
@@ -798,6 +792,22 @@ export class FX {
 const _dq = new THREE.Quaternion()
 const _fwd = new THREE.Vector3(0, 0, 1)
 const _n = new THREE.Vector3()
+// ---- 开火视觉时序（2026-09-11 实机 1080p60 逐帧标定：all-recoil 专集帧差剖面）----
+// 枪口焰 ≈1 帧 @60fps（17ms，418→419→420 帧亮度剖面）；命中尘闪 2-3 帧（33-50ms）；
+// 曳光与弹着增亮同帧出现 → 视觉速度在 10-15m 内一帧内完成（≥600m/s 下限），
+// 30m 外应有 2 帧级可观测飞行 → 取 900（Valorant 曳光为 hitscan 装饰特效，
+// 官方无公开速度值，此为帧剖面下限 + 长距可观测性的合取）
+export const FX_TIMING = {
+  muzzleFlash: 0.017,        // 枪口焰精灵寿命（s）；+8ms 出生帧补偿在 muzzle() 内
+  tracerSpeed: 900,          // 曳光视觉速度（m/s）
+  tracerMinDur: 0.028,       // 近距最短曳光时长（2 帧级快闪）
+  lightRifle: 0.028,         // 枪口点光时长（步枪默认）
+  lightHeavy: 0.038,         // Sheriff 大口径点光
+  lightSuppressed: 0.025,    // 消音点光
+  hitCore: 0.042,            // 命中/击杀白闪爆芯寿命（实测 33-50ms 带）
+  hitCoreVary: 0.02,
+}
+
 const _v = new THREE.Vector3()
 const _kd = new THREE.Vector3()
 const _kc = new THREE.Color()

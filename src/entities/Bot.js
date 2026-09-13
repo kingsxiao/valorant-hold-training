@@ -5,7 +5,7 @@ import { CONFIG } from '../core/Config.js'
 import { groundStep, accelFor } from '../core/GroundMotion.js'
 import { peekFacingYaw, leanInto, strafeRampW, strafeStepPose } from '../core/PeekPose.js'
 import { matchRigBones, bakeLocomotionClips, bakeDeathClips, smoothW } from '../core/GaitBake.js'
-import { locoWeights, sampleIkAnchor, pickDeathSide, pickTurnClip, CROUCH_WALK_STEP, jumpFallBlend, JUMP_FALL_AFTER, locoBodyY } from '../core/Locomotion.js'
+import { locoWeights, sampleIkAnchor, pickDeathSide, pickTurnClip, CROUCH_WALK_STEP, jumpFallBlend, JUMP_FALL_AFTER, gaitStepLen } from '../core/Locomotion.js'
 import { solveGunAim, pickAimTarget, gunBobPose, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK, deriveGunHoldPoints, solveGripMount } from '../core/WeaponAim.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
@@ -33,8 +33,10 @@ import { raySphere } from '../world/World.js'
 //    受击踉跄/开火后坐走脊柱骨骼覆盖（_applyUpperFlinch 共轭精确合成）；
 //    死亡为骨骼化塌倒（bakeDeathClips 烘焙：盆骨后仰下沉+腿折叠+撒手）+
 //    撒手掉枪弹道（WeaponAim.stepDroppedGun：抛落翻滚落地摆平）
-const STEP_LEN = 1.55 // 一步的位移（m）：步态相位锁相基准。官方动画实测（assets-raw/psa_*：
-                      // 跑周期 0.6s@5.4m/s → 1.62m/步、走周期 ~0.85s@3.39m/s → 1.44m/步）取中值
+const STEP_LEN = 1.55 // 一步的位移（m）：程序化假人/烘焙近似/无官方数据模型的相位
+                      // 锁相基准（官方曲线集走 gaitStepLen：走 1.05/跑 1.54/横移跑
+                      // 1.40，各族官方步距不同——160 轮；本值 = 跑族口径，与官方
+                      // runN 实测 1.54 互证）
 const JUMP_LAUNCH = 0.15   // 起跳蹬伸时长（JumpN 前 0.15s 是预备蹲，弧线在其后）
 // 滞空换层常数（JUMP_FALL_AFTER/JUMP_FALL_FADE）在 Locomotion.js（jumpFallBlend）
 const JUMP_V0 = 7.098      // 起跳竖直初速（m/s）：本体社区逐帧推导值（r/VALORANT
@@ -69,6 +71,9 @@ const _fpHip = new THREE.Vector3() // 脚钉地：髋/膝/脚世界位置 + 锚�
 const _fpKnee = new THREE.Vector3()
 const _fpFoot = new THREE.Vector3()
 const _fpAnchor = new THREE.Vector3()
+const _fpBlend = new THREE.Vector3() // 脚钉地：多锚源加权混合累加器
+const _fpPole = new THREE.Vector3() // 脚钉地：膝极向参考点（髋前面）
+const _fwdAxis = new THREE.Vector3() // 脚钉地：面朝方向暂存
 const _IDENTITY = new THREE.Quaternion()
 const _ZAXIS = new THREE.Vector3(0, 0, 1) // 枪轴滚转轴（holder 局部 Z = 枪管向）
 const _headC = new THREE.Vector3() // 蹲姿头部区：Head 骨世界位暂存
@@ -878,71 +883,64 @@ export class Bot {
     }
   }
 
-  // 官方曲线防滑步：支撑期脚钉地 IK。官方 .psa 导出剥离了根位移——脚相对骨盆
-  // 无净后退（实测支撑脚随身体全速滑地 ~5.4m/s，N/E/W 三套全中），相位锁定只保
-  // 步频「节奏」，保不住落点「位置」。每个支撑期把脚钉在落地点：低脚记锚 →
-  // 两骨 IK（髋-膝，与左手持枪同款 solveTwoBoneIK）把脚世界位置拉回锚点 →
-  // 抬脚释放（权重 20/s ramp 防跳变，超臂展连续解钳时也放——脚跟离地的蹬地
-  // 段允许少量滑动）。每 tick 先从 _clipQ 快照还原本帧 clip 姿态再叠加 IK——
-  // mixer 只在 60Hz 门控里写骨骼，缺这一步 IK 会在自家输出上累积（快照反馈坑，
-  // 与站定微动同款教训）。摆动腿不受影响（官方曲线原样）；站定时双脚入锚 =
-  // 钉住站姿（自然）。烘焙近似路径数学上已防滑（步幅=大腿摆幅覆盖），不启用。
-  // 钉地锚的数据源：当前权重最大的步态动作（walk/run × N/横移侧）的官方 IK
-  // 目标曲线。混合期跟大权重走（锚点随混合平滑过渡）；无 ik 数据的 clip 返回
-  // null（回退入锚捕获）。返回共享对象，勿持有
-  _ikAnchorSource() {
+  // 官方锚源清单（_stepFootPin 每 tick 解一次，两腿共用）：全部带官方 IK 锚
+  // 曲线的动作按 mixer 权重加权混合锚点——与姿态混合同源，换态（walk↔run↔
+  // 横移↔蹲↔跳↔转身）的锚随权重渐变，无换源瞬态。
+  // 覆盖：走/跑 N、横移 E/W、蹲走、蹲踞待机、跳三段（JumpN/Falling/JumpLand）、
+  // 停步转身踏步（8 向）——psa 原始腿曲线是官方 FootIK 之前的基姿态（脚悬空
+  // 0.4~1.15m），任何这些状态不钉地 = 折叠腿直接暴露（160 轮跳跃全程双脚
+  // 1.4~2.8m、急停脚穿地的根因）。
+  // ⚠ stopAdd（急停支架）不入列：其 psa 锚退化在原点恒 0（支架本就冻结双脚，
+  // 不编排新落点）——急停时的脚部 = 走跑权重淡出途中锚随相位冻结自然保持在
+  // 停止前落点。159 轮的单一 argmax + 连续性锁在侧别翻转/权重重置的 tick 会
+  // 锁死在常锚源（crouchIdle）上 → 蹲走双脚全速滑行（160 轮实测），权重混合
+  // 根除该类锁死。返回共享数组，勿持有
+  _anchorSources() {
     const A = this.anim
     if (!A) return null
-    const cands = [A.walk, A.run]
-    if (A.strafe) cands.push(A.strafe[this._strafeSide ?? 'E'].walk, A.strafe[this._strafeSide ?? 'E'].run)
-    // 蹲走动作带官方 ik 锚（z 支撑 0.124-0.152）——纳入候选，蹲走脚同样钉官方
-    // 落点（不钉 = 骨盆参考高下 clip 脚悬空 0.3~0.6m 浮空滑行）
+    const src = this._anchorList ?? (this._anchorList = [])
+    src.length = 0
+    // 蹲走权重起来时，脚部约束的权威 = 蹲走 clip 的官方锚：常锚的 crouchIdle
+    // （蹲踞站姿落点）与站姿 loco 锚（walk/run/横移——含与蹲走侧别选择不同步
+    // 的 E/W 配对）按 (1−cwW) 淡出——否则三者各带 1/3 把混合锚锁在身体上，
+    // 蹲走双脚随体速滑行（160 轮实测脚速 2.64≈体速 2.7）
+    const cwW = Math.min(1, Math.max(0, this._crouchWW ?? 0))
+    const locoK = 1 - cwW
+    const add = (a, k = 1) => {
+      const ik = a?.getClip().userData.ik
+      if (!ik) return
+      const w = a.getEffectiveWeight() * k
+      if (w > 0.01) src.push({ a, w, ik, dur: a.getClip().duration })
+    }
+    add(A.walk, locoK); add(A.run, locoK)
+    if (A.strafe) {
+      add(A.strafe[this._strafeSide ?? 'E'].walk, locoK)
+      add(A.strafe[this._strafeSide ?? 'E'].run, locoK)
+    }
     const cwSide = this._cwSide ?? this._strafeSide ?? 'E'
-    if (A.crouchWalk?.[cwSide]) cands.push(A.crouchWalk[cwSide])
-    let best = null, bestW = -1
-    for (const a of cands) {
-      if (!a?.getClip().userData.ik) continue
-      const w = a.getEffectiveWeight()
-      if (w > bestW) { bestW = w; best = a }
-    }
-    // 锚源权重门 0.5：混合期锚源未定，把混合姿态拽向单一 clip 的官方锚 = 腿部
-    // 单 tick 60~145° 的大幅抽动（实测减速窗口）。权重立起来才入锚；混合期/
-    // 站定退锚（kamae 站姿自带双脚贴地，无需钉）
-    if (!best || bestW < 0.5) { this._ikSrcAction = null; return null }
-    // 锚源连续性锁：任一脚还钉着（has/w>0）时锁死当前源——换源（walk↔run↔横移
-    // 的 argmax 交叉）= 官方锚曲线几何不同、锚位瞬移，IK 单 tick 拧腿百度。被锁
-    // 源自身淡出（<0.5）→ 返回 null 退锚：源淡出+脚松开两个过渡并行走各自的
-    // 权重坡，下一 tick 干净重选，绝不在换源瞬间把钉着的脚拽到新源锚位
-    const holding = this._strafeRig?.legs.some(l => { const s = l.foot.userData._pin; return s && (s.has || s.w > 0.01) })
-    const cur = this._ikSrcAction
-    if (holding) {
-      if (!(cur?.getClip().userData.ik && cur.getEffectiveWeight() >= 0.5)) { this._ikSrcAction = null; return null }
-      best = cur
-    }
-    // 加速度门：启停/换档的混合期（|dv/dt| 大，跑→走→站连续换源）不钉脚——
-    // 官方起停的脚步落地由 Start/Stop/Turn 动画自己负责，钉地只服务稳态步态
-    if (Math.abs(this._speedAcc ?? 0) > 8) { this._ikSrcAction = null; return null }
-    this._ikSrcAction = best
-    const clip = best.getClip()
-    this._ikSrc = this._ikSrc ??= {}
-    this._ikSrc.ik = clip.userData.ik
-    this._ikSrc.duration = clip.duration
-    this._ikSrc.n = clip.userData.ik.n
-    this._ikSrc.t = best.time
-    return this._ikSrc
+    add(A.crouchWalk?.[cwSide])
+    add(A.crouchIdle, locoK)
+    add(A.jump); add(A.fall); add(A.jumpLand)
+    for (const a of Object.values(A.turn ?? {})) add(a)
+    return src.length ? src : null
   }
 
+  // 官方曲线防滑步：脚钉地 IK。psa 导出剥离了根位移，原始腿曲线是官方 FootIK
+  // 之前的基姿态（脚悬空 0.4~1.15m）——脚的世界落点全权由官方 IK 目标锚曲线
+  // （L/R_IK_FootTarget）驱动：每 tick 把锚（按 mixer 权重混合，见 _anchorSources）
+  // 变换到世界，两骨 IK（髋-膝，与左手持枪同款 solveTwoBoneIK）把踝拉到锚。
+  // 每 tick 先从 _clipQ 快照还原本帧 clip 姿态再叠加 IK——mixer 只在 60Hz 门控
+  // 里写骨骼，缺这一步 IK 会在自家输出上累积（快照反馈坑）。支撑/摆动全程跟锚
+  // （UE 的 IK 目标曲线即引擎对脚部的全周期约束）；无锚态（kamae 纯站定，GLB
+  // 原生 clip 双脚自贴地 0.09）权重坡释放回 clip。烘焙近似路径数学上已防滑
+  // （步幅=大腿摆幅覆盖），不启用
   _stepFootPin(dt) {
     const rig = this._strafeRig
     if (!rig || !this._officialLo) return
     this._loMinY = 9
-    // 锚源每 tick 解一次（两腿共用）；横移侧别翻转时 E/W 官方锚曲线不同——
-    // 翻转瞬间权重清零（配合 strafeW 的换侧压零，脚随混合姿态走，不跨曲线拽）
-    const ikSrc = this._ikAnchorSource()
-    if (this._strafeSide !== this._pinSide) {
-      this._pinSide = this._strafeSide
-      for (const l of rig.legs) { const s = l.foot.userData._pin; if (s) s.w = 0 }
-    }
+    // 锚源每 tick 解一次（两腿共用）；E/W 侧别翻转由权重过渡承担（换侧时横移
+    // 权重清零重起坡，锚随权重连续，无需硬重置脚部权重）
+    const srcs = this._anchorSources()
     for (const leg of rig.legs) {
       const st = leg.foot.userData._pin ??= { anchor: new THREE.Vector3(), has: false, w: 0 }
       const snap = leg.up.userData._clipQ
@@ -962,45 +960,56 @@ export class Bot {
       this._hipsLocalY = (this._hipsLocalY ?? 0) === 0 ? hipsLocal
         : this._hipsLocalY + (hipsLocal - this._hipsLocalY) * Math.min(1, dt * 3)
       if (this._pinOff) continue // 调试/曲线比对：只量高度不钉地
-      // 2) 官方锚曲线全程驱动（stance+swing 都是官方脚轨迹——UE 的 IK 目标
-      //    曲线即本体引擎对脚部的全周期约束，支撑期世界静止、摆动期官方摆
-      //    腿路径）：不做「支撑窗钉、摆动窗放」——释放回 clip 脚位的窗内，
-      //    锚随身体前进被拖（慢放）或向滞后 0.3m+ 的 clip 脚位瞬移（快放），
-      //    双向都是跳变（实测 64~90°/tick）。w 跟随锚源动作淡入淡出（20/60）
-      // ⚠ psa 的 IK 目标骨命名与脚反号（L_IK_FootTarget 的 Y 侧偏为正、
-      //    曲线落地窗与 R 脚支撑窗重合——实测 L 目标曲线跟随右脚）
-      const hasAnchor = ikSrc && sampleIkAnchor(ikSrc.ik, ikSrc.duration, ikSrc.n, ikSrc.t, leg.side === 'L' ? 'R' : 'L', _fpAnchor)
-      if (hasAnchor) {
-        // ik 曲线活在 psa 根骨空间（UE 轴向：前=+X、侧=+Y、上=+Z——L/R 目标
-        // 的 Y 符号分侧可证）。实测该空间支撑期目标世界静止 ±2cm。骨矩阵链带
-        // UE 常量节点旋转会把锚甩飞——按轴映射直接落到 mesh 系（前=−Z、上=+Y）
-        // 再升世界；侧轴符号以「世界系支撑期静止」为准。锚世界高 = psaZ（与
-        // mesh.y 无关），psa 地面即世界地面
-        // ⚠ 锚全幅跟曲线（勿做指数逼近：摆动期目标 10+ m/s，10/s 逼近恒滞后
+      // 2) 官方锚加权混合（各源按 mixer 权重，与姿态混合同源连续）：
+      //    psa 锚活在根骨空间（UE 轴向：前=+X、侧=+Y、上=+Z）。实测该空间支撑
+      //    期目标世界静止 ±2cm。骨矩阵链带 UE 常量节点旋转会把锚甩飞——按轴映
+      //    射直接落到 mesh 系（前=−Z、上=+Y）再升世界；侧轴符号以「世界系支撑
+      //    期静止」为准。锚世界高 = psaZ（与 mesh.y 无关，psa 地面即世界地面——
+      //    跳跃弧线（mesh.y 加成）自动把锚抬升 = 收腿随体）
+      //    ⚠ psa 的 IK 目标骨命名与脚反号（L 目标曲线跟随右脚，实测锁定）
+      let wSum = 0
+      _fpBlend.set(0, 0, 0)
+      for (const s of srcs ?? []) {
+        if (!sampleIkAnchor(s.ik, s.dur, s.ik.n, s.a.time, leg.side === 'L' ? 'R' : 'L', _fpAnchor)) continue
+        _fpBlend.x += _fpAnchor.x * s.w
+        _fpBlend.y += _fpAnchor.y * s.w
+        _fpBlend.z += _fpAnchor.z * s.w
+        wSum += s.w
+      }
+      if (wSum > 0.02) {
+        // 锚全幅跟曲线（勿做指数逼近：摆动期目标 10+ m/s，10/s 逼近恒滞后
         // ~1m = 支撑脚全速滑冰）；入锚软化由下方 w·lerp 目标混合承担（8/s 坡）
-        st.anchor.set(_fpAnchor.y, -this.mesh.position.y + _fpAnchor.z, -_fpAnchor.x)
+        // 锚世界高 = psaZ + mesh.y：地面态 mesh.y=0 即 psaZ（psa 地面=世界地面）；
+        // 跳跃弧线（mesh.y 加成）把锚随体抬升——官方 IK 目标活在 component space
+        // （随胶囊走），滞空收腿（锚 z≈0.69）在弧线顶点 = 髋下 ~0.5m 的官方
+        // 收腿位（曾把弧线对消 = 锚沉在地面、髋在 2.3m，腿被拉成垂直下蹬的
+        // 超人腿——160 轮跳跃腾空期修复）
+        st.anchor.set(_fpBlend.y / wSum, _fpBlend.z / wSum, -_fpBlend.x / wSum)
           .applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
         st.w = Math.min(1, st.w + dt * 8)
+      } else if ((this._braceW ?? 0) > 0.05 || (this._turnW ?? 0) > 0.05) {
+        // 无锚源但急停支架/转身外站定：官方支架本就冻结双脚（stopAdd 的 psa
+        // 锚退化在原点 = 不编排新落点）——保持最后锚位不重采样，w 不衰减，
+        // 脚停在哪里就钉到哪里；恢复移动/锚源回归后随权重自然交还
       } else {
-        st.w = Math.max(0, st.w - dt * 60) // 无锚源（混合期/站定）：权重坡放回 clip 脚位
+        st.w = Math.max(0, st.w - dt * 20) // 无锚源（纯站定 kamae）：权重坡放回 clip 脚位
       }
       if (st.w <= 0) continue
-      // 3) IK 目标强度按「可达性」评定：锚点到髋距离超出腿长（支撑后期身体越过
-      //    锚点）时按越距把目标滑回 clip 脚位——脚从钉住连续加速进蹬地离地（本
-      //    体支撑后期本就是蹬伸推移）。⚠ 不能用锚-脚原始距离：骨盆参考高下
-      //    clip 脚恒悬空 0.25m+，原始距离永远触发让步 = 钉地失效回全速滑冰。
-      //    越距超限只退锚入冷却、绝不 continue 跳过 IK——give 已把目标滑回 clip
-      //    脚位（IK≈无操作平滑放脚），跳过 IK 本身 = 单 tick 整跳回 clip 姿态
+      // 3) IK 目标 = 官方锚（全程，无让步）。旧「可达性越距让步」是放倒管线
+      //    时代的补丁：骨盆高度被钳低 24cm 时锚不可达，释放回 clip 脚位防滑。
+      //    158 轮骨盆回到官方高度后，锚-髋距离的几何由官方数据自洽保证
+      //    （锚后扫极限 ~1.17m，在腿长满展边界附近），让步反而会把目标放回
+      //    psa 原始摆动姿（官方 FootIK 之前的曲线，摆动中脚高达 1.5m+）=
+      //    支撑末期整腿踢到胸口/头高（158 轮腿部残留问题的根因）。极端越距时
+      //    solver 自然钳为指向锚的满展位 = 蹬地推移。绝不 skip IK
       leg.up.matrixWorld.decompose(_fpHip, _q1, _gscl)
       leg.knee.matrixWorld.decompose(_fpKnee, _q2, _gscl)
-      st.legLen ??= _fpHip.distanceTo(_fpKnee) + _fpKnee.distanceTo(_fpFoot)
-      // 可达性越距：腿满展（over≈0）即开始让步、0.15m 内完成——跑步支撑期腿
-      // 全程接近满展，宽让步带会让支撑脚半速滑冰（实测 stanceAbsMean 4.4m/s）；
-      // 满展后脚沿可达弧后扫 = 本体蹬地推移。绝不 skip IK（跳过=整跳回 clip 姿态）
-      const over = st.anchor.distanceTo(_fpHip) - st.legLen
-      const give = THREE.MathUtils.smoothstep(over, 0.0, 0.15)
-      _fpAnchor.copy(_fpFoot).lerp(st.anchor, st.w * (1 - give))
-      const sol = solveTwoBoneIK({ shoulder: _fpHip, elbow: _fpKnee, hand: _fpFoot, target: _fpAnchor })
+      _fpAnchor.copy(st.anchor).lerp(_fpFoot, 1 - st.w)
+      // 膝极向 = 面朝方向（psa 原始腿曲线是官方 FootIK 之前的姿态，膝常反折，
+      // 跟随当前肘方向会把反关节保留下来；官方 UE TwoBoneIK 同样用显式极向）
+      _fpPole.copy(_fpHip)
+        .addScaledVector(_fwdAxis.set(0, 0, -1).applyQuaternion(this.mesh.quaternion), 0.4)
+      const sol = solveTwoBoneIK({ shoulder: _fpHip, elbow: _fpKnee, hand: _fpFoot, target: _fpAnchor, pole: _fpPole })
       if (!sol) continue
       // clamped（腿全伸）照常应用：clamped 解 = 指向目标方向的满展位，脚沿可达
       // 弧后扫 = 蹬地推移的自然表现（跑步支撑期腿本就接近全伸，按 clamped 放锚
@@ -1148,7 +1157,6 @@ export class Bot {
     this._loY = 0 // 官方曲线贴地高度偏移归零
     this._loMinY = 0 // 最低脚局部高（贴地跟踪量测，首帧前归零防 NaN）
     this._hipsLocalY = 0 // 骨盆局部高（身体高度移动态参考，同上首帧归零）
-    this._pinSide = null // 钉地侧别锁存归零（与新命 _strafeSide 重新对齐）
     this.setOpacity(1)
     this.blobMat.opacity = 1
     this.spawnGuardUntil = this.now() + CONFIG.bot.spawnGuardMs / 1000
@@ -1166,7 +1174,7 @@ export class Bot {
       for (const a of Object.values(this.anim?.turn ?? {})) a.stop()
       this.anim?.stopAdd?.stop()
       this._turnKey = null; this._turnW = 0; this._braceW = 0
-      this._cwSide = null; this._ikSrcAction = null // 蹲走侧别/钉地锚源锁存归零
+      this._cwSide = null // 蹲走侧别锁存归零
       this._crouchPlanned = false; this._crouching = false; this._crouchW = 0
       this._crouchWW = 0; this._cwPhase = 0
       if (this.anim.crouchWalk) for (const a of Object.values(this.anim.crouchWalk)) a.setEffectiveWeight(0)
@@ -1509,10 +1517,10 @@ export class Bot {
       if (this.anim.crouchWalk) {
         // 步幅 = clip 属性常量（0.84）：移速只改步频（任意移速近零滑步）
         this._cwPhase = (this._cwPhase ?? 0) + speed * dt * Math.PI / CROUCH_WALK_STEP
-        // 侧别同横移 E/W 口径（局部 +X=E，当前朝向 lx；站定 |velX|≤0.5 保持
+        // 侧别同横移 E/W 口径（见下方横移侧别的数据依据；站定 |velX|≤0.5 保持
         // 原侧——平局判决会把蹲走侧别在站定时翻面。换侧压零权重再起坡
         if (Math.abs(this.velX) > 0.5) {
-          const side = this.velX * Math.cos(this.mesh.rotation.y) >= 0 ? 'E' : 'W'
+          const side = this.velX * Math.cos(this.mesh.rotation.y) < 0 ? 'E' : 'W'
           if (side !== this._cwSide) {
             this._cwSide = side
             this._crouchWW = 0
@@ -1543,8 +1551,13 @@ export class Bot {
         if (this.anim.jump) this.anim.jump.setEffectiveWeight(this._jumpW * (1 - fallBlend))
         if (this.anim.fall) this.anim.fall.setEffectiveWeight(fallBlend * this._jumpW)
         if (__jl) {
-          if (active) __jl.setEffectiveWeight(1)
-          else __jl.setEffectiveWeight(Math.max(0, __jl.getEffectiveWeight() - dt * 3))
+          // 落地前 JumpLand 权重必须为 0：腾空姿态由 JumpN/Falling 独占（曾把
+          // 权重预挂 1 = 空中姿态与错相位的 JumpLand 五五混合、官方锚曲线也被
+          // 对半拉低——顶点收腿位矮 0.4m，160 轮修复）。落地（landed）才满权，
+          // 恢复期淡出
+          if (landed) __jl.setEffectiveWeight(1)
+          else if (!active) __jl.setEffectiveWeight(Math.max(0, __jl.getEffectiveWeight() - dt * 3))
+          else __jl.setEffectiveWeight(0)
         }
         if (this.anim.idle) this.anim.idle.setEffectiveWeight(0)
         this.anim.walk.setEffectiveWeight(0)
@@ -1574,19 +1587,27 @@ export class Bot {
       // 权重下硬切 = 镜像整姿跳变，实测单膝差可达 178°）
       if (this.anim?.strafe && w < 0.85 && Math.abs(this.velX) > 0.5) {
         const lx = this.velX * Math.cos(this.mesh.rotation.y)
-        const side = lx > 0 ? 'E' : 'W'
+        // 官方锚数据锁定的配对：E 族锚支撑期向局部 +X 扫、W 族向 −X 扫（psa
+        // 实测 runE/runW/crouchWalk 双向），锚要世界静止必须逆着局部移动方向扫
+        // → 局部左移（lx<0）配 E、右移配 W。旧「lx>0→E」是反的：纯垂直横移下
+        // 实测 E 配左移滑速 0.50 vs W 配左移 10.76（2× 反扫，160 轮修正）
+        const side = lx < 0 ? 'E' : 'W'
         if (side !== this._strafeSide) {
           this._strafeSide = side
           this._strafeW = 0
         }
       }
-      // 步态相位随位移推进（每 STEP_LEN 米 = π）——官方/烘焙 clip 播放头
+      // 步态相位随位移推进（每步 = π；步距 = 当前混合族的官方步距，160 轮：
+      // 走 1.05 / 跑 1.54 / 横移跑 1.40——各族天然速度不同，播放速率随移速
+      // 缩放 = 支撑锚后扫速率 ≈ 体速，钉地零滑步）——官方/烘焙 clip 播放头
       // （_setAnimWeights 相位锁定）与侧移姿态都由它驱动；mixer 假人统一在这里
       // 推进（不含 _stepStrafeGait：骨链不齐的老模型 rig=null 提前返回，相位也
       // 不能停）。脚步声：跨 π = 走满一步的落脚瞬间触发（与程序化假人同口径）；
       // 跳跃滞空中静音（本体跳 peek 空中无脚步声），落地帧补一声落地闷响
       const kPrev = Math.floor(this.walkPhase / Math.PI)
-      this.walkPhase += speed * dt * Math.PI / STEP_LEN
+      this.walkPhase += speed * dt * Math.PI / (this._officialLo
+        ? gaitStepLen({ runW: this._runW ?? 0, strafeW: this._strafeW ?? 0 })
+        : STEP_LEN)
       // 加速度（钉地入锚门用）：启停摩擦 ~30 m/s²、稳态 ~0——混合期不钉脚
       this._speedAcc = (speed - this._prevSpeed) / dt
       this._prevSpeed = speed
@@ -1603,31 +1624,26 @@ export class Bot {
       // 脚恰好以体速滑行）。水平位本帧精确；身体高度用上一 tick 的量测（8ms
       // 滞后不可见），本 tick 的新量测由 _stepFootPin 顺带写下帧用
       if (this._officialLo) {
-        // 身体高度 = 状态混合的准静态参考（locoBodyY 纯函数）：移动态跟骨盆
-        // （官方起伏由 clip 的骨盆/Splitter 位置轨道自带），站定跟贴地，按已
-        // smoothW 的 _moveW 混合 + 1.0 m/s 限速兜底。绝不追逐逐帧最低脚高
-        // （剥根位移的 clip 脚高含跑步机伪影，每步 ±20cm 弹跳——2026-09-11
-        // 抽搐回归根因，口径见 locoBodyY 注释）。跳跃中冻结（弧线已由
-        // _jumpArcY 驱动，落地恢复交还解算）
-        if (!this._jump) {
-          const target = locoBodyY({
-            hipsLocalY: this._hipsLocalY ?? 0,
-            loMinY: this._loMinY ?? 0,
-            moveW: this._moveW ?? 0,
-            // 蹲族按蹲权重降骨盆参考（蹲走 clip 骨盆轨道 ≈ 站高，蹲姿在腿/脊柱
-            // 旋转里——不降 = 浮空深蹲）；站定时 moveW→0 此项不参与
-            crouchW: Math.max(this._crouchW ?? 0, this._crouchWW ?? 0),
-          })
-          const maxStep = 1.0 * dt
-          this._loY += Math.max(-maxStep, Math.min(maxStep, target - this._loY))
-        }
-        this.mesh.position.y = this._loY
+        // 身体高度：mesh 原点 = 地面，骨盆高度全权交给 clip 自带的 Splitter
+        // 位置轨道（官方口径：runN 1.14m / walkN 1.10 / kamae 1.08 / 蹲踞
+        // 0.80， mixer 混合即平滑过渡）。157 轮修正根链参考系后该轨道已精确
+        // 落进骨架——曾用的 locoBodyY（骨盆参考 0.90m）是在放倒管线上标定的
+        // 常数，会让全身塌 24cm：膝中位屈曲 64~69°（官方站姿段 20~33°）、
+        // 高抬腿蹬伸异常 = 157 轮腿部残留问题的根因。
+        // ⚠ 基座归零必须每 tick 无条件执行：跳跃弧线是「mesh.y += _jumpArcY」
+        // 的增量叠加，基座若在跳跃中被跳过，弧线逐 tick 复利 = 火箭升天
+        // （158 轮蹲走跳波 mesh.y 飙到 21m 的教训）
+        this._loY = 0
+        this.mesh.position.y = 0
       }
       _v.copy(this.prevPos).lerp(this.pos, ctx.alpha ?? 1)
       this.mesh.position.x = _v.x
       this.mesh.position.z = _v.z
       if (this._jumpArcY) this.mesh.position.y += this._jumpArcY // 跳跃弧线（命中区随 mesh）
-      if (!this._jump) this._stepFootPin(dt) // 跳跃中双脚离地，钉地让位
+      // 跳跃期间照常钉地：锚源含 JumpN/Falling/JumpLand（官方空中收腿/落地
+      // 恢复的脚部约束），锚高随跳跃弧线自动抬升（160 轮前跳跃完全退锚 = 原始
+      // 折叠腿暴露，双脚全程 1.4~2.8m）
+      this._stepFootPin(dt)
       this._stepGun(dt, ctx.player, stopped)
     } else if (speed > 0.3) {
       // 无动画的自定义模型兜底：至少保留位移节奏的起伏

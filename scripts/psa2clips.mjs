@@ -11,6 +11,11 @@
 //     运行时按「去后缀」解析，JSON 里存 psa 名
 //   - 旋转：psa 局部四元数与 GLB kamae 第 0 帧逐骨完全一致（0.0°，含 R 侧）——
 //     直接采用；(上上轮记录的「R 侧镜像约定」是坏 parent 字段导致的 FK 误诊)
+//     ⚠ 例外（157 轮实测）：根链骨 Splitter/Skeleton 的 psa 轨道值是 GLB rest
+//     的逆（Splitter 恒 (0.5,0.5,0.5,-0.5) vs GLB rest +0.5，相差 120°）——
+//     直挂应用 = 整副骨架放倒（超人姿）。运行时 core/Locomotion.js buildClip
+//     统一修正（根链跳过旋转轨道、Splitter 直接子骨左乘 restQ 换系），本脚本
+//     保持 psa 数据原样导出
 //   - 位置：psa cm × 0.01 = GLB m（L_Hip 11.522cm ↔ 0.11522m 分毫不差）
 //   - 只保留有动画的骨（LB 恰好 12 根：Splitter/Pelvis + 双腿链），
 //     恒定轨道不发（mixer 缺轨=保持 rest，骨架 rest 即官方 bind）
@@ -102,8 +107,18 @@ function clipFromFull(path) {
     if (pVar) t.p = p.flat().map(v => +(v * 0.01).toFixed(5))
     tracks.push(t)
   }
+  // 官方 IK 落地锚（StopAdd/Turn 等整身 clip 同样带 L/R_IK_FootTarget）：
+  // 急停支架/转身踏步的官方脚部约束——不导出 = 这些状态钉地无锚，原始腿曲线
+  // （官方 FootIK 之前的姿态）直接暴露（脚穿地/悬空的 160 轮根因）
+  const ik = {}
+  for (const [side, bone] of Object.entries(IK_BONES)) {
+    const bi = names.indexOf(bone)
+    if (bi < 0) continue
+    ik[side] = frames.map(f => [f[bi].p[0] * 0.01, f[bi].p[1] * 0.01, f[bi].p[2] * 0.01])
+      .flat().map(v => +v.toFixed(5))
+  }
   const times = frames.map((_, i) => +((i / (frames.length - 1)) * duration).toFixed(4))
-  return { duration: +duration.toFixed(4), n: frames.length, times, tracks }
+  return { duration: +duration.toFixed(4), n: frames.length, times, tracks, ik }
 }
 
 const SRC = {

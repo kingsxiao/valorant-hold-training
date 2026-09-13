@@ -99,15 +99,10 @@ const out = await page.evaluate(async (runSec) => {
           else if (p) row.bones['sp' + i] = 0
         })
       }
-      // ik 锚源（复刻 _ikAnchorSource 的选型）
-      const A = b.anim
-      if (A) {
-        const cands = [['walk', A.walk], ['run', A.run]]
-        if (A.strafe) cands.push(['sE-w', A.strafe.E.walk], ['sE-r', A.strafe.E.run], ['sW-w', A.strafe.W.walk], ['sW-r', A.strafe.W.run])
-        let best = null, bestW = -1
-        for (const [k, a] of cands) { if (!a?.getClip().userData.ik) continue; const w = a.getEffectiveWeight(); if (w > bestW) { bestW = w; best = k } }
-        row.ikSrc = bestW > 0.01 ? best : null
-      }
+      // ik 锚源（160 轮起 = 权重混合清单，见 Bot._anchorSources）：报主源
+      // clip 名 + 源数，诊断换态窗口
+      const srcs = b._anchorSources?.() ?? []
+      row.ikSrc = srcs.length ? srcs.slice().sort((a, b2) => b2.w - a.w)[0].a.getClip().name + '×' + srcs.length : null
       row.meshDY = (!wasFresh && prev.get(b.id)) ? +(row.meshY - prev.get(b.id).meshY).toFixed(4) : 0
       row.fresh = wasFresh
       if (b.mode === 'dying') row.deathT = +b.deathT.toFixed(2)
@@ -178,6 +173,7 @@ const out = await page.evaluate(async (runSec) => {
   // 最恶劣 meshY 事件前后的逐 tick 时间序列（机理证据）
   let worstIdx = -1, worstVal = 0
   samples.forEach((s, k) => { if (!s.dying && !s.fresh && Math.abs(s.meshDY) > worstVal) { worstVal = Math.abs(s.meshDY); worstIdx = k } })
+  if (worstIdx < 0) worstIdx = 0 // 全程 meshDY=0（无任何跳变）的退化保护
   const win = samples.slice(Math.max(0, worstIdx - 30), worstIdx + 30).filter(s => s.id === samples[worstIdx].id)
   const series = win.map(s => ({
     vx: s.vx, meshY: s.meshY, dY: s.meshDY, loMin: s.loMin, sw: s.sw, cw: s.cw,

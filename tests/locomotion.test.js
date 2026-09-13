@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import fs from 'node:fs'
-import { buildClip, buildLocomotion, locoWeights, sampleIkAnchor, pickDeathSide, pickTurnClip, CROUCH_WALK_STEP, CROUCH_WALK_SPEED, jumpFallBlend, JUMP_FALL_AFTER, JUMP_FALL_FADE, locoBodyY, PELVIS_REF_Y, PELVIS_CROUCH_DROP, FOOT_GROUND_Y } from '../src/core/Locomotion.js'
+import { buildClip, buildLocomotion, locoWeights, sampleIkAnchor, pickDeathSide, pickTurnClip, CROUCH_WALK_STEP, CROUCH_WALK_SPEED, jumpFallBlend, JUMP_FALL_AFTER, JUMP_FALL_FADE, locoBodyY, PELVIS_REF_Y, PELVIS_CROUCH_DROP, FOOT_GROUND_Y, gaitStepLen, STEP_WALK, STEP_RUN, STEP_STRAFE_RUN } from '../src/core/Locomotion.js'
 
 // 假骨架：UE 风格带 _NNNN 后缀骨名（与英雄 GLB 同构）
 function fakeHeroSkeleton(suffixes) {
@@ -51,6 +51,70 @@ describe('buildClip 骨名后缀解析', () => {
   it('全部骨都解析不到 → null（调用方退回烘焙）', () => {
     const root = fakeHeroSkeleton([['Spine1', '03']])
     expect(buildClip(JSON_CLIP, root)).toBeNull()
+  })
+})
+
+describe('buildClip psa 根链参考系修正（Splitter/Skeleton 轨道值为 GLB rest 的逆）', () => {
+  // 英雄 GLB 同构骨架：Splitter 为运动根，直接子骨 Pelvis/Spine1，孙骨 L_Hip
+  function heroSkeleton() {
+    const root = new THREE.Object3D()
+    root.name = 'mesh'
+    const mk = (name, parent, q) => {
+      const b = new THREE.Bone()
+      b.name = name
+      if (q) b.quaternion.copy(q)
+      parent.add(b)
+      return b
+    }
+    const restQ = new THREE.Quaternion(0.5, 0.5, 0.5, 0.5).normalize()
+    const skeleton = mk('Skeleton_00', root, new THREE.Quaternion(0, 0, -Math.SQRT1_2, Math.SQRT1_2))
+    const splitter = mk('Splitter_02', skeleton, restQ)
+    const pelvis = mk('Pelvis_0147', splitter)
+    mk('Spine1_03', splitter)
+    mk('L_Hip_0138', pelvis)
+    return root
+  }
+
+  const ROOT_CLIP = {
+    duration: 0.6,
+    times: [0, 0.6],
+    tracks: [
+      // psa Splitter 恒定值 = GLB rest 的逆（(0.5,0.5,0.5,±0.5) 互逆）
+      { b: 'Splitter', q: [0.5, 0.5, 0.5, -0.5, 0.5, 0.5, 0.5, -0.5], p: [-0.12, 0.05, 1.15, -0.12, 0.05, 1.15] },
+      { b: 'Skeleton', q: [0, 0, 0, -1, 0, 0, 0, -1], p: [0, 0, 1.0, 0, 0, 0.9] },
+      { b: 'Pelvis', q: [0, 0, 0, 1, 0, 0.1, 0, 0.99] },
+      { b: 'L_Hip', q: [0.05, 0, 0, 1, 0.05, 0, 0, 1] },
+    ],
+  }
+
+  it('根链骨跳过旋转轨道、位置轨道原样保留（骨盆高度不丢）', () => {
+    const root = heroSkeleton()
+    const clip = buildClip(ROOT_CLIP, root, 'runN')
+    const names = clip.tracks.map(t => t.name)
+    expect(names).not.toContain('Splitter_02.quaternion')
+    expect(names).not.toContain('Skeleton_00.quaternion')
+    const sp = clip.tracks.find(t => t.name === 'Splitter_02.position')
+    expect(sp).toBeTruthy()
+    // 位置在公共父框架（z-up）里与 GLB 一致，原样保留
+    ROOT_CLIP.tracks[0].p.forEach((v, i) => expect(sp.values[i]).toBeCloseTo(v, 6))
+  })
+
+  it('非根链骨（含 Splitter 直接子骨）轨道原样保留——无需逐骨换系', () => {
+    const root = heroSkeleton()
+    const clip = buildClip(ROOT_CLIP, root, 'runN')
+    // Pelvis 是 Splitter 直接子骨：psa 局部与 GLB 局部同约定，原样保留
+    const pelvis = clip.tracks.find(t => t.name === 'Pelvis_0147.quaternion')
+    ROOT_CLIP.tracks[2].q.forEach((v, i) => expect(pelvis.values[i]).toBeCloseTo(v, 6))
+    // 孙骨同样原样
+    const hip = clip.tracks.find(t => t.name === 'L_Hip_0138.quaternion')
+    ROOT_CLIP.tracks[3].q.forEach((v, i) => expect(hip.values[i]).toBeCloseTo(v, 6))
+  })
+
+  it('无 Splitter 的骨架（Mixamo XBot 回退）→ 全部原样保留（旧行为）', () => {
+    const root = fakeHeroSkeleton([['Pelvis', '0131'], ['L_Hip', '0136']])
+    const clip = buildClip(JSON_CLIP, root, 'runN')
+    const q = clip.tracks.find(t => t.name === 'L_Hip_0136.quaternion')
+    JSON_CLIP.tracks[1].q.forEach((v, i) => expect(q.values[i]).toBeCloseTo(v, 6))
   })
 })
 
@@ -237,9 +301,10 @@ describe('turn 8 向集与 stopAdd 支架（TP_Core 停步挑战）', () => {
     }
     expect(CROUCH_WALK_SPEED).toBeCloseTo(2.7, 6) // 本体口径 = 50% 跑速
     // 步幅按移速派生（任意速度近零滑步）：2.7 → 1.26；1.76（clip 天然速率）→ 0.82
-    expect(CROUCH_WALK_STEP).toBeCloseTo(0.84, 6) // 步幅 = clip 属性，不随移速变
-    // 近零滑步口径：滑步 = 移速×(1−1.64/(2×0.84)) ≈ 2.4%·v
-    expect(2.7 * (1 - 1.64 / (2 * 0.84))).toBeLessThan(0.1)
+    expect(CROUCH_WALK_STEP).toBeCloseTo(0.735, 6) // 步幅 = clip 属性（触地窗速率×周期/2），不随移速变
+    // 近零滑步口径（160 轮）：脚速 = 移速×(1−触地速率×周期/(2×步幅))，
+    // 触地速率≈1.6×0.933/2=0.747 → 2.7 m/s 时 |脚速| < 0.1
+    expect(Math.abs(2.7 * (1 - 1.6 * 0.9333 / (2 * 0.735)))).toBeLessThan(0.1)
   })
 
   it('jump 三段集：JumpN 3.23s / JumpLand 0.667s / Falling 滞空循环 2.567s', () => {
@@ -271,6 +336,74 @@ describe('turn 8 向集与 stopAdd 支架（TP_Core 停步挑战）', () => {
     expect(Object.keys(built.turn).sort()).toEqual(['E135','E180','E45','E90','W135','W180','W45','W90'])
     expect(built.turn.E90.duration).toBeCloseTo(1, 3)
     expect(built.stopAdd.blendMode).toBe(THREE.AdditiveAnimationBlendMode)
+  })
+})
+
+describe('gaitStepLen 官方步距相位锁（160 轮：各族天然速度不同）', () => {
+  it('各族步距常量：走/横移走 1.05、跑 1.54、横移跑 1.40', () => {
+    expect(STEP_WALK).toBeCloseTo(1.05, 6)
+    expect(STEP_RUN).toBeCloseTo(1.54, 6)
+    expect(STEP_STRAFE_RUN).toBeCloseTo(1.40, 6)
+  })
+
+  it('runW/strafeW 连续内插：换态步距无跳变（相位速率连续）', () => {
+    expect(gaitStepLen({})).toBeCloseTo(STEP_WALK, 6)
+    expect(gaitStepLen({ runW: 1 })).toBeCloseTo(STEP_RUN, 6)
+    expect(gaitStepLen({ strafeW: 1 })).toBeCloseTo(STEP_WALK, 6) // 横移走 = 走步距
+    expect(gaitStepLen({ runW: 1, strafeW: 1 })).toBeCloseTo(STEP_STRAFE_RUN, 6)
+    expect(gaitStepLen({ runW: 0.5 })).toBeCloseTo((STEP_WALK + STEP_RUN) / 2, 6)
+    // 域外钳制
+    expect(gaitStepLen({ runW: 9 })).toBeCloseTo(gaitStepLen({ runW: 1 }), 6)
+    expect(gaitStepLen({ runW: -1 })).toBeCloseTo(STEP_WALK, 6)
+  })
+
+  it('官方锚触地窗互证：runN 步距 ≈ STEP_RUN、runE/runW ≈ STEP_STRAFE_RUN、walkN ≈ STEP_WALK（±0.12）', () => {
+    // 触地窗（z ≤ zMin+4mm 的环形最长段）后扫速率 × 周期 / 2 = 跑族步距（有腾空相）
+    const stepOf = (c, axis) => {
+      const rates = []
+      for (const side of ['L', 'R']) {
+        let zmin = 9
+        for (let f = 0; f < c.n; f++) zmin = Math.min(zmin, c.ik[side][f * 3 + 2])
+        const flat = []
+        for (let f = 0; f < c.n; f++) if (c.ik[side][f * 3 + 2] <= zmin + 0.004) flat.push(f)
+        if (flat.length < 2) continue
+        let gaps = []
+        for (let i = 1; i < flat.length; i++) gaps.push(flat[i] - flat[i - 1])
+        const maxGap = gaps.length ? Math.max(...gaps) : 0
+        let seg = flat
+        if (maxGap > 1) {
+          const gi = gaps.indexOf(maxGap)
+          seg = flat.slice(gi + 1).concat(flat.slice(0, gi + 1).map(v => v + c.n))
+        }
+        if (seg.length < 2) continue
+        const f0 = seg[0], f1 = seg[seg.length - 1]
+        const p0 = c.ik[side][(f0 % c.n) * 3 + axis], p1 = c.ik[side][(f1 % c.n) * 3 + axis]
+        const t0 = f0 / (c.n - 1) * c.duration, t1 = f1 / (c.n - 1) * c.duration
+        rates.push(Math.abs(p1 - p0) / (t1 - t0))
+      }
+      const v = rates.reduce((a, b) => a + b, 0) / Math.max(1, rates.length)
+      return v * c.duration / 2
+    }
+    const core = JSON.parse(fs.readFileSync('public/models/locomotion.json', 'utf8')).core
+    expect(Math.abs(stepOf(core.runN, 0) - STEP_RUN)).toBeLessThan(0.12)
+    expect(Math.abs(stepOf(core.runE, 1) - STEP_STRAFE_RUN)).toBeLessThan(0.12)
+    expect(Math.abs(stepOf(core.runW, 1) - STEP_STRAFE_RUN)).toBeLessThan(0.12)
+    expect(Math.abs(stepOf(core.walkN, 0) - STEP_WALK)).toBeLessThan(0.12)
+  })
+
+  it('整身 clip 的官方锚导出：turn 锚是真实踏步曲线、stopAdd 锚退化在原点（不入锚源）', () => {
+    const j = JSON.parse(fs.readFileSync('public/models/locomotion.json', 'utf8'))
+    const t = j.turn.E90.ik
+    expect(t.L.length).toBeGreaterThanOrEqual(j.turn.E90.n * 3)
+    // 转身锚 z 在踝高带（0.12~0.21）且中段有位移（真实踏步）
+    const zs = t.L.filter((_, i) => i % 3 === 2)
+    expect(Math.max(...zs)).toBeLessThan(0.21)
+    expect(Math.min(...zs)).toBeGreaterThan(0.11)
+    const xs = t.L.filter((_, i) => i % 3 === 0)
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(0.1)
+    // stopAdd 的 IK 目标恒在原点附近（支架冻结双脚，锚不可用 → 锚源不含 stopAdd）
+    const sa = j.stopAdd.ik.L
+    expect(Math.hypot(...sa.slice(0, 3))).toBeLessThan(0.01)
   })
 })
 

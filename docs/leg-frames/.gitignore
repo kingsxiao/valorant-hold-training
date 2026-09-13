@@ -1,0 +1,15 @@
+# 连拍产物体积大（95 帧/74MB）：只归档遥测与关键判读帧，全量可由
+# scripts/inspect-legs.mjs 一键再生
+*
+!telemetry.json
+!runN-2.png
+!runN-6.png
+!walkN-4.png
+!runE-5.png
+!runW-7.png
+!jump-3.png
+!jump-6.png
+!stop90-5.png
+!crouchWalkE-4.png
+!crouchIdle-1.png
+!.gitignore

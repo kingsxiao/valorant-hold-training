@@ -200,9 +200,10 @@ const _ikAt = new THREE.Vector3()
 const _ikPole = new THREE.Vector3()
 const _ikE = new THREE.Vector3()
 const _ikTmp = new THREE.Vector3()
+const _ikPoleTmp = new THREE.Vector3()
 const _ikRes = { abDirCur: new THREE.Vector3(), dirAb: new THREE.Vector3(), dirCb: new THREE.Vector3(), lab: 0, lcb: 0, clamped: false }
 
-export function solveTwoBoneIK({ shoulder, elbow, hand, target, eps = 1e-4 }) {
+export function solveTwoBoneIK({ shoulder, elbow, hand, target, pole, eps = 1e-4 }) {
   const lab = elbow.distanceTo(shoulder)
   const lcb = hand.distanceTo(elbow)
   if (lab < eps || lcb < eps) return null
@@ -214,9 +215,18 @@ export function solveTwoBoneIK({ shoulder, elbow, hand, target, eps = 1e-4 }) {
   const dMin = Math.abs(lab - lcb) + eps
   const clamped = dRaw > dMax || dRaw < dMin
   const d = THREE.MathUtils.clamp(dRaw, dMin, dMax)
-  // 弯曲平面基向量 e：极向量（当前上臂方向）去掉沿目标方向分量后的垂直向
+  // 当前上臂方向（abDirCur 恒为它——调用侧靠它求「从当前姿态出发」的增量旋转）
   _ikPole.copy(elbow).sub(shoulder).normalize()
-  _ikE.copy(_ikPole).addScaledVector(_ikAt, -_ikPole.dot(_ikAt))
+  // 弯曲平面基向量 e：极向量去掉沿目标方向分量后的垂直向。
+  // pole（世界系点）显式给定极向：腿类关节膝盖必须朝面朝方向弯——psa 原始
+  // 腿曲线是官方 FootIK 之前的姿态，膝常处于反折位，跟随当前肘方向会解出
+  // 反关节；未给定时用当前肘方向（手臂持枪等沿用原行为）
+  if (pole) {
+    _ikPoleTmp.copy(pole).sub(shoulder).normalize()
+    _ikE.copy(_ikPoleTmp).addScaledVector(_ikAt, -_ikPoleTmp.dot(_ikAt))
+  } else {
+    _ikE.copy(_ikPole).addScaledVector(_ikAt, -_ikPole.dot(_ikAt))
+  }
   if (_ikE.lengthSq() < 1e-8) { // 上臂与目标线共线：任取垂直向
     _ikE.set(0, 1, 0).addScaledVector(_ikAt, -_ikAt.y)
     if (_ikE.lengthSq() < 1e-8) _ikE.set(1, 0, 0).addScaledVector(_ikAt, -_ikAt.x)

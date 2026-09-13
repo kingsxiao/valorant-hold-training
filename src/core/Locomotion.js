@@ -14,10 +14,25 @@ export function buildClip(jsonClip, skeletonRoot, name = 'loco') {
       if (k && !byStripped.has(k)) byStripped.set(k, o.name)
     }
   })
+  // psa 根链参考系修正（2026-09-12 全身扭曲回归根因）：psa 导出把根链骨
+  // Splitter / Skeleton 的旋转轨道值写成了英雄 GLB rest 旋转的「逆」（Splitter
+  // 轨道恒 (0.5,0.5,0.5,-0.5)，GLB rest = (0.5,0.5,0.5,+0.5)，相差 120°）——
+  // 直挂应用会把 Splitter 以下整副骨架放倒（超人姿）。
+  // 修正 = 只跳过根链骨的旋转轨道（两者恒定、不参与动画，保持 GLB rest）；
+  // 其余全部原样：Splitter 以下的 psa 局部四元数/位置在「GLB Splitter rest ×
+  // psa 原始链」的组合下恰好逐帧复现官方世界姿态（M⊗P_split = Skel⊗G 恒等，
+  // 无需任何逐骨换系——157 轮曾试过对直接子骨左乘 restQ，反而把髋关节偏移
+  // 转到骨盆上方 10cm，腿全歪，158 轮回退）。位置轨道（Splitter 高度/骨盆
+  // 微动/死亡根位移）在公共父框架 z-up 里与 GLB 一致，原样保留
   const tracks = []
   for (const t of jsonClip.tracks) {
     const boneName = byStripped.get(t.b)
     if (!boneName) continue // 目标骨架没有该骨（如 _end 辅助骨）——跳过
+    if (t.b === 'Splitter' || t.b === 'Skeleton') {
+      // 根链：只保留位置轨道
+      if (t.p) tracks.push(new THREE.VectorKeyframeTrack(`${boneName}.position`, jsonClip.times, t.p))
+      continue
+    }
     tracks.push(new THREE.QuaternionKeyframeTrack(`${boneName}.quaternion`, jsonClip.times, t.q))
     if (t.p) tracks.push(new THREE.VectorKeyframeTrack(`${boneName}.position`, jsonClip.times, t.p))
   }
@@ -108,12 +123,36 @@ export function jumpFallBlend(airT) {
   return x * x * (3 - 2 * x) // smoothstep
 }
 
-// 蹲走锁相步幅（纯常量，Bot 与单测共用）：步幅是 clip 的几何属性（官方蹲走
-// 扫幅 0.82m 实测），与移速无关——移速只改步频（cadence = 移速/步幅），滑步 =
-// 移速×(1−1.64/(2×0.84)) ≈ 2.4%·v，任意移速近零滑步。
-// ⚠ 141 轮曾把步幅改成「随移速派生」（speed×0.4667）——那会让 T_locked 恒定
-// = 步频恒定、滑步随移速线性放大（2.7m/s 时 0.94m/s），是回归，勿改回
-export const CROUCH_WALK_STEP = 0.84
+// 蹲走锁相步幅（纯常量，Bot 与单测共用）：步幅是 clip 的几何属性，与移速
+// 无关——移速只改步频（cadence = 移速/步幅）。触地窗（z≤zMin+4mm）后扫速率
+// 实测 1.53~1.61 m/s → 步距 = 速率×周期/2 = 0.71~0.75 取 0.735（160 轮：
+// 与走/跑族同判定学；旧 0.84 是锚水平总扫幅口径，含跟趾滚动的重复计量，
+// 播放慢 14% = 蹲走支撑 0.30 m/s 滑步）。⚠ 141 轮曾把步幅改成「随移速派生」
+// （speed×0.4667）——那会让步频恒定、滑步随移速线性放大，是回归，勿改回
+export const CROUCH_WALK_STEP = 0.735
+
+// 官方步距（走/跑/横移的相位锁相基准；Bot.step 的 mixer 分支与单测共用）。
+// 实测方法（scripts/analyze-gait-data.mjs，psa 锚曲线）：
+//  - 跑族（有腾空相，触地占周期 <100%）：stepLen = 触地窗（z≤zMin+4mm 的
+//    平台段）后扫速率 × 周期 / 2 ——runN 1.54 与旧单一常量 1.55 互证；
+//    横移跑 E/W = 1.40/1.39（触地窗速率 4.4-5.0 m/s，非 5.4）
+//  - 全触地步态（走/蹲走，无腾空相）：stepLen = 锚水平扫幅（每步净推进）——
+//    walkN/E/W = 0.99~1.05 取 1.05，与触地窗法在走上互证一致
+// ⚠ 各族天然速度不同（跑 N ≈5.4@1x、横移跑 ≈4.6、走 ≈2.4）：官方引擎按实际
+//   移速缩放播放速率。曾用单一 STEP_LEN=1.55 统一锁相——对跑成立，对走播放
+//   慢 ~35%（走态支撑滑步 ~1.0 m/s）、横移跑慢 ~9%（160 轮修正）
+export const STEP_WALK = 1.05
+export const STEP_RUN = 1.54
+export const STEP_STRAFE_RUN = 1.40
+
+// 当前混合态的有效步距（纯函数，相位推进速率 = 移速/步距）：前进族按 runW
+// 内插、横移按 strafeW 内插——权重连续 → 步距连续（换态无相位速率跳变）
+export function gaitStepLen({ runW = 0, strafeW = 0 } = {}) {
+  const c = (v) => Math.min(1, Math.max(0, v))
+  const fwd = STEP_WALK + (STEP_RUN - STEP_WALK) * c(runW)
+  const side = STEP_WALK + (STEP_STRAFE_RUN - STEP_WALK) * c(runW)
+  return fwd + (side - fwd) * c(strafeW)
+}
 
 // 停步转身选型（纯函数）：deltaYaw = 朝向差（最短角，rad，正=左转）。
 // 命名约定：E=向右转（yaw 减）、W=向左转（yaw 增），角度取最近档。

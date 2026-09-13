@@ -29,9 +29,10 @@ export function solveGunAim(from, to, out = new THREE.Quaternion()) {
 
 // 瞄准目标选择：站定/急停/pull 横移对枪 → 枪口追玩家（本体 strafe 对枪正是
 // 腿横移、枪贴着你）；cross 跑过 → 顺身体前方携枪跑（不追人不扭枪）
+// 出掩体全程面朝玩家持枪（162 轮）：拉出/贯穿的枪口都压玩家眼位——正面横移
+// 下携枪顺跑向（forward）已无场景。参数保留（调用侧/单测口径不变）
 export function pickAimTarget({ style, stopped, moving }) {
-  if (!moving || stopped || style === 'pull') return 'player'
-  return 'forward'
+  return 'player'
 }
 
 // 步伐随动幅度（纯函数，Bot._stepGun 与单测共用）：跑动中武器随步频的

@@ -7,23 +7,31 @@
 
 import { GAIT } from './GaitBake.js'
 
-// 朝向判定：横移中 cross=顺跑向 / pull=面向玩家；停步/站定一律转回面向
-// 玩家（停步挑战）。dx/dz = 玩家 − Bot，返回目标 yaw（rad）
-export function peekFacingYaw({ style, canStrafe, velX, moving, stopped, dx, dz }) {
-  if (!moving || stopped) return faceTargetYaw(dx, dz)
-  if (style === 'pull' && canStrafe) return faceTargetYaw(dx, dz) // 横向拉出：面向玩家横移
-  return velX > 0 ? -Math.PI / 2 : Math.PI / 2                    // 侧身跑过 / 无骨链回退
+// 朝向判定：出掩体全程面朝玩家（162 轮用户口径：pull 拉出即缩 / cross 贯穿
+// 跑过都正面朝玩家横移——cross 曾顺跑向 = 玩家全程看侧身）；停步/站定同样面向
+// 玩家。腿骨链不齐的老模型（canStrafe=false）无横移步态，回退顺跑向防滑步。
+// dx/dz = 玩家 − Bot，返回目标 yaw（rad）。
+// front = 模型视觉正面所在局部轴的符号（164 轮实测定案）：英雄 GLB 视觉正面
+// = 局部 +Z（kamae 持枪位 L_Hand 前伸 z=+0.49 托护木、R_Hand z=+0.10 托握把
+// = 右利手步枪姿态 ⇒ 前方=+Z；旧代码按「正面 -Z」算 yaw 差了 180° = 背对玩家
+// 出场）。程序化假人面罩画在 -Z（front=-1）保持旧约定。
+export function peekFacingYaw({ canStrafe, velX, moving, stopped, dx, dz, front = 1 }) {
+  if (!moving || stopped) return faceTargetYaw(dx, dz, front)
+  if (canStrafe) return faceTargetYaw(dx, dz, front) // 正面横移：面向玩家
+  return front * (velX > 0 ? Math.PI / 2 : -Math.PI / 2)
 }
 
-// 玩家方向 yaw（与视角同约定：模型正面 -Z）
-export function faceTargetYaw(dx, dz) {
-  return Math.atan2(-dx, -dz)
+// 玩家方向 yaw：front=+1（GLB，正面 +Z）yaw=atan2(dx,dz)；front=-1（程序化
+// 假人，正面 -Z）= 旧约定 atan2(-dx,-dz)
+export function faceTargetYaw(dx, dz, front = 1) {
+  return Math.atan2(dx * front, dz * front)
 }
 
-// 横移步态权重：pull 波随移速 0.25→1.15 m/s 从前进 clip 淡入程序化侧移
-// （与 idle→walk 动画权重同曲线，启停无跳变）；cross 波恒 0
+// 横移步态权重：pull（拉出即缩）与 cross（贯穿跑过，162 轮起也面向玩家横移）
+// 都随移速 0.25→1.15 m/s 淡入横移步态/横移 clip（与 idle→walk 动画权重同
+// 曲线，启停无跳变）——cross 若沿用前进 clip，正面横移会全程滑步
 export function strafeRampW({ style, speed, minSpeed = 0.25, rampSpeed = 1.15 }) {
-  if (style !== 'pull') return 0
+  if (style !== 'pull' && style !== 'cross') return 0
   return Math.min(1, Math.max(0, (speed - minSpeed) / (rampSpeed - minSpeed)))
 }
 

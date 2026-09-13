@@ -179,7 +179,6 @@ export const CONFIG = {
   bot: {
     health: 100,
     moveSpeed: 5.4,         // Bot 横移速度 = 持步枪跑速（Bot 持枪 5.4 档，与玩家对枪时同速）
-    aimTimeMs: 450,         // Bot 完全可见后超此时限未击杀 → 对枪失败（Bot 缩回，玩家无伤害）
     hitFlashTime: 0.09,
     deathTime: 0.55,
     spawnGuardMs: 250,      // 出生保护（不可被击中）
@@ -192,20 +191,13 @@ export const CONFIG = {
     peekDelayMaxMs: 2600,
     peekSide: 'left',       // Bot 出场侧：left / right 固定一侧练同向预瞄，random 保留两侧随机
     weaponSkin: 'default',  // Vandal 皮肤：default / aristocrat（官方商城 Aristocrat 收藏集，镀金）
-    peekStopChance: 0.35,   // 横移中急停一瞬的概率（模拟真人 swing 抖动）
-    crouchChance: 0.3,      // 急停瞬间转入蹲姿对枪的概率（本体对枪蹲：压低头部躲爆头线，
-                            // 命中区随官方蹲姿根高 ×0.70 缩放，逼玩家下压准星）
-    jumpChance: 0.18,       // 每波掷定跳 peek 的概率（中途随机进度起跳：官方 Jump 蹬伸 +
-                            // 抛物线弧（命中区随 mesh 跟随）+ JumpLand 落地恢复）
     crouchWalkChance: 0.2,  // pull 波掷定蹲走拉出的概率（官方蹲走循环，命中区 ×0.70）
     crouchWalkSpeed: 2.7,   // 蹲走拉出移速（m/s）：本体口径 = 50% 跑速；播放松条可调
-                            // （1.4-2.7）——步幅相位按速度自动派生，任意速度近零滑步。
-                            // 观感回退预设档：1.76 = clip 天然速率（步频 1.9 步/s、
-                            // 滑步趋零优先于移速口径；设置滑条实时切换对比）       // 每波掷定跳 peek 的概率（中途随机进度起跳：官方 Jump 蹬伸 +
-                            // 抛物线弧（命中区随 mesh 跟随）+ JumpLand 落地恢复）
-    crossChance: 0.5,       // 每波风格：侧面跑过（贯穿缺口顺跑向）vs 横向拉出（肩peek 拉出对枪）
+                            // （1.4-2.7）——步幅相位按速度自动派生，任意速度近零滑步
+    crossChance: 0.5,       // 每波风格：侧面跑过（贯穿缺口顺跑向）vs 正面横移走出（面向玩家拉出即缩）
     pullJiggleChance: 0.3,  // 拉出波里"露头即缩"jiggle-peek 的概率（拉到中段折返）
-    pullHoldMaxMs: 2400,    // 拉出后站定对枪的兜底时长（可见判负之外防挂场，如玩家挪位断 LOS）
+    // 161 轮起：Bot 不跳、不停顿（无急停/站定对枪/跳 peek 波；aimTime 判负随
+    // 停顿一并移除，漏杀 = 完整走完波次未被击杀）
   },
 
   // ---- 闪光干扰（敌方投掷 1:1 数值，来源：Fandom 维基 2026-09 各技能页 + Deployment types）----

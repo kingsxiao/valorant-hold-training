@@ -94,6 +94,7 @@ export class Bot {
     this.pos = new THREE.Vector3()
     this.prevPos = new THREE.Vector3()
     this.velX = 0
+    this.velZ = 0
     this.mode = 'idle'
     this.active = false
     this.hp = CONFIG.bot.health
@@ -805,7 +806,7 @@ export class Bot {
     const rig = this._strafeRig
     if (!rig) return
     // 相位由 step() 的 mixer 分支统一推进（位移锁相，见 step）——这里只消费
-    const lx = this.velX * Math.cos(this.mesh.rotation.y) // 模型局部横向速度（右侧 +X 为正）
+    const lx = this.velX * Math.cos(this.mesh.rotation.y) // 模型局部横向速度（模型空间 x 分量；GLB 正面 +Z ⇒ 右侧为 -x）
     // 侧倾：向移动方向倾，回正比起倾更快（急停干净利落，与 _stepLegs 同节奏）
     const leanTarget = w > 0 ? leanInto(lx) : 0
     const leanRate = Math.abs(leanTarget) > Math.abs(this.lean) ? 8 : 18
@@ -1006,9 +1007,11 @@ export class Bot {
       leg.knee.matrixWorld.decompose(_fpKnee, _q2, _gscl)
       _fpAnchor.copy(st.anchor).lerp(_fpFoot, 1 - st.w)
       // 膝极向 = 面朝方向（psa 原始腿曲线是官方 FootIK 之前的姿态，膝常反折，
-      // 跟随当前肘方向会把反关节保留下来；官方 UE TwoBoneIK 同样用显式极向）
+      // 跟随当前肘方向会把反关节保留下来；官方 UE TwoBoneIK 同样用显式极向）。
+      // GLB 视觉正面 = 局部 +Z（164 轮）：极向取 +Z 侧（旧 -Z 在 180° 翻转的
+      // 朝向修正前恰好指向玩家侧 = 真正面，翻转后必须跟着换号）
       _fpPole.copy(_fpHip)
-        .addScaledVector(_fwdAxis.set(0, 0, -1).applyQuaternion(this.mesh.quaternion), 0.4)
+        .addScaledVector(_fwdAxis.set(0, 0, 1).applyQuaternion(this.mesh.quaternion), 0.4)
       const sol = solveTwoBoneIK({ shoulder: _fpHip, elbow: _fpKnee, hand: _fpFoot, target: _fpAnchor, pole: _fpPole })
       if (!sol) continue
       // clamped（腿全伸）照常应用：clamped 解 = 指向目标方向的满展位，脚沿可达
@@ -1037,7 +1040,7 @@ export class Bot {
     const legL = this.legL, legR = this.legR
     // 局部横向速度（模型正面 -Z、右侧 +X）：面向玩家横移时该分量为主
     const yaw = this.mesh.rotation.y
-    const lx = this.velX * Math.cos(yaw)
+    const lx = this.velX * Math.cos(yaw) - this.velZ * Math.sin(yaw)
 
     // 相位始终随位移推进（里程积分），跨低速段也不失锁。
     // 脚步声：walkPhase 每跨过 kπ = 走满一步（STEP_LEN 位移），恰是 |cos|=1
@@ -1135,6 +1138,7 @@ export class Bot {
     this.active = true
     this.mode = mode
     this.velX = 0
+    this.velZ = 0
     this.mesh.visible = true
     this.blob.visible = !Bot.realShadows
     // 上一次死亡淡出可能关闭了网格投影（setOpacity 半程切换 blob 补位）——重生恢复
@@ -1200,7 +1204,7 @@ export class Bot {
     }
     if (this.gun) { // 上一条命掉在地上的枪收回手上（_stepGun 下一帧精确摆正）
       this.mesh.add(this.gun.holder)
-      this.gun.holder.position.set(0, 1.2, -0.25)
+      this.gun.holder.position.set(0, 1.2, 0.25) // GLB 正面 +Z：挂回身前（164 轮换号）
       this.gun.holder.quaternion.identity()
       this.gun.gun.position.copy(this.gun.gunBase) // 含模板根节点居中偏移，不能 set 硬编码
       this.gun.kick = 0
@@ -1228,17 +1232,24 @@ export class Bot {
   get invulnerable() { return this.now() < (this.spawnGuardUntil ?? 0) || !this.active || this.mode === 'dying' }
   now() { return this.manager ? this.manager.now() : performance.now() / 1000 } // 跟随游戏时钟（暂停时冻结）
 
-  moveToward(targetVelX, dt) {
-    // 与玩家同款地面移动模型（core/GroundMotion.js）：加速 18.75 m/s²@步枪档、
-    // 摩擦 28.6+3.3v 急停（5.4→0 ≈0.147s，对齐 Riot_Classick 官方停稳 0.160s；
-    // 反向键无额外加成）。Bot 启停节奏 = 真人 peek 的节奏
+  // targetVelX/targetVelZ = 世界系目标速度（walkout 波沿 z 穿缺口前进，横移波
+  // 沿 x——两轴同款地面模型：加速 18.75 m/s²@步枪档、摩擦 28.6+3.3v 急停
+  // （5.4→0 ≈0.147s，对齐 Riot_Classick 官方停稳 0.160s）。Bot 启停节奏 =
+  // 真人 peek 的节奏
+  moveToward(targetVelX, dt, targetVelZ = 0) {
     const M = CONFIG.movement
     this.velX = groundStep(this.velX, targetVelX, {
       accel: accelFor(targetVelX, M.groundAccel, M.runSpeed),
       decelFlat: M.groundDecelFlat,
       decelDrag: M.groundDecelDrag,
     }, dt)
+    this.velZ = groundStep(this.velZ, targetVelZ, {
+      accel: accelFor(targetVelZ, M.groundAccel, M.runSpeed),
+      decelFlat: M.groundDecelFlat,
+      decelDrag: M.groundDecelDrag,
+    }, dt)
     this.pos.x += this.velX * dt
+    this.pos.z += this.velZ * dt
   }
 
   // 跳 peek：播 JumpN（蹬伸→空中收腿），弧线由 mesh.y 偏移驱动（命中区随
@@ -1280,6 +1291,7 @@ export class Bot {
     this.deathT = 0
     this._landed = false
     this.velX = 0
+    this.velZ = 0
     this.deathRoll = (vary() - 0.5) * 0.55 // 带随机侧倒更自然
     this.flinch = 0
     // 死亡分支不走上面的闪光恢复路径（step 提前返回）——在此立即还原，
@@ -1290,7 +1302,8 @@ export class Bot {
     let side = null
     if (this._playerX !== undefined) {
       const yaw = this.mesh.rotation.y
-      const fwdX = -Math.sin(yaw), fwdZ = -Math.cos(yaw) // mesh -Z = 朝向
+      const f = this.mixer ? 1 : -1 // GLB 视觉正面 +Z；程序化假人 -Z（164 轮）
+      const fwdX = f * Math.sin(yaw), fwdZ = f * Math.cos(yaw)
       const dx = this._playerX - this.pos.x, dz = this._playerZ - this.pos.z
       side = pickDeathSide(fwdX * dx + fwdZ * dz)
     }
@@ -1449,12 +1462,13 @@ export class Bot {
     //  cross 侧面跑过 = 顺行进方向跑（旋转跑、侧身入镜）
     //  急停/站定一律转回面向目标（停步挑战）
     const stopped = this.mode === 'peek' && this.peek?.stopUntil > this.now()
-    const moving = Math.abs(this.velX) > 0.4
+    const moving = Math.hypot(this.velX, this.velZ) > 0.4
     const targetYaw = peekFacingYaw({
       style: this.peek?.style,
       canStrafe: !this.mixer || !!this._strafeRig, // 程序化假人自带横移步态
       velX: this.velX, moving, stopped,
       dx: p.pos.x - this.pos.x, dz: p.pos.z - this.pos.z,
+      front: this.mixer ? 1 : -1, // GLB 视觉正面 +Z；程序化假人正面 -Z（164 轮）
     })
     let dy = targetYaw - this.mesh.rotation.y
     dy = Math.atan2(Math.sin(dy), Math.cos(dy)) // 取最短角差
@@ -1480,9 +1494,9 @@ export class Bot {
     if (turnKey && (this._turnW ?? 0) > 0.15 && this.anim.turn?.[this._turnKey]) turnKey = this._turnKey
     const braceTarget = stopped && this.anim?.stopAdd && !turnKey && !this._crouching && !this._jump ? 1 : 0
 
-    // 移动表现：程序化假人 = VALORANT 横移步态；骨骼假人播放混合动画，pull 波
-    // 横移时腿由程序化侧移覆盖、上身动画速度压向 0（退到 idle：持枪横移不甩臂）
-    const speed = Math.abs(this.velX)
+    // 移动表现：程序化假人 = VALORANT 横移步态；骨骼假人播放混合动画，walkout
+    // 波沿 z 前进（顺跑向 clip），横移台架沿 x
+    const speed = Math.hypot(this.velX, this.velZ)
     if (this.legL && this.legR) {
       this._stepLegs(speed, dt)
     } else if (this.mixer) {
@@ -1517,10 +1531,14 @@ export class Bot {
       if (this.anim.crouchWalk) {
         // 步幅 = clip 属性常量（0.84）：移速只改步频（任意移速近零滑步）
         this._cwPhase = (this._cwPhase ?? 0) + speed * dt * Math.PI / CROUCH_WALK_STEP
-        // 侧别同横移 E/W 口径（见下方横移侧别的数据依据；站定 |velX|≤0.5 保持
-        // 原侧——平局判决会把蹲走侧别在站定时翻面。换侧压零权重再起坡
-        if (Math.abs(this.velX) > 0.5) {
-          const side = this.velX * Math.cos(this.mesh.rotation.y) < 0 ? 'E' : 'W'
+        // 侧别 = 局部速度主轴：横移主导 → E/W（配对依据见下方横移侧别数据注），
+        // 前向主导（walkout 沿 z 穿出）→ N（官方蹲走 N 向 clip）。低速 ≤0.5 保持
+        // 原侧——平局判决会把蹲走侧别在站定时翻面；换侧压零权重再起坡
+        if (Math.max(Math.abs(this.velX), Math.abs(this.velZ)) > 0.5) {
+          const yaw = this.mesh.rotation.y
+          const fwd = -(this.velX * Math.sin(yaw) + this.velZ * Math.cos(yaw))
+          const lat = this.velX * Math.cos(yaw) - this.velZ * Math.sin(yaw)
+          const side = Math.abs(lat) > Math.abs(fwd) ? (lat < 0 ? 'E' : 'W') : 'N'
           if (side !== this._cwSide) {
             this._cwSide = side
             this._crouchWW = 0

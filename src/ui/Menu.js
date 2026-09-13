@@ -103,7 +103,6 @@ export class Menu {
       delayMax: CONFIG.training.peekDelayMaxMs,
       speedMult: 1.0,
       crouchWalkSpeed: 2.7,
-      aimTimeMs: CONFIG.bot.aimTimeMs,
       volume: 0.7,
       showFps: true,
       shadows: CONFIG.graphics.shadows,
@@ -132,14 +131,14 @@ export class Menu {
     const c = this.cfg
     const NUM = { // 与 build() 里滑条 min/max 一一对应
       sens: [0.05, 1.5], roundSeconds: [0, 180], delayMin: [200, 2000],
-      delayMax: [500, 5000], speedMult: [0.4, 1.3], aimTimeMs: [250, 1200],
+      delayMax: [500, 5000], speedMult: [0.4, 1.3],
       crouchWalkSpeed: [1.4, 2.7],
       volume: [0, 1], resScale: [0.5, 2],
     }
     const DEF = {
       sens: CONFIG.mouse.defaultSens, roundSeconds: 60,
       delayMin: CONFIG.training.peekDelayMinMs, delayMax: CONFIG.training.peekDelayMaxMs,
-      speedMult: 1, aimTimeMs: CONFIG.bot.aimTimeMs, volume: 0.7, resScale: 1,
+      speedMult: 1, volume: 0.7, resScale: 1,
       crouchWalkSpeed: 2.7,
     }
     for (const [k, [min, max]] of Object.entries(NUM)) {
@@ -210,7 +209,6 @@ export class Menu {
         <div class="slider-row"><label>Bot 出现最大延迟</label><input type="range" data-key="delayMax" min="500" max="5000" step="100"><span class="val"></span></div>
         <div class="slider-row"><label>Bot 横移速度</label><input type="range" data-key="speedMult" min="0.4" max="1.3" step="0.05"><span class="val"></span></div>
         <div class="slider-row"><label>蹲走拉出速度</label><input type="range" data-key="crouchWalkSpeed" min="1.4" max="2.7" step="0.1"><span class="val"></span></div>
-        <div class="slider-row"><label>击杀时限</label><input type="range" data-key="aimTimeMs" min="250" max="1200" step="50"><span class="val"></span></div>
         <div class="slider-row"><label>音量</label><input type="range" data-key="volume" min="0" max="1" step="0.05"><span class="val"></span></div>
       </div>
       <div class="opt-grid" data-group="gapSide"></div>
@@ -299,9 +297,9 @@ export class Menu {
         <span class="kbd">1</span> 主武器 · <span class="kbd">2</span> 副武器 · <span class="kbd">3</span> 刀（6.75m/s）·
         <span class="kbd">左键</span> 开火（弹药无限）· <span class="kbd">右键</span> Classic 三连发<br/>
         开局 3 秒倒计时热身，GO 后才开始计时 · 准星随移动/开火实时扩张，收束时才是出手时机 ·
-        Bot 移动带脚步声，听声辨位先于目视 · 两种出掩体方式：侧面跑过（顺跑向贯穿缺口）与
-        横向拉出（肩peek 拉出急停对枪），部分拉出 Bot"露头即缩"，守住准星等第二拉 ·
-        架枪对枪："击杀时限"内没打中，Bot 反击后跑向对面掩体，躲进墙后才出下一波（判负只记统计）；击杀得分冲击个人最佳 ★<br/>
+        Bot 移动带脚步声，听声辨位先于目视 · 两种横移 peek：贯穿跑过与拉出即缩——全程面朝玩家持枪，
+        部分 Bot"露头即缩"，守住准星等第二拉 ·
+        Bot 不开枪、不跳、不停顿——纯移动靶练习，没打中的 Bot 缩回掩体后出下一波（漏杀只记统计）；击杀得分冲击个人最佳 ★<br/>
         闪光干扰（可选）：敌方从墙后投掷 KAY/O 手雷 / 斯凯追踪鹰 / 火男弧线球（数值按游戏还原）——
         看到或听到就背身！直视起爆点满时长白屏（KAY/O 2.25s / 斯凯最高 2.25s / 火男 1.5s），背对只短暂致盲，起爆后敌人随即拉出
       </div>
@@ -457,7 +455,6 @@ export class Menu {
         delayMax: v => v + 'ms',
         speedMult: v => Math.round(v * 100) + '%',
         crouchWalkSpeed: v => v.toFixed(1) + 'm/s',
-        aimTimeMs: v => v + 'ms',
         volume: v => Math.round(v * 100) + '%',
         resScale: v => Math.round(v * 100) + '%',
       }[key] ?? (v => v)
@@ -754,7 +751,7 @@ export class Menu {
       liveBox.innerHTML = `<span class="ml-title">本局进行中</span>` +
         `<b>${live.score ?? 0}</b><i>分</i>` +
         `<b>${live.kills ?? 0}</b><i>击杀</i>` +
-        `<b>${live.duelsLost ?? 0}</b><i>对枪败</i>` +
+        `<b>${live.duelsLost ?? 0}</b><i>漏杀</i>` +
         (live.maxStreak > 1 ? `<b>×${live.maxStreak}</b><i>连杀</i>` : '') +
         (live.aimError != null ? `<b>${live.aimError}°</b><i>预瞄误差</i>` : '')
       liveBox.hidden = false

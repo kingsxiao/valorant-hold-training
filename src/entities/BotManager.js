@@ -2,12 +2,11 @@ import { Bot } from './Bot.js'
 import { CROUCH_WALK_SPEED } from '../core/Locomotion.js'
 import { CONFIG } from '../core/Config.js'
 
-// 纯架枪对枪训练：随机延迟后 Bot 以两种姿势交替出掩体（连出两波同风格强制换）
-// ——侧面跑过（贯穿缺口、顺跑向侧身入镜）或横向拉出（肩peek 面向玩家横移
-// 拉出到窗口内急停对枪，含"露头即缩"变体）；玩家须在击杀时限
-// 内命中——没打中 Bot 开火反击后跑向对面掩体，躲进墙后才出下一波（判负只进统计，
-// 不弹提示；无伤害/死亡，训练不中断）
-export const MODE_INFO = { label: '架枪对枪', desc: 'Bot 侧面跑过/横向拉出 · 没打中就继续打' }
+// 纯架枪训练：随机延迟后 Bot 以两种节奏出掩体（连出两波同风格强制换）
+// ——贯穿跑过（面向玩家横移贯穿缺口）或拉出即缩（面向玩家横移拉到折返点即
+// 缩回，含"露头即缩"变体）。全程面朝玩家、不开枪、不跳、不停顿——纯移动靶
+// 练习，漏掉的 Bot（完整走完波次未被击杀）只进统计
+export const MODE_INFO = { label: '架枪对枪', desc: 'Bot 全程面朝玩家横移 peek · 不反击不跳不停' }
 
 const rand = (a, b) => a + Math.random() * (b - a)
 
@@ -33,7 +32,6 @@ export class BotManager {
       delayMax: CONFIG.training.peekDelayMaxMs,
       speedMult: 1.0,
       crouchWalkSpeed: 2.7,
-      aimTimeMs: CONFIG.bot.aimTimeMs,
       roundSeconds: CONFIG.training.roundSeconds,
       rampUp: false, // 渐进难度：随击杀数缩短延迟/提升横移速度
       peekSide: CONFIG.training.peekSide, // Bot 出场侧：left/right 固定一侧，random 两侧随机
@@ -47,7 +45,8 @@ export class BotManager {
 
   _freshStats() {
     return {
-      shots: 0, hits: 0, headshots: 0, kills: 0, duelsLost: 0,
+      shots: 0, hits: 0, headshots: 0, kills: 0,
+      duelsLost: 0, // 漏杀：完整走完波次未被击杀的 Bot（161 轮起无对枪判负）,
       reactions: [], // ms
       lastReaction: 0,
       maxStreak: 0,   // 本局最长连杀（4.5s 窗口），main 在击杀时更新
@@ -122,14 +121,6 @@ export class BotManager {
       if (b.active || b.mode === 'dying') b.step(dt, ctx)
     }
 
-    // Bot 可见时间超过 aimTime → 判负（判负后 Bot 跑向对面掩体撤离，见 _loseDuel）
-    for (const b of this.bots) {
-      if (b.active && b.mode === 'peek' && !b.peek?.resolved && b.visibleNow && b.firstVisibleAt > 0) {
-        if ((this.now() - b.firstVisibleAt) * 1000 >= this.params.aimTimeMs) {
-          this._loseDuel(b)
-        }
-      }
-    }
   }
 
   // 渐进难度系数：每击杀延迟 ×0.93（下探到保底）、速度 ×1.02（封顶 1.3 倍）。
@@ -169,8 +160,8 @@ export class BotManager {
         : this.params.peekSide === 'left'
       // 每波二选一（训练两种读局情景，连出两波同风格后强制换另一种 ——
       // 两种姿势交替，不让随机连击把另一姿态连续藏几波）：
-      //  cross 侧面跑过 —— 从墙后贯穿缺口跑到另一侧，身体顺跑向（旋转跑，侧身入镜）
-      //  pull  横向拉出 —— 从墙后肩peek 拉出，面向玩家横移到窗口内急停对枪，之后缩回
+      //  cross 贯穿跑过 —— 面向玩家横移贯穿缺口到另一侧（162 轮起不再顺跑向侧身）
+      //  pull  拉出即缩 —— 面向玩家横移拉到折返点立即缩回
       slot.lastStyles ??= []
       const lastTwo = slot.lastStyles.slice(-2)
       const cross = lastTwo.length === 2 && lastTwo[0] === lastTwo[1]
@@ -180,24 +171,21 @@ export class BotManager {
       if (cross) {
         startX = fromLeft ? gap.x0 - 2.2 : gap.x1 + 2.2
         const endX = fromLeft ? gap.x1 + 2.2 : gap.x0 - 2.2
-        b.peek = {
-          style: 'cross', startX, endX, dir: Math.sign(endX - startX),
-          stopAt: rand(0.3, 0.7), stopped: false, stopUntil: 0,
-        }
+        b.peek = { style: 'cross', startX, endX, dir: Math.sign(endX - startX) }
       } else {
+        // 正面横向走出（pull）：从墙后藏点起步，面向玩家持枪横移拉出——胸口
+        // 正对玩家（peekFacingYaw pull = 面向玩家），不停顿：拉到折返点即缩回
         const dir = fromLeft ? 1 : -1                       // 朝缺口内的拉出方向
         const edge = fromLeft ? gap.x0 : gap.x1             // 从这一侧的墙后拉出
         startX = edge - dir * rand(1.8, 2.4)                // 藏在墙后一点（留出加速距离）
-        const holdX = (gap.x0 + gap.x1) / 2 - dir * rand(0, 0.9) // 停在窗口内、略偏拉出侧（贴掩体对枪）
-        // 拉出波的一部分是"露头即缩"jiggle-peek：拉到中段（已可见）立即折返，逼玩家守准星
+        const turnX = (gap.x0 + gap.x1) / 2 - dir * rand(0, 0.9) // 折返点：窗口内、略偏拉出侧
+        // 一部分拉出波是"露头即缩"jiggle-peek：拉到中段（已可见）立即折返，逼玩家守准星
         const jiggleAt = Math.random() < CONFIG.training.pullJiggleChance
-          ? startX + dir * rand(0.5, 0.72) * Math.abs(holdX - startX)
+          ? startX + dir * rand(0.5, 0.72) * Math.abs(turnX - startX)
           : 0
-        b.peek = { style: 'pull', startX, holdX, endX: startX, dir, phase: 'out', holdUntil: 0, jiggleAt,
-          // 蹲走拉出掷定（非 jiggle 波；官方蹲走循环 + 命中区 ×0.70，速度锁 1.76）
-          crouchWalk: !jiggleAt && Math.random() < CONFIG.training.crouchWalkChance,
-          jumpPlanned: Math.random() < CONFIG.training.jumpChance,
-          jumpAt: rand(0.35, 0.6), jumped: false }
+        b.peek = { style: 'pull', startX, turnX, endX: startX, dir, phase: 'out', jiggleAt,
+          // 蹲走拉出掷定（非 jiggle 波；官方蹲走循环 + 命中区 ×0.70）
+          crouchWalk: !jiggleAt && Math.random() < CONFIG.training.crouchWalkChance }
       }
       b.place(startX, this.map.peekLineZ, 'peek')
       b.slot = slot
@@ -211,64 +199,32 @@ export class BotManager {
     if (activeBot?.peek) {
       const pk = activeBot.peek
       const speed = CONFIG.bot.moveSpeed * this._rampSpeed
-      if (pk.stopUntil > this.now()) {
-        activeBot.moveToward(0, dt) // 急停（counter-strafe）
-      } else if (pk.style === 'pull') {
-        // 拉出状态机：out（拉出到窗口）→ hold（站定对枪，胜负由可见时限判定）
-        // → leave（向 exitX 撤离：常规缩回原掩体；判负后改为跑向对面掩体）
+      // 波次收尾：完整走完未被击杀 = 漏杀（只进统计，无判负机制），躲进墙后
+      // 才重新排程下一波（渐进难度系数在排程时生效）
+      const finishWave = () => {
+        if (activeBot.mode === 'peek') this.stats.duelsLost++
+        activeBot.hide()
+        slot.bot = null
+        slot.nextAt = 0
+      }
+      if (pk.style === 'pull') {
+        // 正面横移拉出（不停顿）：out（面向玩家横移拉出）→ leave（缩回原掩体）
         if (pk.phase === 'out') {
-          // 蹲走拉出：速度锁官方蹲走天然速率 1.76（近零滑步），非全局跑速
+          // 蹲走拉出：蹲走速度档（官方蹲走循环），非全局跑速
           activeBot.moveToward(pk.dir * (pk.crouchWalk ? (this.params.crouchWalkSpeed ?? CROUCH_WALK_SPEED) : speed), dt)
-          // 跳 peek（拉出中概率跳）
-          const spanOut = Math.abs(pk.holdX - pk.startX)
-          if (pk.jumpPlanned && !pk.jumped && spanOut > 0.01) {
-            const prog = Math.abs(activeBot.pos.x - pk.startX) / spanOut
-            if (prog > pk.jumpAt && !pk.jiggleAt) { pk.jumped = true; activeBot.startJump() }
-          }
-          const target = pk.jiggleAt || pk.holdX
+          const target = pk.jiggleAt || pk.turnX
           const reached = pk.dir > 0 ? activeBot.pos.x >= target : activeBot.pos.x <= target
-          if (reached) {
-            if (pk.jiggleAt) { pk.phase = 'leave'; pk.exitX = pk.startX } // 露头即缩：直接折返
-            else { pk.phase = 'hold'; pk.holdUntil = this.now() + CONFIG.training.pullHoldMaxMs / 1000 }
-          }
-        } else if (pk.phase === 'hold') {
-          activeBot.moveToward(0, dt) // counter-strafe 站定对枪；holdUntil 只是兜底（LOS 断了也不挂场）
-          if (this.now() >= pk.holdUntil) { pk.phase = 'leave'; pk.exitX = pk.startX }
+          if (reached) { pk.phase = 'leave'; pk.exitX = pk.startX } // 到折返点即缩（jiggle 只是折返更早）
         } else {
           const d = Math.sign(pk.exitX - activeBot.pos.x) || 1
           activeBot.moveToward(d * speed, dt)
           const done = d > 0 ? activeBot.pos.x >= pk.exitX : activeBot.pos.x <= pk.exitX
-          if (done) {
-            activeBot.hide()
-            slot.bot = null
-            slot.nextAt = 0 // 躲进墙后才重新排程下一波
-          }
+          if (done) finishWave()
         }
       } else {
-        // cross：贯穿横移 + 概率急停一瞬（急停时 Bot 转回面向玩家 = 停步挑战；
-        // 已判负的 Bot 一路跑向对面掩体，不再停步）
+        // cross：贯穿横移跑过（不停顿、不跳）
         activeBot.moveToward(pk.dir * speed, dt)
-        const span = Math.abs(pk.endX - pk.startX)
-        if (span > 0.01) {
-          const prog = Math.abs(activeBot.pos.x - pk.startX) / span
-          // 跳 peek：波次掷定的中途跳（起跳→抛物线→落地恢复）
-          if (pk.jumpPlanned && !pk.jumped && prog > pk.jumpAt) {
-            pk.jumped = true
-            activeBot.startJump()
-          }
-          if (!pk.stopped && !pk.resolved && prog > pk.stopAt && Math.random() < CONFIG.training.peekStopChance) {
-            pk.stopped = true
-            pk.stopUntil = this.now() + rand(0.15, 0.35)
-            // 急停掷蹲姿：本体对枪蹲（压低头部躲爆头线）——命中区随官方蹲姿
-            // 根高缩放，逼玩家下压准星
-            activeBot._crouchPlanned = Math.random() < CONFIG.training.crouchChance
-          }
-        }
-        if ((pk.dir > 0 && activeBot.pos.x >= pk.endX) || (pk.dir < 0 && activeBot.pos.x <= pk.endX)) {
-          activeBot.hide()
-          slot.bot = null
-          slot.nextAt = 0 // 重新排程（渐进难度系数在排程时生效）
-        }
+        if ((pk.dir > 0 && activeBot.pos.x >= pk.endX) || (pk.dir < 0 && activeBot.pos.x <= pk.endX)) finishWave()
       }
     }
   }
@@ -310,26 +266,6 @@ export class BotManager {
     }
     this.audio.hitMark(zone === 'head')
     return false
-  }
-
-  _loseDuel(bot) {
-    this.stats.duelsLost++
-    // 敌方枪声从 Bot 位置响起（可听声辨位：输了也要知道子弹从哪个缺口来的）。
-    // 纯架枪训练无受伤设定：无受击音/红闪/方向弧，玩家不掉血、继续架枪
-    this.audio.shot('rifle', { x: bot.pos.x, y: 1.3, z: bot.pos.z }, { pos: this.player.pos, yaw: this.player.yaw })
-    this.onBotFire?.(bot) // 开火视觉表现（枪口焰/曳光由 main 注入）
-    // 不弹"对枪失败"提示、不原地淡出：Bot 跑向对面掩体撤离，躲进墙后
-    // 下一波才出（判负只进统计面板）。之后的补枪也不算反应样本
-    bot.reactRecorded = true
-    const pk = bot.peek
-    if (!pk) return
-    pk.resolved = true // 对枪已判定：Bot 保持 peek 模式跑完全程，不再重复触发判负
-    if (pk.style === 'pull') {
-      const gap = this.map.gaps[0]
-      pk.exitX = pk.dir > 0 ? gap.x1 + 2.2 : gap.x0 - 2.2 // 对面掩体后
-      pk.phase = 'leave'
-    }
-    // cross 本就贯穿缺口：endX 已是对面掩体，继续跑完即可
   }
 
   // 地图重建（缺口左右切换）后：场上 Bot 的横移线还是旧缺口的，

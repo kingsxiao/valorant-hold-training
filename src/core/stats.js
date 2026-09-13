@@ -45,7 +45,7 @@ export function gradeFor(score, minutes) {
 export function coachingTip(c) {
   if (c.kills + c.duelsLost === 0) return null
   if (c.duelsLost > c.kills)
-    return '对枪败多于击杀 —— 把准星预先放在缺口沿的高度，Bot 出现时只需微调，不必大幅甩枪。'
+    return '漏杀多于击杀 —— 把准星预先放在缺口沿的高度，Bot 出现时只需微调，不必大幅甩枪。'
   if (c.aimSamples >= 3 && c.aimErrorDeg >= 12)
     return `露头瞬间准星平均偏了 ${c.aimErrorDeg}°—— 预瞄点要贴在缺口沿（A 缺口看左沿、B 缺口看右沿），出现后只补最后几度。`
   if (c.avgReactionMs >= 550)

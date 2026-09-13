@@ -82,7 +82,7 @@ export class ResultPanel {
       gradeCell +
       scoreRow +
       cell(c.kills, '击杀', delta(c.kills, p?.kills)) +
-      cell(c.duelsLost, '对枪败') +
+      cell(c.duelsLost, '漏杀') +
       cell(c.accuracy + '%', '命中率', delta(c.accuracy, p?.accuracy)) +
       cell(c.headshotRate + '%', '爆头率') +
       cell(c.maxStreak > 1 ? '×' + c.maxStreak : '—', '最长连杀') +

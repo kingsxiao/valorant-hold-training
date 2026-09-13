@@ -118,40 +118,8 @@ weapons.onHitBot = (bot, zone, dmg, killed, point) => {
 weapons.onAmmoChange = () => hud.setAmmo(weapons.weapon)
 // 枪口焰精灵/点光由 FX.muzzle 按 viewmodel 实测枪口世界坐标点亮（不再挂相机固定偏移）
 
-// 对枪失败时 Bot 的开火视觉表现：枪口焰 + 曳光射向玩家
-// （敌方枪声在 BotManager._loseDuel 内从 Bot 位置空间化播放；
-//   纯架枪训练无受伤设定——无红闪/方向弧/受击音/视角冲击，玩家不掉血不中断）
-bots.onBotFire = (bot) => {
-  const dx = player.pos.x - bot.pos.x, dz = player.pos.z - bot.pos.z
-  const d = Math.max(0.001, Math.hypot(dx, dz))
-  bot.kickFire?.() // 开火后坐：枪身后顶 + 脊柱微仰
-  // 枪口位：挂官方枪的 Bot 从真实枪口取（曳光/枪口焰从枪管末端出来）；
-  // 程序化假人（内置枪固定在胸前）沿用朝向偏移近似
-  const mz = bot.muzzleWorld?.(new THREE.Vector3())
-  const from = mz
-    ? { x: mz.x, y: mz.y, z: mz.z }
-    : { x: bot.pos.x + dx / d * 0.55, y: 1.31, z: bot.pos.z + dz / d * 0.55 }
-  fx.muzzle(from)
-  fx.muzzleSmoke(from, { x: dx / d, y: 0.05, z: dz / d }, 0.25)
-  // 敌方曳光红调（玩家曳光暖黄）：对枪瞬间一眼分清哪条弹道是谁的
-  fx.tracer(new THREE.Vector3(from.x, from.y, from.z), engine.camera.position,
-    { hue: 0.02, sat: 0.95, light: 0.6 }, false)
-  audio.whiz()
-  // 子弹没停下：穿过玩家位置继续飞，打在身后墙上——弹孔/碎屑/落点音按
-  // 飞行时间延迟（240m/s），形成"枪声→掠过啸→身后嗒"的完整时序
-  const wh = world.raycast(from.x, from.y, from.z, dx / d, 0, dz / d, 60)
-  if (wh && wh.t > d) {
-    const ms = Math.round((wh.t / 240) * 1000)
-    setTimeout(() => {
-      fx.decal(wh.x, wh.y, wh.z, wh.nx, wh.ny, wh.nz)
-      fx.impact(wh.x, wh.y, wh.z, wh.nx, wh.ny, wh.nz)
-      audio.surfaceHit({ x: wh.x, y: wh.y, z: wh.z }, { pos: player.pos, yaw: player.yaw }, wh.ny, 0.75)
-    }, ms)
-  }
-}
-
 bots.onEvent = (type, data) => {
-  // 对枪判负不弹提示（用户要求）：Bot 反击后跑向对面掩体，判负只进统计面板
+  // 超时判负不弹提示（用户要求）：Bot 不反击，缩回掩体后出下一波，判负只进统计面板
   if (type === 'round-end') {
     state.playing = false
     document.exitPointerLock?.()
@@ -249,7 +217,6 @@ menu.applyAll = () => {
   bots.params.delayMax = Math.max(cfg.delayMin, cfg.delayMax)
   bots.params.speedMult = cfg.speedMult
   bots.params.crouchWalkSpeed = cfg.crouchWalkSpeed
-  bots.params.aimTimeMs = cfg.aimTimeMs
   bots.params.roundSeconds = cfg.roundSeconds
   bots.params.rampUp = !!cfg.rampUp
   // Bot 出场侧：left/right 固定一侧（同向预瞄训练）/ random 两侧随机（读局）。

@@ -28,9 +28,9 @@ const out = await page.evaluate(async () => {
   const px = g.player.pos.x, pz = g.player.pos.z
 
   const run = (tag, { style, vx, sec = 3, crouchWalk = false }) => {
-    // 垂直几何：bot 与玩家同 x（正前方），运动 ±x = 纯横移（真实 pull 波几何；
-    // 斜摆会让横移锚只能抵消横向分量，测出假滑步）
-    b.place(px - Math.sign(vx) * 30, pz - 6, 'peek')
+    // 垂直几何：bot 与玩家同 x（正前方），运动 ±x = 纯横移（真实 peek 波几何；
+    // 斜摆会让横移锚只能抵消横向分量，测出假滑步——162 轮起 cross 也面向玩家，
+    // 同样受此几何约束）
     b.place(px, pz - 6, 'peek')
     b.peek = { style, dir: Math.sign(vx), phase: 'out', startX: b.pos.x,
       endX: b.pos.x + Math.sign(vx) * 60, stopAt: 1, stopped: false, stopUntil: 0,
@@ -42,7 +42,7 @@ const out = await page.evaluate(async () => {
     for (let i = 0; i < N; i++) {
       b.moveToward(vx, dt)
       g.bots.step(dt, 1)
-      if (style === 'pull') { b.mesh.rotation.y = Math.PI; g.bots.step(0, 1) } // 锁正对：纯垂直横移几何（否则远离玩家后朝向 lerp 把横移扭成斜向，测出假滑步）
+      b.mesh.rotation.y = 0; g.bots.step(0, 1) // 锁正对：纯垂直横移几何（玩家在 +z，GLB 正面 +Z ⇒ 正对 yaw=0（164 轮）；远离玩家后朝向 lerp 会把横移扭成斜向，测出假滑步）
       b.mesh.updateMatrixWorld(true)
       const row = { v: b.velX }
       for (const leg of b._strafeRig.legs) {

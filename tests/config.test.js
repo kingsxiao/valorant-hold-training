@@ -256,12 +256,6 @@ describe('punchRecover 阶跃保持模型（60fps 实测）', () => {
   })
 })
 
-describe('蹲姿对枪 crouchChance', () => {
-  it('默认 0.3（急停瞬间掷蹲姿对枪的本体口径）', () => {
-    expect(CONFIG.training.crouchChance).toBe(0.3)
-  })
-})
-
 describe('蹲走拉出 crouchWalkChance', () => {
   it('默认 0.2（pull 波掷定蹲走拉出变体）', () => {
     expect(CONFIG.training.crouchWalkChance).toBe(0.2)

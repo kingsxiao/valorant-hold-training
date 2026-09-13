@@ -68,7 +68,7 @@ export class HUD {
     const c = computeStats(stats)
     const rows = [
       ['击杀', c.kills],
-      ['对枪败', c.duelsLost],
+      ['漏杀', c.duelsLost],
       ['命中率', c.accuracy + '%'],
       ['爆头率', c.headshotRate + '%'],
       ['反应均值', fmtMs(c.avgReactionMs) + 'ms'],

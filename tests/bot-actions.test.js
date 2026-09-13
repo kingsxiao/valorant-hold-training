@@ -34,7 +34,8 @@ describe('pickAimTarget 瞄准目标选择', () => {
     expect(pickAimTarget({ style: 'pull', stopped: false, moving: true })).toBe('player')
     expect(pickAimTarget({ style: 'cross', stopped: true, moving: true })).toBe('player')
     expect(pickAimTarget({ style: 'cross', stopped: false, moving: false })).toBe('player')
-    expect(pickAimTarget({ style: 'cross', stopped: false, moving: true })).toBe('forward')
+    // 162 轮：cross 贯穿也面向玩家横移——枪口同样压玩家（forward 携枪已无场景）
+    expect(pickAimTarget({ style: 'cross', stopped: false, moving: true })).toBe('player')
   })
 })
 

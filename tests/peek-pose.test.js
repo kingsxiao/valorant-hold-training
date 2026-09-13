@@ -2,48 +2,49 @@ import { describe, expect, it } from 'vitest'
 import { peekFacingYaw, strafeRampW, strafeStepPose, leanInto } from '../src/core/PeekPose.js'
 import { BotManager, pickIdleBot } from '../src/entities/BotManager.js'
 
-// 两种出场姿势（pull 横向拉出 / cross 侧身跑过）的朝向与步态判定。
-// 场景坐标约定：玩家在 Bot 北侧（dz>0）——Bot 面向玩家 yaw=±π（模型正面 -Z，
-// dx=0 时 atan2(-0,-dz) 走负零约定得 -π，与 +π 同方向，Bot.step 取最短角差）；
-// cross 顺跑向 = ±π/2（velX>0 向右跑 -π/2）
+// 两种出场姿势（pull 拉出即缩 / cross 贯穿跑过）的朝向与步态判定——162 轮起
+// 两者都全程面朝玩家横移（cross 曾顺跑向 = 玩家全程看侧身）。
+// 模型正面朝向（164 轮实测定案）：英雄 GLB 视觉正面 = 局部 +Z（默认
+// front=+1：kamae 持枪位 L_Hand 前伸 z=+0.49 ⇒ 前方=+Z）；程序化假人正面
+// -Z（front=-1）。玩家在 Bot 北侧（dz>0）时 GLB 面向玩家 yaw=0
 const FACING = { velX: 5.4, moving: true, stopped: false }
-const FACE_NORTH = -Math.PI
+const FACE_NORTH = 0
 
 describe('peekFacingYaw 出场姿势朝向', () => {
-  it('cross 移动中顺跑向：向右跑 -π/2、向左跑 +π/2（侧身入镜）', () => {
-    expect(peekFacingYaw({ style: 'cross', canStrafe: true, ...FACING, velX: 5.4, dx: 0, dz: 30 })).toBeCloseTo(-Math.PI / 2)
-    expect(peekFacingYaw({ style: 'cross', canStrafe: true, ...FACING, velX: -5.4, dx: 0, dz: 30 })).toBeCloseTo(Math.PI / 2)
-  })
-
-  it('pull 横移中面向玩家（strafe 对枪姿态，程序化/GLB 一致）：斜向也精确跟踪', () => {
+  it('cross/pull 移动中都面向玩家（正面横移）：斜向也精确跟踪', () => {
+    expect(peekFacingYaw({ style: 'cross', canStrafe: true, ...FACING, dx: 0, dz: 30 })).toBeCloseTo(FACE_NORTH)
+    expect(peekFacingYaw({ style: 'cross', canStrafe: true, ...FACING, dx: 3, dz: 30 })).toBeCloseTo(Math.atan2(3, 30))
     expect(peekFacingYaw({ style: 'pull', canStrafe: true, ...FACING, dx: 0, dz: 30 })).toBeCloseTo(FACE_NORTH)
-    expect(peekFacingYaw({ style: 'pull', canStrafe: true, ...FACING, dx: 3, dz: 30 })).toBeCloseTo(Math.atan2(-3, -30))
+    expect(peekFacingYaw({ style: 'pull', canStrafe: true, ...FACING, dx: 3, dz: 30 })).toBeCloseTo(Math.atan2(3, 30))
   })
 
-  it('pull 但骨骼链不齐的 GLB（canStrafe=false）→ 回退顺跑向（老模型防滑步）', () => {
-    expect(peekFacingYaw({ style: 'pull', canStrafe: false, ...FACING, dx: 0, dz: 30 })).toBeCloseTo(-Math.PI / 2)
+  it('腿骨链不齐的老模型（canStrafe=false，无横移步态）→ 回退顺跑向（防滑步）', () => {
+    expect(peekFacingYaw({ style: 'pull', canStrafe: false, ...FACING, dx: 0, dz: 30 })).toBeCloseTo(Math.PI / 2)
+    expect(peekFacingYaw({ style: 'cross', canStrafe: false, ...FACING, velX: -5.4, dx: 0, dz: 30 })).toBeCloseTo(-Math.PI / 2)
   })
 
-  it('cross 急停（stopUntil 窗口内）转回面向玩家 = 停步挑战', () => {
+  it('程序化假人（front=-1，面罩画在 -Z）保持旧 -Z 约定不被 GLB 翻转波及', () => {
+    expect(peekFacingYaw({ style: 'pull', canStrafe: true, ...FACING, front: -1, dx: 0, dz: 30 })).toBeCloseTo(Math.atan2(-0, -30))
+    expect(peekFacingYaw({ style: 'pull', canStrafe: true, ...FACING, front: -1, dx: 3, dz: 30 })).toBeCloseTo(Math.atan2(-3, -30))
+    expect(peekFacingYaw({ style: 'pull', canStrafe: false, ...FACING, front: -1, dx: 0, dz: 30 })).toBeCloseTo(-Math.PI / 2)
+    expect(peekFacingYaw({ style: 'pull', canStrafe: false, ...FACING, velX: -5.4, front: -1, dx: 0, dz: 30 })).toBeCloseTo(Math.PI / 2)
+  })
+
+  it('站定/急停（stopped）一律面向玩家', () => {
     expect(peekFacingYaw({ style: 'cross', canStrafe: true, ...FACING, stopped: true, dx: 0, dz: 30 })).toBeCloseTo(FACE_NORTH)
-  })
-
-  it('站定/低速（moving=false）一律面向玩家', () => {
     expect(peekFacingYaw({ style: 'cross', canStrafe: true, velX: 0.2, moving: false, stopped: false, dx: 0, dz: 30 })).toBeCloseTo(FACE_NORTH)
     expect(peekFacingYaw({ style: 'pull', canStrafe: true, velX: 0, moving: false, stopped: false, dx: 0, dz: 30 })).toBeCloseTo(FACE_NORTH)
   })
 })
 
 describe('strafeRampW 横移步态权重（clip→程序化侧移淡入）', () => {
-  it('cross 波恒 0（顺跑向前进 clip 原样）', () => {
-    expect(strafeRampW({ style: 'cross', speed: 5.4 })).toBe(0)
-  })
-
-  it('pull 随移速 0.25→1.15 m/s 淡入：低速 0、中点 0.5、全速 1', () => {
-    expect(strafeRampW({ style: 'pull', speed: 0.2 })).toBe(0)
-    expect(strafeRampW({ style: 'pull', speed: 0.7 })).toBeCloseTo(0.5)
-    expect(strafeRampW({ style: 'pull', speed: 1.15 })).toBe(1)
-    expect(strafeRampW({ style: 'pull', speed: 5.4 })).toBe(1)
+  it('pull 与 cross（贯穿也面向玩家横移，162 轮）同随移速 0.25→1.15 淡入', () => {
+    for (const style of ['pull', 'cross']) {
+      expect(strafeRampW({ style, speed: 0.2 })).toBe(0)
+      expect(strafeRampW({ style, speed: 0.7 })).toBeCloseTo(0.5)
+      expect(strafeRampW({ style, speed: 1.15 })).toBe(1)
+      expect(strafeRampW({ style, speed: 5.4 })).toBe(1)
+    }
   })
 })
 

@@ -69,9 +69,11 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
     : null
   // 蹲踞待机循环（官方蹲姿根高，全程蹲姿的 4.5s 循环）：缺席不阻塞
   const crouchIdle = locoJson?.crouch?.idle ? build(locoJson.crouch.idle, 'crouch-idle') : null
-  // 蹲走拉出 E/W（官方蹲走循环）：缺席不阻塞
+  // 蹲走循环（官方）：N = 正面走出（walkout 沿 z 前进），E/W = 横移（台架/
+  // 旧拉出语义）；缺席不阻塞
   const crouchWalk = locoJson?.crouch?.walkE
     ? {
+      N: locoJson.crouch.walkN ? build(locoJson.crouch.walkN, 'crouch-walkN') : null,
       E: build(locoJson.crouch.walkE, 'crouch-walkE'),
       W: build(locoJson.crouch.walkW, 'crouch-walkW'),
     }

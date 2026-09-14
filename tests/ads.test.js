@@ -58,6 +58,13 @@ describe('ADS 散布（spreadParts ctx.ads）', () => {
     expect(spreadParts(CONFIG.weapons.vandal, ctx({ ads: true, ...spray })).total).toBeCloseTo(1.02, 5)
     expect(spreadParts(CONFIG.weapons.phantom, ctx({ ads: true, ...spray })).total).toBeCloseTo(0.91, 5)
   })
+  it('蹲姿连射封顶在 ADS maxCrouch（vandal 0.87 / phantom 0.78），不随站立上限', () => {
+    const spray = { sprayIndex: 999 } // 远超封顶：蹲姿基准 0.13 + 封顶余量 0.74 = 0.87
+    const v = spreadParts(CONFIG.weapons.vandal, ctx({ ads: true, crouched: true, ...spray })).total
+    expect(v).toBeCloseTo(0.87, 5)
+    const p = spreadParts(CONFIG.weapons.phantom, ctx({ ads: true, crouched: true, ...spray })).total
+    expect(p).toBeCloseTo(0.78, 5)
+  })
   it('ADS 最大散布 ≥ 腰射（维基：开镜首发更准但长连射封顶略高）', () => {
     expect(CONFIG.weapons.vandal.ads.maxStand).toBeGreaterThan(CONFIG.weapons.vandal.spread.max)
     expect(CONFIG.weapons.phantom.ads.maxStand).toBeGreaterThan(CONFIG.weapons.phantom.spread.max)

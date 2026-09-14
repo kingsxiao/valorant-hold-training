@@ -256,6 +256,10 @@ export class FX {
     this.lightLife = 0
     this.lightPeak = 0
     this.lightDur = 0.06
+    // vmScene 闪光灯峰值（update 里 lightLife>0 时每帧消费）：必须初始化——
+    // 世界侧 muzzle（非 player 分支）不写它，undefined*k=NaN 会注入 vmFlash
+    // 强度，随 matrixWorld 传播成视模型花屏
+    this.vmPeak = 0
 
     // 命中点光（单灯池化，last-wins）：墙面/硬表面命中瞬间的局部照明 pop——
     // Valorant 打墙那一记"亮一下"的读感。与枪口焰灯分开持有：连发时枪口灯常驻
@@ -424,11 +428,17 @@ export class FX {
       this.lightPeak = peak
       this.lightDur = lightDur
       this.lightLife = lightDur + 0.008
-      // vmScene 通道同款闪光点光：仅玩家开火参与（bot 枪口位映到相机系毫无意义）
-      if (this.vmFlash && player) {
-        this.vmFlash.position.copy(this.vmFlashSprite.position)
-        this.vmFlash.color.setHex(color)
-        this.vmPeak = 1.2 * (peak / 16)
+      // vmScene 通道同款闪光点光：仅玩家开火参与（bot 枪口位映到相机系毫无意义）。
+      // 世界侧爆闪（非 player）显式清零残留峰值——否则玩家上一枪的 vmPeak 会按
+      // 本次世界爆闪的 lightLife 错误点亮枪模（vmPopGlow 若随后调用会再设正值）
+      if (this.vmFlash) {
+        if (player) {
+          this.vmFlash.position.copy(this.vmFlashSprite.position)
+          this.vmFlash.color.setHex(color)
+          this.vmPeak = 1.2 * (peak / 16)
+        } else {
+          this.vmPeak = 0
+        }
       }
     }
   }

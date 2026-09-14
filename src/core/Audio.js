@@ -196,8 +196,17 @@ export class AudioSys {
       const send = this.ctx.createGain(); send.gain.value = 0.4
       muffle.connect(send).connect(this.reverb)
       // 节点生命周期：连入常驻图的 Panner/Filter/Gain 不会被 GC，高频
-      // 空间音会无限累积（音频线程 CPU 缓慢上涨）。所有 SFX 都 <2s，3s 后拆链
-      setTimeout(() => { try { send.disconnect(); muffle.disconnect(); p.disconnect() } catch { /* 已断 */ } }, 3000)
+      // 空间音会无限累积（音频线程 CPU 缓慢上涨）。合成 SFX 都 <2s，3s 后拆链；
+      // 用户替换音效不受此限（public/sfx 可放任意长度文件）——p._hold 按
+      // 实际播放时长（duration/rate + delay）推迟拆链，长音效不再被 3s 硬切
+      const drop = { at: performance.now() + 3000 }
+      const teardown = () => {
+        const wait = drop.at - performance.now()
+        if (wait > 0) { setTimeout(teardown, wait); return } // 被长音效 hold 推后：重排
+        try { send.disconnect(); muffle.disconnect(); p.disconnect() } catch { /* 已断 */ }
+      }
+      setTimeout(teardown, 3000)
+      p._hold = (ms) => { drop.at = Math.max(drop.at, performance.now() + ms) }
       return p
     }
     return this.bus // 非空间：直接走主总线（混响发送已在 ensure 里一次性接好）
@@ -273,6 +282,9 @@ export class AudioSys {
     g.gain.value = gain * (buf._normGain ?? 1) // 用户音效响度归一（合成 buffer 无此标记=1）
     src.connect(g).connect(dest)
     src.start(t)
+    // 空间 dest（_spatial 的 Panner）：按实际播放时长推迟拆链（rate 缩放 + 调度
+    // 延迟都算上），>3s 的用户替换音效不被硬切
+    dest._hold?.((buf.duration / rate + delay) * 1000 + 200)
   }
 
   // ---- 枪声 ----

@@ -102,8 +102,11 @@ export class Crosshair {
       : cur + (target - cur) * Math.min(1, dt * k)
     this._sm.move = ease(this._sm.move, tMove, 18)
     this._sm.fire = ease(this._sm.fire, tFire, 18)
-    this._sm.fadeF = ease(this._sm.fadeF, this.settings.fadeFire && fireDeg > 0.04 ? 0 : 1, 14)
-    this._sm.fadeM = ease(this._sm.fadeM, this.settings.fadeMove && moveDeg > 0.05 ? 0 : 1, 14)
+    // 淡入淡出双向缓动（k=14 ≈ 70ms）：ease 的 target>=cur 分支会让恢复（0→1）
+    // 瞬跳回满不透明，与上方"恢复时渐显"的自述相反——停火准星"啪"地闪回
+    const fade = (cur, target) => cur + (target - cur) * Math.min(1, dt * 14)
+    this._sm.fadeF = fade(this._sm.fadeF, this.settings.fadeFire && fireDeg > 0.04 ? 0 : 1)
+    this._sm.fadeM = fade(this._sm.fadeM, this.settings.fadeMove && moveDeg > 0.05 ? 0 : 1)
     this._draw()
   }
 

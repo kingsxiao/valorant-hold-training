@@ -20,8 +20,19 @@ export function solveGunAim(from, to, out = new THREE.Quaternion()) {
   if (len < 1e-6) return out.identity()
   _dir.divideScalar(len)
   if (Math.abs(_dir.y) > 0.95) {
-    _dir.multiplyScalar(0.95 / Math.abs(_dir.y)) // 等比压缩 y 分量后归一
-    _dir.normalize()
+    // 压回 ±72°：只改 y 分量、xz 等比重归一（对整向量等比缩放会被随后的
+    // normalize 抵消，保护从未生效过）；正上/正下方 xz 为零，构造退化安全的
+    // 斜向方向，避免 Matrix4.lookAt 的 up×z 平行退化
+    const s = Math.sign(_dir.y)
+    const h = Math.hypot(_dir.x, _dir.z)
+    if (h > 1e-8) {
+      const k = Math.sqrt(1 - 0.95 * 0.95) / h
+      _dir.x *= k
+      _dir.z *= k
+      _dir.y = s * 0.95
+    } else {
+      _dir.set(0, s * 0.95, Math.sqrt(1 - 0.95 * 0.95))
+    }
   }
   _m4.lookAt(_zero, _dir, _up) // Z 轴 = -dir → 局部 -Z = dir（枪口向）
   return out.setFromRotationMatrix(_m4)
@@ -41,13 +52,14 @@ export function pickAimTarget({ style, stopped, moving }) {
 // speed 归一到跑速 5.4 线性缩放幅值，≤0.4（站定/急停末段）全零——站定对枪
 // 枪口纪律不受扰。dip 负=下沉，谷在落脚后 ~0.28rad（落脚→体重压实→武器下沉
 // 的时序）；sway/roll 慢半拍随重心横移
-export function gunBobPose({ phase, speed = 0 }) {
+// out：可选复用对象（Bot 128Hz 热路径零分配；不传时每次新对象，纯函数语义不变）
+export function gunBobPose({ phase, speed = 0 }, out) {
   const k = speed <= 0.4 ? 0 : Math.min(1, speed / 5.4)
-  return {
-    dip: -Math.cos(2 * phase - 0.55) * 0.008 * k, // ±8mm（周期 π = 每步一次）
-    sway: Math.sin(phase) * 0.005 * k,            // ±5mm（周期 2π = 左右脚交替）
-    roll: Math.sin(phase + 0.9) * 0.007 * k,      // ±0.4°（枪轴微倾与 sway 同源）
-  }
+  const r = out ?? {}
+  r.dip = -Math.cos(2 * phase - 0.55) * 0.008 * k // ±8mm（周期 π = 每步一次）
+  r.sway = Math.sin(phase) * 0.005 * k            // ±5mm（周期 2π = 左右脚交替）
+  r.roll = Math.sin(phase + 0.9) * 0.007 * k      // ±0.4°（枪轴微倾与 sway 同源）
+  return r
 }
 
 // 掉枪一步弹道（纯）：重力 + 绕轴翻滚（轴心偏置到枪口端 = 枪托绕前段甩，非

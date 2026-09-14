@@ -45,7 +45,14 @@ const LAST_KEY = 'vht-last-round-v1'
 export function loadLastRound() {
   try {
     const v = JSON.parse(localStorage.getItem(LAST_KEY))
-    return (typeof v === 'object' && v !== null) ? v : null
+    if (typeof v !== 'object' || v === null) return null
+    // 数值字段逐一校验（手改/半截写入防线，与 loadHistory/loadFastest 同款）：
+    // 脏值会让结算面板"对比上局"的差值算出 NaN，渲染成 "▼NaN"（null 已被
+    // 消费方 delta() 天然处理）
+    for (const k of ['score', 'kills', 'avgReactionMs', 'accuracy']) {
+      if (typeof v[k] !== 'number' || !Number.isFinite(v[k])) return null
+    }
+    return v
   } catch { return null }
 }
 export function saveLastRound(s) {
@@ -272,7 +279,7 @@ export class Menu {
             <div class="opt-grid" data-group="chAdv"></div>
           </div>
           <div class="ch-code">
-            <input class="ch-code-in" spellcheck="false" placeholder="粘贴游戏准星代码（0;P;c;5;…）" aria-label="粘贴游戏准星代码">
+            <input class="ch-code-in" name="crosshair-code" spellcheck="false" placeholder="粘贴游戏准星代码（0;P;c;5;…）" aria-label="粘贴游戏准星代码">
             <button class="btn-ghost ch-import">导入</button>
             <button class="btn-ghost ch-export">复制代码</button>
             <button class="btn-ghost ch-reset">重置默认</button>
@@ -447,6 +454,14 @@ export class Menu {
     this.sliders = []
     for (const inp of p.querySelectorAll('input[data-key]')) {
       const key = inp.dataset.key
+      // a11y：滑条与兄弟 <label> 补 for/id 关联（无关联时浏览器报 "No label
+      // associated with a form field"；aria-label 不被该检查认可，读屏与
+      // DevTools 双认的是 label[for]）
+      const rowLbl = inp.parentElement.querySelector('label')
+      if (rowLbl?.textContent && !inp.id) {
+        inp.id = `vht-slider-${key}`
+        rowLbl.htmlFor = inp.id
+      }
       const val = inp.parentElement.querySelector('.val')
       const fmt = {
         sens: v => v.toFixed(2),
@@ -588,6 +603,11 @@ export class Menu {
     this._chSliders = []
     for (const inp of p.querySelectorAll('input[data-chp]')) {
       const path = inp.dataset.chp
+      const chLbl = inp.parentElement.querySelector('label')
+      if (chLbl?.textContent && !inp.id) { // 同 data-key 滑条的 for/id 关联补全
+        inp.id = 'vht-ch-' + path.replace(/\./g, '-')
+        chLbl.htmlFor = inp.id
+      }
       this._chSliders.push({ inp, val: inp.parentElement.querySelector('.val'), path })
       inp.oninput = () => {
         const [a, c] = path.split('.')

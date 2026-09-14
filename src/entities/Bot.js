@@ -43,10 +43,17 @@ const JUMP_V0 = 7.098      // 起跳竖直初速（m/s）：本体社区逐帧�
                            // "Valorant Physics, Derived"：跳高 1.2m = v0²/2g）
 const JUMP_G = 21          // 空中重力（m/s²）：同源推导值；滞空 = 2·v0/g ≈ 0.676s
 const STRAFE_STEP_LEN = 1.15 // 横移步距保持既有调校口径（pull 出场节奏 1 步/1.15m 已验收）
+const BOT_EYE_Y = 1.68 // Bot 眼位（模型总高 1.8m 的眼部；可见性判定起点。注意与
+// 玩家 CONFIG.movement.eyeHeight=1.65 是两个口径——玩家是相机高度、Bot 是模型眼骨位）
 const _v = new THREE.Vector3()
 const _up = new THREE.Vector3(0, 1, 0)
 const _axX = new THREE.Vector3(1, 0, 0)
 const _axZ = new THREE.Vector3(0, 0, 1)
+// 128Hz 热路径复用暂存：locoWeights/gunBobPose 的入参出参（_bobZero 是
+// runAdd 激活时程序化 bob 退位的常量零值——只读）
+const _lwOut = { idle: 0, walkN: 0, runN: 0, walkS: 0, runS: 0, walkNoIdle: 0 }
+const _bobOut = { dip: 0, sway: 0, roll: 0 }
+const _bobZero = { dip: 0, sway: 0, roll: 0 }
 const _q1 = new THREE.Quaternion()
 const _q2 = new THREE.Quaternion()
 const _q3 = new THREE.Quaternion()
@@ -434,6 +441,11 @@ export class Bot {
         a.setEffectiveWeight(0)
         return a
       }
+      // 兜底：clips 只匹配到 run 而无 walk 时（或烘焙失败）上面三个分支全被
+      // !walk&&!run 前置条件跳过，walk 保持 null → mk(null) 直接抛 TypeError
+      //（clipAction 读 null.uuid）。取首 clip 占位：权重 0 + 播放头步态锁定，
+      // 单 clip 兜底与 BrainStem 分支同口径
+      walk ??= clips[0].duration > 10 ? clips[0].clone().trim(0, 8) : clips[0]
       this.anim = { walk: mk(walk) }
       // walk/run 播放头由 _setAnimWeights 从步态相位锁定驱动 → timeScale=0 让
       // mixer.update 只采样不推进（idle 保持自由跑：待机呼吸循环）
@@ -490,6 +502,7 @@ export class Bot {
           a.timeScale = 0
           this.anim.runAdd[side] = a
         }
+        this._runAddKeys = Object.keys(this.anim.runAdd) // 静态键缓存（同 _turnKeys）
       }
       // 停步转身踏步（8 向）：自然速率自走（选型时 reset 重播），权重由停步坡控制
       if (official?.turn) {
@@ -501,6 +514,9 @@ export class Bot {
           a.setEffectiveWeight(0)
           this.anim.turn[key] = a
         }
+        // 键集合静态：缓存供 128Hz 热路径遍历（Object.values/entries 每 tick
+        // 分配数组+键值对）
+        this._turnKeys = Object.keys(this.anim.turn)
       }
       // 蹲踞待机（官方蹲姿循环，自由跑；权重坡合成下蹲/起立过渡）
       if (official?.crouchIdle) {
@@ -520,6 +536,7 @@ export class Bot {
           a.timeScale = 0
           this.anim.crouchWalk[side] = a
         }
+        this._cwKeys = Object.keys(this.anim.crouchWalk) // 静态键缓存（同 _turnKeys）
       }
       // 跳 peek：JumpN（起跳蹬伸→空中收腿，LoopOnce 保持）+ JumpLand（落地恢复）
       if (official?.jump) {
@@ -601,7 +618,7 @@ export class Bot {
     const W = locoWeights({
       moveW: this._moveW, runW: this._runW,
       strafeW: this._strafeW, hasStrafe: !!A.strafe,
-    })
+    }, _lwOut) // 复用暂存：128Hz 每 tick 一只入参+返回对象纯 GC churn
     // 蹲踞时 idle（全身站立待机）按蹲姿权重退缩——否则站立腿型与蹲姿五五混
     // 合（半蹲脚悬空，贴地跟踪跟着追不上）
     if (A.idle) A.idle.setEffectiveWeight(W.idle * (1 - (this._crouchW ?? 0)))
@@ -628,7 +645,8 @@ export class Bot {
     // W.runN/W.runS，与前进/横移跑严格同源）
     if (A.runAdd) {
       const addSide = this._strafeW > 0.5 ? (this._strafeSide ?? 'E') : 'N'
-      for (const [s, a] of Object.entries(A.runAdd)) {
+      for (const s of this._runAddKeys) {
+        const a = A.runAdd[s]
         a.time = (ph / (Math.PI * 2)) * a.getClip().duration
         a.setEffectiveWeight(s === addSide ? W.runN + W.runS : 0)
       }
@@ -691,8 +709,8 @@ export class Bot {
     // 急停随速度淡出（gunBobPose 纯函数，单测锁值）
     // 官方 runAdd 加法层激活时枪锚骨（WeaponPoint）自己随步频动 = 官方武器
     // 随动；程序化 bob 退位（两套叠加会双重起伏），只在不官方时兜底
-    const bob = this.anim?.runAdd ? { dip: 0, sway: 0, roll: 0 }
-      : gunBobPose({ phase: this.walkPhase, speed: Math.abs(this.velX) })
+    const bob = this.anim?.runAdd ? _bobZero
+      : gunBobPose({ phase: this.walkPhase, speed: Math.abs(this.velX) }, _bobOut)
     if (bob.dip !== 0 || bob.sway !== 0) {
       _gBob.set(-_gv2.z, 0, _gv2.x).normalize() // 手线的水平垂直向（重心横摆方向）
       _gBob.multiplyScalar(bob.sway)
@@ -899,8 +917,11 @@ export class Bot {
   _anchorSources() {
     const A = this.anim
     if (!A) return null
+    // 描述符对象池（128Hz × 每源一只短命对象的 GC churn 消除）：数组本身也
+    // 复用，length 截断即"逻辑清空"，元素引用对外只在本 tick 内消费
     const src = this._anchorList ?? (this._anchorList = [])
-    src.length = 0
+    const pool = this._anchorPool ?? (this._anchorPool = [])
+    let n = 0
     // 蹲走权重起来时，脚部约束的权威 = 蹲走 clip 的官方锚：常锚的 crouchIdle
     // （蹲踞站姿落点）与站姿 loco 锚（walk/run/横移——含与蹲走侧别选择不同步
     // 的 E/W 配对）按 (1−cwW) 淡出——否则三者各带 1/3 把混合锚锁在身体上，
@@ -911,7 +932,11 @@ export class Bot {
       const ik = a?.getClip().userData.ik
       if (!ik) return
       const w = a.getEffectiveWeight() * k
-      if (w > 0.01) src.push({ a, w, ik, dur: a.getClip().duration })
+      if (w > 0.01) {
+        const o = pool[n] ?? (pool[n] = { a: null, w: 0, ik: null, dur: 0 })
+        o.a = a; o.w = w; o.ik = ik; o.dur = a.getClip().duration
+        n++
+      }
     }
     add(A.walk, locoK); add(A.run, locoK)
     if (A.strafe) {
@@ -922,8 +947,11 @@ export class Bot {
     add(A.crouchWalk?.[cwSide])
     add(A.crouchIdle, locoK)
     add(A.jump); add(A.fall); add(A.jumpLand)
-    for (const a of Object.values(A.turn ?? {})) add(a)
-    return src.length ? src : null
+    const turnKeys = this._turnKeys
+    if (turnKeys) for (const k of turnKeys) add(A.turn[k])
+    src.length = n
+    for (let i = 0; i < n; i++) src[i] = pool[i]
+    return n ? src : null
   }
 
   // 官方曲线防滑步：脚钉地 IK。psa 导出剥离了根位移，原始腿曲线是官方 FootIK
@@ -1430,7 +1458,7 @@ export class Bot {
     const p = ctx.player
     this._playerX = p.pos.x // 暂存玩家位置：死亡方向性（背摔/前扑）判定用
     this._playerZ = p.pos.z
-    const eyeY = this.pos.y + 1.68
+    const eyeY = this.pos.y + BOT_EYE_Y
     this.visibleNow = this.world.lineOfSight(
       this.pos.x, eyeY, this.pos.z,
       p.pos.x, p.pos.y + p.eyeHeight, p.pos.z,
@@ -1516,7 +1544,8 @@ export class Bot {
           a.reset() // 从头播（踏步型与转身角绑定，半程续播会错步）
           a.play()
         }
-        for (const [key, a] of Object.entries(this.anim.turn)) {
+        for (const key of this._turnKeys) {
+          const a = this.anim.turn[key]
           a.setEffectiveWeight(key === turnKey ? this._turnW : 0)
         }
         this._turnKey = turnKey
@@ -1546,7 +1575,8 @@ export class Bot {
         }
         const cwSide = this._cwSide ?? 'E'
         const cwPh = ((this._cwPhase % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
-        for (const [s, a] of Object.entries(this.anim.crouchWalk)) {
+        for (const s of this._cwKeys) {
+          const a = this.anim.crouchWalk[s]
           a.time = (cwPh / (Math.PI * 2)) * a.getClip().duration
           a.setEffectiveWeight(s === cwSide ? this._crouchWW : 0)
         }

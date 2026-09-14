@@ -121,8 +121,15 @@ export class Player {
       }
       this.vel.x = cur.x; this.vel.z = cur.z
     } else {
-      // 空中：轻微操控
-      this.vel.addScaledVector(wishDir, M.airAccel * dt)
+      // 空中：轻微操控（投影上限 = 当前地面满速）。无上限时按住 W+Space 连跳
+      // 可绕开地面摩擦无限叠加速（仿真 10s 发散到 40m/s）；Valorant 空中只有
+      // 微调、跳跃不产生超速收益（无 bhop 增益）
+      const along = this.vel.x * wishDir.x + this.vel.z * wishDir.z
+      if (along < maxSpeed) {
+        const add = Math.min(M.airAccel * dt, maxSpeed - along)
+        this.vel.x += wishDir.x * add
+        this.vel.z += wishDir.z * add
+      }
     }
 
     // 蹲姿过渡

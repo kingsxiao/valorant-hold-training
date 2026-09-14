@@ -193,7 +193,7 @@ export const CONFIG = {
     weaponSkin: 'default',  // Vandal 皮肤：default / aristocrat（官方商城 Aristocrat 收藏集，镀金）
     crouchWalkChance: 0.2,  // pull 波掷定蹲走拉出的概率（官方蹲走循环，命中区 ×0.70）
     crouchWalkSpeed: 2.7,   // 蹲走拉出移速（m/s）：本体口径 = 50% 跑速；播放松条可调
-                            // （1.4-2.7）——步幅相位按速度自动派生，任意速度近零滑步
+                            // （1.4-2.7）——步幅恒定、步频随移速（151 轮定案，回归测试锁死）
     crossChance: 0.5,       // 每波风格：侧面跑过（贯穿缺口顺跑向）vs 正面横移走出（面向玩家拉出即缩）
     pullJiggleChance: 0.3,  // 拉出波里"露头即缩"jiggle-peek 的概率（拉到中段折返）
     // 161 轮起：Bot 不跳、不停顿（无急停/站定对枪/跳 peek 波；aimTime 判负随

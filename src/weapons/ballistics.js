@@ -19,7 +19,8 @@ export function damageFor(w, zone, dist) {
 //    曲线精确过这三锚点（低速段惩罚平缓、高速段快速逼近跑动散布，贴近游戏体感）
 //  - 蹲姿限速 34%：独立支线 = stand×crouchMult + 蹲走惩罚 crouchMove（v9.10 起公开值）
 //  - 空中直接取 jump（跳跃大幅扩散）
-//  - 连射逐发 +0.05°，封顶在 max - stand（= 持续射击最大散布）
+//  - 连射逐发 +0.05°，封顶在「当前姿态上限 - 当前姿态静止基准」（ADS 用
+//    maxStand/maxCrouch，腰射用 max - stand）= 持续射击最大散布
 // ctx = { speedRatio: 水平速度/该武器全速 (0..1), crouched, grounded, sprayIndex }
 export function spreadAt(w, ctx) {
   return spreadParts(w, ctx).total
@@ -58,7 +59,11 @@ export function spreadParts(w, ctx) {
   // 跳跃散布全额计入移动误差（游戏中跳跃即最大移动误差）
   const rest = ctx.grounded ? (ctx.crouched ? crouchRest : stand) : 0
   if (!ctx.grounded) sp = s.jump
-  const maxSp = a ? a.maxStand : (s.max ?? s.stand + 0.8)
-  const fire = Math.min(ctx.sprayIndex * 0.05, Math.max(0, maxSp - stand))
+  // 连射封顶随姿态：ADS 用 Alternate Fire 行的 maxStand/maxCrouch（蹲姿上限
+  // 更低，此前漏用 maxCrouch 会让蹲姿 ADS 长连射超上限 ~14%）；基准同随姿态，
+  // 站立路径数值不变。腰射维持 max - stand 口径（无蹲姿专属字段）
+  const maxSp = a ? (ctx.crouched ? a.maxCrouch : a.maxStand) : (s.max ?? s.stand + 0.8)
+  const fireBase = ctx.crouched ? crouchRest : stand
+  const fire = Math.min(ctx.sprayIndex * 0.05, Math.max(0, maxSp - fireBase))
   return { move: Math.max(0, sp - rest), fire, total: sp + fire }
 }

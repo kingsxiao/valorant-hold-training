@@ -820,12 +820,23 @@ export class WeaponSystem {
     if (hammer) hammer.rotation.x = 0.12 + (1 - this.vmBolt) * 0.62 // 击发瞬间前倒，随后回待击
     // Sheriff 转轮分度：欠阻尼弹簧追目标角（ω≈41rad/s、ζ≈0.5）——一次 ~16%
     // 过冲（60° 分度甩过 ~10° 再咬回），机械分度的"咔哒"手感；195ms 内稳住，
-    // 4/s 射速下一发前必然到位
+    // 4/s 射速下一发前必然到位。k=1700 单步欧拉在 dt>48ms 即数值发散（切后台
+    // 回来 dt 钳 250ms，一帧就爆 NaN 让转轮从渲染中永久消失）——与类内 Spring
+    // 同口径 ≥120Hz 子步积分
     const cyl = vm.userData.cylPivot
     if (cyl && vm.userData.cylTarget !== undefined) {
+      vm.userData.cylVel ??= 0
+      const steps = Math.max(1, Math.ceil(dt * 120))
+      const h = dt / steps
+      for (let i = 0; i < steps; i++) {
+        const err = vm.userData.cylTarget - cyl.rotation.z
+        vm.userData.cylVel += (err * 1700 - vm.userData.cylVel * 41) * h
+        cyl.rotation.z += vm.userData.cylVel * h
+      }
+      // 发散兜底：异常 dt 下万一仍爆出非有限值，直接咬回目标角（NaN 会随
+      // matrixWorld 传播，转轮连同枪体从渲染中消失且收敛判定永不满足）
+      if (!Number.isFinite(cyl.rotation.z)) { cyl.rotation.z = vm.userData.cylTarget; vm.userData.cylVel = 0 }
       const err = vm.userData.cylTarget - cyl.rotation.z
-      vm.userData.cylVel = (vm.userData.cylVel ?? 0) + (err * 1700 - vm.userData.cylVel * 41) * dt
-      cyl.rotation.z += vm.userData.cylVel * dt
       if (Math.abs(err) < 0.002 && Math.abs(vm.userData.cylVel) < 0.02) {
         cyl.rotation.z = vm.userData.cylTarget
         vm.userData.cylVel = 0

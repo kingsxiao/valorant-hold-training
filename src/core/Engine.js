@@ -351,12 +351,18 @@ export class Engine {
   }
 
   setShadows(on) {
+    // 同值早退：菜单滑条 oninput 以 ~60Hz 连调 applyAll，无守卫会每 tick 全场景
+    // traverse 标脏材质 + 下一帧全量 program 重校验（拖滑条卡顿的主源）
+    if (this.renderer.shadowMap.enabled === on) return
     this.renderer.shadowMap.enabled = on
     this.scene.traverse(o => { if (o.material) o.material.needsUpdate = true })
   }
 
   // 实际像素密度 = 手动分辨率缩放（菜单滑条）× 自适应乘数（掉帧自动降）
   setResolutionScale(s) {
+    // 同值早退：setPixelRatio 无同值短路，必调 setSize → 同值重赋 canvas 尺寸
+    // 也会清空画布触发 drawing buffer 重置（adaptiveRes 走 _applyScale 不受影响）
+    if (this.userScale === s) return
     this.userScale = s
     this._applyScale()
   }

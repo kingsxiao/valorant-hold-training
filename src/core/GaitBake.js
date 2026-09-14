@@ -288,19 +288,24 @@ export function bakeDeathClips({
     }
   }
 
-  // 脊柱前卷 / 头后仰：bind 世界 → 局部（精确口径）
-  const axial = (bone, bindW, parentW, ang) => {
-    r.setFromAxisAngle(_AX_X, ang)
-    q.copy(parentW).invert().multiply(r).multiply(bindW)
-    tracks.push(new THREE.QuaternionKeyframeTrack(bone.name + '.quaternion', times,
-      (() => { const v = []; for (let i = 0; i <= samples; i++) v.push(q.x, q.y, q.z, q.w); return v })()))
+  // 脊柱前卷 / 头后仰：bind 世界 → 局部（精确口径）。角度随 t 逐帧求值（与
+  // 盆骨/腿/臂同一 ease-out 节奏——旧实现取 deathPose(1) 终值铺满全程，死亡
+  // 开始瞬间头就已经在完整后仰位）
+  const axial = (bone, bindW, parentW, angFn) => {
+    const v = []
+    for (let i = 0; i <= samples; i++) {
+      const p = deathPose(times[i] / duration)
+      r.setFromAxisAngle(_AX_X, angFn(p))
+      q.copy(parentW).invert().multiply(r).multiply(bindW)
+      v.push(q.x, q.y, q.z, q.w)
+    }
+    tracks.push(new THREE.QuaternionKeyframeTrack(bone.name + '.quaternion', times, v))
   }
   spineBones.forEach((bone, k) => {
-    const share = deathPose(1).spineCurl
     const bindParentW = k === 0 ? hipsBindW : spineBindW[k - 1]
-    axial(bone, spineBindW[k], bindParentW, share)
+    axial(bone, spineBindW[k], bindParentW, p => p.spineCurl)
   })
-  if (neckBone && neckBindW) axial(neckBone, neckBindW, spineBindW[spineBindW.length - 1] ?? hipsBindW, deathPose(1).neck)
+  if (neckBone && neckBindW) axial(neckBone, neckBindW, spineBindW[spineBindW.length - 1] ?? hipsBindW, p => p.neck)
 
   // 撒手：小幅外垂走局部后乘（≤0.32rad，骨架轴向差异不敏感）
   arms.forEach((a, k) => {

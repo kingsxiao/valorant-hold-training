@@ -239,6 +239,7 @@ menu.applyAll = () => {
   Bot.realShadows = !!cfg.shadows // 真实阴影下隐藏 Bot 的 blob 接触阴影（防双重投影）
   for (const b of bots.bots) b.blob.visible = b.active && !Bot.realShadows
   hud.fpsBox.style.display = cfg.showFps === false ? 'none' : ''
+  hud.fpsVisible = cfg.showFps !== false // 隐藏时 pushFps 只记录不绘制（省每帧 clearRect+150×fillRect）
 }
 menu.applyAll()
 
@@ -312,7 +313,10 @@ engine.renderFrame = (alpha, dtMs) => {
   const dt = dtMs / 1000
   player.updateCamera(engine.camera, alpha)
     bots.renderSync(alpha) // Bot 网格插值与相机同 alpha（掉帧时不相对视野抖动）
-    flashes.renderSync(alpha, dt) // 投掷物网格/白屏/拖尾（同 alpha 插值）
+    // 投掷物网格/白屏/拖尾（同 alpha 插值）。暂停（playing=false）时 dt 归零：
+    // simStep 已停但 renderFrame 照跑，真实 dt 会让拖尾发射器在冻结位置无限
+    // 喷粒子（与"游戏时钟只在 step 累加"的暂停语义一致）；白屏/脉冲以 t 为键不受影响
+    flashes.renderSync(alpha, state.playing ? dt : 0)
     // 相机矩阵即时刷新：HUD 伤害数字在渲染前 project，用的是 matrixWorldInverse，
     // 不手动更新会滞后一帧（快速甩视角时数字明显拖影）
     engine.camera.updateMatrixWorld()
@@ -323,7 +327,10 @@ engine.renderFrame = (alpha, dtMs) => {
   // 必须在 fx.calibrate / 准星 update 之前 —— 两者都消费 camera.fov
   engine.setFovH(THREE.MathUtils.lerp(CONFIG.graphics.fovH, CONFIG.graphics.fovH / weapons.adsZoom, weapons.adsBlend))
   crosshair.setAdsOffset(weapons.adsCrosshairOffset(engine.camera.fov, innerHeight))
-  fx.calibrate(innerWidth, innerHeight, engine.camera.fov) // 粒子点大小随窗口/FOV 校准
+  // 粒子点大小校准：gl_PointSize 的单位是帧缓冲（设备）像素，必须传绘图缓冲
+  // 高度（domElement.height = CSS 高 × pixelRatio，天然跟随 autoScale 动态降采样）。
+  // 传 CSS 高在 HiDPI（pr=2）上粒子只有设计尺寸一半
+  fx.calibrate(innerWidth, engine.renderer.domElement.height, engine.camera.fov)
   fx.update(dt)
   hud.updateDamage(dt)
 
@@ -392,7 +399,13 @@ function applyWeaponSkin(skin) {
   weapons.setSkin(valid)
   if (!Bot.weaponTemplates) return // 资产未到（开局菜单先于 GLB 加载）：setSkin 已记账，到货后补
   const src = valid !== 'default' ? (vmSkinAssets.skins[`vandal:${valid}`] ?? vmSkinAssets.base) : vmSkinAssets.base
-  if (src) Bot.weaponTemplates.vandal = src.clone(true)
+  // 皮肤与源件都没变则跳过：滑条 oninput 以 ~60Hz 连调 applyAll，无条件深克隆
+  // 枪模层级（GLB 到货后）是纯 GC churn
+  if (src && (vmSkinAssets.appliedSkin !== valid || vmSkinAssets.appliedSrc !== src)) {
+    Bot.weaponTemplates.vandal = src.clone(true)
+    vmSkinAssets.appliedSkin = valid
+    vmSkinAssets.appliedSrc = src
+  }
 }
 
 // 用户/开源资产（可选）：public/models/ 下的无畏契约英雄池 agent-{jett,phoenix,
@@ -400,9 +413,8 @@ function applyWeaponSkin(skin) {
 // 当前内置 Mixamo X Bot）、viewmodel-vandal/phantom.glb（双枪各有高模；旧
 // viewmodel.glb 单模型作回退）、glove.glb 与 hands.glb
 loadUserAssets().then(({ agent, agentAnimations, agents, viewmodel, viewmodels, glove, hands }) => {
-  let changed = false
-  if (agents?.length) { Bot.customTemplates = agents; changed = true }
-  else if (agent) { Bot.customTemplate = agent; Bot.customAnimations = agentAnimations; changed = true }
+  if (agents?.length) { Bot.customTemplates = agents }
+  else if (agent) { Bot.customTemplate = agent; Bot.customAnimations = agentAnimations }
   const vmMap = {}
   for (const id of ['vandal', 'phantom']) if (viewmodels?.[id]) vmMap[id] = viewmodels[id]
   if (!Object.keys(vmMap).length && viewmodel) vmMap.vandal = vmMap.phantom = viewmodel // 旧单模型
@@ -416,7 +428,7 @@ loadUserAssets().then(({ agent, agentAnimations, agents, viewmodel, viewmodels, 
     Bot.weaponTemplates = Object.fromEntries(Object.entries(vmMap).map(([k]) => [k, pristine[k]]))
     // 皮肤枪模（键 'vandal:aristocrat'）并入 WeaponSystem，但不进 Bot 模板池——
     // Bot 的 vandal 项由 applyWeaponSkin 按当前皮肤从纯净克隆显式替换，两把枪 50/50 出场不变
-    weapons.setCustomViewmodel(vmAll); changed = true
+    weapons.setCustomViewmodel(vmAll)
     vmSkinAssets.base = pristine.vandal ?? null
     vmSkinAssets.skins = Object.fromEntries(
       Object.entries(pristine).filter(([k]) => k.includes(':')))
@@ -426,12 +438,12 @@ loadUserAssets().then(({ agent, agentAnimations, agents, viewmodel, viewmodels, 
   // 骨骼可逐指贴合真实握枪姿势（合并指的 hands.glb 做不到逐指）；建模袖臂仍取
   // hands.glb（placeArmsIK 两骨 IK + 解剖学定尺精确衔接手套腕口）。
   // hands.glb 整臂（四指合并）保留为后备（glove 缺失/骨架不符时回退）。
-  if (glove && weapons.setGloveHands(glove, hands) !== false) changed = true
-  else if (hands && weapons.setCustomHands(hands) !== false) changed = true
-  // 场上的 Bot 换新外观——但不能打断进行中的回合：资产加载可达数秒，晚到时
-  // 玩家可能已开局，resetRound 会清掉统计并重启倒计时（分数与击杀数错位）。
-  // 进行中就等下一局 startRound 自然应用新模板
-  if (changed && !bots.running) bots.resetRound()
+  // 手部方案：glove 主路径，缺失/骨架不符（返回 false）回退 hands 整臂
+  const gloveOk = !!glove && weapons.setGloveHands(glove, hands) !== false
+  if (!gloveOk && hands) weapons.setCustomHands(hands)
+  // 模板晚到不打断任何状态：未开局时 startRound → resetRound 自然清池换新模板；
+  // 进行中的回合等下一局。此处绝不主动 resetRound——它会把 BotManager 置为
+  // running 并设 roundEndAt，菜单页 HUD 会凭空显示 63.0s 倒计时、还触发开局音
 }).catch(e => console.error('[VHT] asset load failed', e))
 
 // 首屏菜单（弹药无限：HUD 显示 ∞）

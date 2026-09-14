@@ -207,6 +207,9 @@ const _va = new THREE.Vector3()
 const _vb = new THREE.Vector3()
 const _axis = new THREE.Vector3()
 const _q = new THREE.Quaternion()
+// _eye()/_forward() 的复用返回对象（128Hz 热路径零分配；调用点即取即用）
+const _eyeOut = { x: 0, y: 0, z: 0 }
+const _fwdOut = { x: 0, y: 0, z: 0 }
 
 export class FlashSystem {
   constructor({ scene, world, map, audio, fx, player, hudRoot }) {
@@ -298,8 +301,13 @@ export class FlashSystem {
 
   get _listener() { return this.player } // 音频听者：{ pos, yaw } 实时读
 
+  // 玩家眼位/视线方向：128Hz step 热路径调用——写入模块级复用对象（调用点均
+  // 即取即用读分量，无跨调用持有；eye 与 fw 成对使用时是两个独立对象）
   _eye() {
-    return { x: this.player.pos.x, y: this.player.pos.y + this.player.eyeHeight, z: this.player.pos.z }
+    _eyeOut.x = this.player.pos.x
+    _eyeOut.y = this.player.pos.y + this.player.eyeHeight
+    _eyeOut.z = this.player.pos.z
+    return _eyeOut
   }
 
   // ---- 模式与回合 ----
@@ -638,16 +646,19 @@ export class FlashSystem {
     const P = CONFIG.flash.phoenix
     p.t += dt
     const s = Math.min(P.speed * p.t, p.curve.len)
-    const prev = { x: p.pos.x, y: p.pos.y, z: p.pos.z }
+    // 差分基准用标量（128Hz 步进 ×0.6s 飞行期，每步两只短命对象纯 GC churn）；
+    // p.vel 就地写分量（spawn 时已初始化，消费点只有拖尾的焰丝方向）
+    const px = p.pos.x, py = p.pos.y, pz = p.pos.z
     p.curve.point(s, p.pos)
-    // 切向速度（拖尾的焰丝方向要用）：弧长参数化贝塞尔的位置差分
     if (dt > 0) {
-      p.vel = { x: (p.pos.x - prev.x) / dt, y: (p.pos.y - prev.y) / dt, z: (p.pos.z - prev.z) / dt }
+      p.vel.x = (p.pos.x - px) / dt
+      p.vel.y = (p.pos.y - py) / dt
+      p.vel.z = (p.pos.z - pz) / dt
     }
-    const segX = p.pos.x - prev.x, segY = p.pos.y - prev.y, segZ = p.pos.z - prev.z
+    const segX = p.pos.x - px, segY = p.pos.y - py, segZ = p.pos.z - pz
     const segLen = Math.hypot(segX, segY, segZ)
     if (segLen > 1e-6) {
-      const hit = this.world.raycast(prev.x, prev.y, prev.z, segX / segLen, segY / segLen, segZ / segLen, segLen)
+      const hit = this.world.raycast(px, py, pz, segX / segLen, segY / segLen, segZ / segLen, segLen)
       if (hit) { this._fizzle(p, hit); return }
     }
     if (p.t >= P.windup) this._pop(p, P.maxBlind)
@@ -926,11 +937,14 @@ export class FlashSystem {
     return this._beam
   }
 
-  // 玩家视线方向（pitch/yaw → 单位向量；与相机姿态同式）
+  // 玩家视线方向（pitch/yaw → 单位向量；与相机姿态同式）。复用对象，同 _eye
   _forward() {
     const cy = Math.cos(this.player.yaw), sy = Math.sin(this.player.yaw)
     const cp = Math.cos(this.player.pitch), sp = Math.sin(this.player.pitch)
-    return { x: -sy * cp, y: sp, z: -cy * cp }
+    _fwdOut.x = -sy * cp
+    _fwdOut.y = sp
+    _fwdOut.z = -cy * cp
+    return _fwdOut
   }
 
   _despawn() {
@@ -1150,12 +1164,13 @@ export class FlashSystem {
   }
 
   // ---- 可击毁道具（Leer 眼 60HP / Dizzy 20HP）：射线-球命中，供 WeaponSystem ----
-  // 在墙/机器人取最近时夹入。只认"到位后"的目标（飞行导弹段判定点还在移动），
-  // 返回 { t }（射线参数距离）或 null
+  // 在墙/机器人取最近时夹入。只认"到位后"的目标（飞行导弹段判定点还在移动）：
+  // Reyna 眼 arrive（睁眼渐亮）阶段 pos 已停在部署点且清晰可见，一并纳入——
+  // 对着肉眼可见的眼开枪穿体而过，与 Gekko 悬停即可击毁的行为也不一致
   pickHit(eye, dir, lim) {
     const p = this.proj
     if (!p) return null
-    const isEye = p.type === 'reyna' && p.phase === 'active'
+    const isEye = p.type === 'reyna' && (p.phase === 'arrive' || p.phase === 'active')
     const isDizzy = p.type === 'gecko' && p.slowed && !p.fired
     if (!isEye && !isDizzy) return null
     const R = isEye ? CONFIG.flash.reyna.radius : CONFIG.flash.gecko.radius

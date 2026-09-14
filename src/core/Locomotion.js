@@ -61,7 +61,12 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
       W: { walk: build(strafeSet.walkW, 'strafe-walkW'), run: build(strafeSet.runW, 'strafe-runW') },
     }
     : null
-  if (strafe && (!strafe.E.walk || !strafe.E.run)) return { walk, run, strafe: null }
+  // strafe 只要有一侧不完整（如 json 只带 walkE/runE 无 W 侧）就整体置 null：
+  // Bot 的消费侧（权重/播放头/对侧压零）假设 E/W 四键齐全，缺任一会
+  // mk(null)→clipAction(null) 在构造函数里抛 TypeError
+  if (strafe && (!strafe.E.walk || !strafe.E.run || !strafe.W.walk || !strafe.W.run)) {
+    return { walk, run, strafe: null }
+  }
   // 官方死亡整身 clip（背摔/前扑）：缺席不阻塞移动集（Bot 退回烘焙塌倒）
   const deathSet = locoJson?.death
   const death = deathSet
@@ -192,18 +197,19 @@ export function sampleIkAnchor(ik, duration, n, t, side, out) {
 }
 
 // 走/跑/横移的动画权重分配（纯函数，Bot._setAnimWeights 与单测共用）：
-export function locoWeights({ moveW, runW, strafeW = 0, hasStrafe = false }) {
+// out：可选复用对象（Bot 128Hz 热路径零分配；不传时每次新对象，纯函数语义不变）
+export function locoWeights({ moveW, runW, strafeW = 0, hasStrafe = false }, out) {
   const wS = hasStrafe ? strafeW : 0
   const idle = 1 - moveW
   const noIdleWalk = moveW // 无 idle 动作时的 walk 残余（见调用侧）
-  return {
-    idle,
-    walkN: moveW * (1 - runW) * (1 - wS),
-    runN: moveW * runW * (1 - wS),
-    walkS: moveW * (1 - runW) * wS,
-    runS: moveW * runW * wS,
-    walkNoIdle: noIdleWalk * (1 - runW) * (1 - wS) + idle,
-  }
+  const r = out ?? {}
+  r.idle = idle
+  r.walkN = moveW * (1 - runW) * (1 - wS)
+  r.runN = moveW * runW * (1 - wS)
+  r.walkS = moveW * (1 - runW) * wS
+  r.runS = moveW * runW * wS
+  r.walkNoIdle = noIdleWalk * (1 - runW) * (1 - wS) + idle
+  return r
 }
 
 // 官方骨盆参考高（移动态）：runN 固定 mesh.y=-0.2 实测骨盆世界高 0.85~0.94m

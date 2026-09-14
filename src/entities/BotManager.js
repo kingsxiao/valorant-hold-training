@@ -31,7 +31,7 @@ export class BotManager {
       delayMin: CONFIG.training.peekDelayMinMs,
       delayMax: CONFIG.training.peekDelayMaxMs,
       speedMult: 1.0,
-      crouchWalkSpeed: 2.7,
+      crouchWalkSpeed: CONFIG.training.crouchWalkSpeed, // 蹲走拉出移速：单一事实源在 CONFIG（菜单 applyAll 会覆盖，初始局也取同源值防漂移）
       roundSeconds: CONFIG.training.roundSeconds,
       rampUp: false, // 渐进难度：随击杀数缩短延迟/提升横移速度
       peekSide: CONFIG.training.peekSide, // Bot 出场侧：left/right 固定一侧，random 两侧随机
@@ -113,7 +113,10 @@ export class BotManager {
       return
     }
 
-    const ctx = { player: this.player, alpha }
+    // ctx 每步复用（128Hz × 每步一只字面量对象；player/alpha 每步覆盖写）
+    const ctx = this._ctx ?? (this._ctx = { player: null, alpha: 1 })
+    ctx.player = this.player
+    ctx.alpha = alpha
     this._stepHold(dt)
 
     // 脚步声由 Bot.step 内置（与步频同步的空间音），这里不再重复触发
@@ -259,6 +262,10 @@ export class BotManager {
     if (bot.hp <= 0) {
       this.stats.kills++
       bot.startDeath()
+      // 击杀即波次结束：从击杀时刻重掷下一波延迟（finishWave 同语义）。不重置
+      // 的话 slot.nextAt 仍是"出场时刻+旧延迟"，中后段击杀的下一波会零延迟
+      // 出场、绕过 delayMin 下限（节奏训练器的核心口径）
+      if (bot.slot) { bot.slot.bot = null; bot.slot.nextAt = 0 }
       // 击杀时的爆头"叮"由 main 播（那里才知道连杀数 → 按连杀升调，与击杀
       // 确认音同一 pitch 阶梯）；未击杀命中的叮仍在下方（基础音高）
       this.onEvent?.('killed', { bot, zone })
@@ -274,7 +281,9 @@ export class BotManager {
   onMapRebuilt() {
     for (const slot of this.hold?.slots ?? []) { slot.bot = null; slot.nextAt = 0 }
     for (const b of this.bots) {
-      if ((b.active && b.mode === 'peek') || b.mode === 'corpse') b.hide()
+      // dying（死亡动画中）也要回收：不回收会在动画结束时转成 corpse，永久
+      // 躺在旧缺口的横移线上——新墙可能直接穿过尸体
+      if ((b.active && b.mode === 'peek') || b.mode === 'dying' || b.mode === 'corpse') b.hide()
     }
   }
 

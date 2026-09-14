@@ -60,8 +60,12 @@ export class HUD {
   }
 
   setMode(label, sub) {
-    this.setText(this.mode.querySelector('.mode-title'), 'modeTitle', label)
-    this.setText(this.mode.querySelector('.mode-sub'), 'modeSub', sub)
+    // 节点引用构造期缓存：renderFrame 每帧调 setMode，querySelector×2 放在
+    // setText 缓存检查之前等于"缓存只省了写、没省查"
+    this._modeTitle ??= this.mode.querySelector('.mode-title')
+    this._modeSub ??= this.mode.querySelector('.mode-sub')
+    this.setText(this._modeTitle, 'modeTitle', label)
+    this.setText(this._modeSub, 'modeSub', sub)
   }
 
   setStats(stats, engine) {
@@ -202,6 +206,8 @@ export class HUD {
   pushFps(frameMs) {
     this.fpsFrames[this.fpsIdx] = frameMs
     this.fpsIdx = (this.fpsIdx + 1) % this.fpsFrames.length
+    // 面板隐藏时只记录不绘制（环形缓冲保留：重新显示时才有历史曲线）
+    if (this.fpsVisible === false) return
     const g = this.fpsCtx
     // setTransform 把 150×36 的逻辑坐标系映射到 ×DPR 的物理像素
     g.setTransform(this._fpsDpr ?? 1, 0, 0, this._fpsDpr ?? 1, 0, 0)

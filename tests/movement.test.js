@@ -116,3 +116,39 @@ describe('groundStep 边界行为', () => {
     expect(v).toBeCloseTo(-M.runSpeed, 3)
   })
 })
+
+// 空中加速上限：Valorant 无 bhop 增益，空中只有微调。旧实现 addScaledVector
+// 无投影钳制 + 跳跃分支先于地面摩擦 → 按住 W+Space 连跳每跳都绕开摩擦无限
+// 叠加速（128Hz 仿真 10s 发散到 40m/s）
+import { Player } from '../src/player/Player.js'
+describe('空中加速上限（无 bhop 增益）', () => {
+  const worldStub = { moveAxis: () => ({ hit: false }) } // 永不落地：保持空中分支
+  const w = CONFIG.weapons.vandal
+  const maxSpeed = M.runSpeed * w.moveSpeedMult // 5.4
+  const holdW = { down: (k) => k === 'KeyW' }
+  const hspeed = (p) => Math.hypot(p.vel.x, p.vel.z)
+
+  it('带地面满速起跳 + 空中持 W 10s：水平速度不超满速（回归锁：旧实现发散到 40m/s）', () => {
+    const p = new Player(worldStub, {})
+    p.grounded = false
+    p.vel.set(0, 0, -maxSpeed)
+    for (let i = 0; i < 1280; i++) p.step(DT, holdW, w)
+    expect(hspeed(p)).toBeLessThanOrEqual(maxSpeed + 1e-6)
+  })
+
+  it('空中从静止持 W：只能加到地面满速，不越', () => {
+    const p = new Player(worldStub, {})
+    p.grounded = false
+    p.vel.set(0, 0, 0)
+    for (let i = 0; i < 256; i++) p.step(DT, holdW, w) // 2s > 5.4/4=1.35s 加速期
+    expect(hspeed(p)).toBeCloseTo(maxSpeed, 3)
+  })
+
+  it('超速入场（外力 7.5m/s）空中不增不衰减沿投影封顶', () => {
+    const p = new Player(worldStub, {})
+    p.grounded = false
+    p.vel.set(0, 0, -7.5)
+    for (let i = 0; i < 128; i++) p.step(DT, holdW, w)
+    expect(hspeed(p)).toBeLessThanOrEqual(7.5 + 1e-6)
+  })
+})

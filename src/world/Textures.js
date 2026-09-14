@@ -152,7 +152,7 @@ const suit = () => get('suit', () => {
     cg.fillStyle = 'rgba(230,235,240,0.5)'
     for (let x = 48; x < 150; x += 4) cg.fillRect(x, 448, 1 + Math.random() * 2, 26)
     cg.font = '12px monospace'; cg.textAlign = 'left'
-    cg.fillText('RANGE-07-TRN', 48, 490)
+    cg.fillText('A-SITE-TRN', 48, 490)
     noise(cg, s, 0.05, 900)
     noise(hg, s, 0.06, 900)
   })
@@ -556,6 +556,70 @@ const crate = () => get('crate', () => {
   }
 })
 
+// 石砌墙基（A 门/通道建筑的底部基座：乱毛石分块 + 白灰缝。Ascent 系街道建筑
+// 的语言——墙身是灰泥、墙根是石头，一横一竖读出"老城"的年代感）
+const stone = () => get('stone', () => {
+  const { color, height } = pair(512, (cg, hg, s) => {
+    cg.fillStyle = '#8d8478'; cg.fillRect(0, 0, s, s)
+    hg.fillStyle = '#808080'; hg.fillRect(0, 0, s, s)
+    // 乱毛石：不规则行高 × 行内随机宽（错缝砌筑），缝 = 底色留白
+    let y = 0
+    while (y < s) {
+      const rh = 42 + Math.random() * 44
+      let x = -Math.random() * 60 // 行首错位
+      while (x < s) {
+        const w = 62 + Math.random() * 88
+        const tone = 118 + Math.random() * 44
+        cg.fillStyle = `rgb(${tone + 16},${tone + 4},${tone - 12})`
+        cg.fillRect(x + 3, y + 3, w - 6, rh - 6)
+        hg.fillStyle = `rgb(${tone},${tone},${tone})`
+        hg.fillRect(x + 3, y + 3, w - 6, rh - 6)
+        // 石面凿痕高光（左上受光棱）
+        cg.fillStyle = `rgba(255,250,240,${0.05 + Math.random() * 0.07})`
+        cg.fillRect(x + 6, y + 5, Math.max(4, (w - 14) * 0.45), 3)
+        x += w
+      }
+      y += Math.min(rh, s - y + 3) + 3
+    }
+    noise(cg, s, 0.06, 900)
+    noise(hg, s, 0.1, 2600, 1)
+  })
+  return {
+    map: toTex(color, { srgb: true }),
+    normalMap: toTex(heightToNormal(height, 2.2)),
+  }
+})
+
+// 铆钉钢板（A 门的门套/门楣：深灰冷轧钢 + 竖向加强筋 + 铆钉行。工业大门的
+// 分段感——玩家一眼读出"这是个门"，而不是"墙上有个洞"）
+const doorMetal = () => get('doorMetal', () => {
+  const { color, height } = pair(512, (cg, hg, s) => {
+    cg.fillStyle = '#3a3f45'; cg.fillRect(0, 0, s, s)
+    hg.fillStyle = '#808080'; hg.fillRect(0, 0, s, s)
+    // 竖向加强筋（面板分段）
+    for (let i = 0; i < 5; i++) {
+      const x = (i + 0.5) * s / 5
+      cg.fillStyle = 'rgba(255,255,255,0.07)'; cg.fillRect(x - 10, 0, 20, s)
+      cg.fillStyle = 'rgba(0,0,0,0.22)'; cg.fillRect(x + 8, 0, 4, s)
+      hg.fillStyle = '#a8a8a8'; hg.fillRect(x - 10, 0, 20, s)
+    }
+    // 铆钉行（5×7）
+    for (let i = 0; i < 5; i++) for (let j = 0; j < 7; j++) {
+      const x = 26 + i * (s - 52) / 4, y = 26 + j * (s - 52) / 6
+      cg.fillStyle = '#20242a'; cg.beginPath(); cg.arc(x, y, 5, 0, 7); cg.fill()
+      cg.fillStyle = 'rgba(255,255,255,0.18)'; cg.beginPath(); cg.arc(x - 1.6, y - 1.6, 2.2, 0, 7); cg.fill()
+      hg.fillStyle = '#d8d8d8'; hg.beginPath(); cg.arc(x, y, 5.5, 0, 7); hg.fill()
+    }
+    scratches(cg, s, 24, 'rgba(210,220,228,0.10)')
+    noise(cg, s, 0.04, 500)
+    noise(hg, s, 0.08, 1600, 1)
+  })
+  return {
+    map: toTex(color, { srgb: true }),
+    normalMap: toTex(heightToNormal(height, 1.6)),
+  }
+})
+
 // ---- 特效贴图 ----
 const flash = () => get('flash', () => {
   const c = canvas(256)
@@ -943,7 +1007,7 @@ export function pbr({ maps, color = 0xffffff, roughness = 1, metalness = 0, repe
 
 export const Tex = {
   suit, vest, visor, visorGlow, metal, polymer, wood,
-  floor, wall, crate,
+  floor, wall, crate, stone, doorMetal,
   flash, blob, hole, spark, smoke, ring, stripes,
   robotShell, robotJoint, fabric, skin,
 }

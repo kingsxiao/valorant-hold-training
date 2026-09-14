@@ -166,3 +166,73 @@ describe('_userGain（用户音效响度归一）', () => {
     expect(a._userGain({ getChannelData: () => new Float32Array(16), length: 16 })).toBe(1)
   })
 })
+
+// 混沌序曲（Prelude to Chaos）Vandal 开火音色 rifle_chaos：分层合成路由 +
+// 用户替换优先级。合成验证不建真音频图——把四个发声原语 (_noiseBurst/_osc/
+// _thump/_metal) 换成记录器，校验"该响的层都排上了"（数字瞬态 / 方波 zap 下扫 /
+// 深低频锤 / 电离尾 / 栓机），参数锚定 Audio.shot 的 rifle_chaos 分支。
+describe('shot rifle_chaos（混沌序曲开火音色）', () => {
+  const rig = (user = null) => {
+    const a = new AudioSys()
+    a.ctx = {} // 占位真 ctx：ensure() 短路（resume?.() 可选链），不建音频图
+    if (user) a.user = user
+    const calls = []
+    for (const m of ['_noiseBurst', '_osc', '_thump', '_metal']) {
+      a[m] = (dest, opts) => calls.push([m, opts])
+    }
+    a._playBuffer = (buf, dest, opts) => calls.push(['_playBuffer', { buf, ...opts }])
+    return { a, calls }
+  }
+
+  it('能量系分层齐全：数字瞬态 + 方波 zap 下扫 ×2 + 腔体 + 低频锤 + 胸口坠 + 电离尾 + 栓机（≥10 层）', () => {
+    const { a, calls } = rig()
+    a.shot('rifle_chaos', null, null, 0)
+    expect(calls.length).toBeGreaterThanOrEqual(10)
+    // 数字裂空脆响（highpass 高频噪声）
+    expect(calls.some(([m, o]) => m === '_noiseBurst' && o.type === 'highpass' && o.freq > 6000)).toBe(true)
+    // 能量 zap：方波 2350→400 下扫（主音 + 失谐伴生两路）
+    const zaps = calls.filter(([m, o]) => m === '_osc' && o.type === 'square' && o.freqEnd && o.freq > 2000)
+    expect(zaps.length).toBe(2)
+    // 深低频锤：胸口坠（_thump 起点 ~118Hz，比默认 vandal 165 低一档 = "重"）
+    expect(calls.some(([m, o]) => m === '_thump' && o.freq < 125)).toBe(true)
+    // 电离嘶鸣尾（30ms 延迟的窄带噪声）
+    expect(calls.some(([m, o]) => m === '_noiseBurst' && o.delay === 0.03 && o.q > 4)).toBe(true)
+    // 栓机循环保留（50ms 延迟机械层）
+    expect(calls.some(([m, o]) => m === '_noiseBurst' && o.delay === 0.05)).toBe(true)
+  })
+
+  it('层间微错位 → 段落感：zap 即刻起、腔体 +4ms、坠尾 +14ms、嘶尾 +30ms', () => {
+    const { a, calls } = rig()
+    a.shot('rifle_chaos', null, null, 0)
+    const delays = calls.map(([, o]) => o.delay ?? 0)
+    expect(Math.min(...delays)).toBe(0)
+    expect(calls.some(([, o]) => o.delay === 0.004)).toBe(true)
+    expect(calls.some(([, o]) => o.delay === 0.014)).toBe(true)
+    expect(calls.some(([, o]) => o.delay === 0.03)).toBe(true)
+  })
+
+  it('高热（heat>0.65）加能量芯过热嗡鸣（_metal 层）', () => {
+    const { a, calls } = rig()
+    a.shot('rifle_chaos', null, null, 1)
+    expect(calls.some(([m]) => m === '_metal')).toBe(true)
+    // 冷枪不加
+    const cold = rig()
+    cold.a.shot('rifle_chaos', null, null, 0)
+    expect(cold.calls.some(([m]) => m === '_metal')).toBe(false)
+  })
+
+  it('用户替换优先：shot_rifle_chaos 命中即整段播放（合成层不再排）', () => {
+    const buf = { duration: 0.2 }
+    const { a, calls } = rig({ shot_rifle_chaos: buf })
+    a.shot('rifle_chaos', null, null, 0)
+    expect(calls).toEqual([['_playBuffer', { buf, gain: 1 }]])
+  })
+
+  it('专属替换缺失回退通用 shot_rifle；两者都无 → 走合成', () => {
+    const buf = { duration: 0.2 }
+    const fb = rig({ shot_rifle: buf })
+    fb.a.shot('rifle_chaos', null, null, 0)
+    expect(fb.calls).toEqual([['_playBuffer', { buf, gain: 1 }]])
+    expect(rig().a && true).toBe(true) // 合成路径由上面的分层用例覆盖
+  })
+})

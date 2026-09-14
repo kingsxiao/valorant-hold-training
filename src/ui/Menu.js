@@ -119,7 +119,7 @@ export class Menu {
       rampUp: false,
       gapSide: 'left',      // 缺口位置：左 / 右（切换即重建静态地图）
       peekSide: CONFIG.training.peekSide, // Bot 出场侧：left / right 固定一侧 / random 两侧随机
-      weaponSkin: 'default',  // Vandal 皮肤：default / aristocrat（官方商城皮肤，GLB 缺失自动回退默认）
+      weaponSkin: 'chaos',   // Vandal 皮肤：chaos 混沌序曲（能量音效+枪口包，默认）/ default / aristocrat（GLB 缺失自动回退本体）
       flash: 'off',         // 闪光干扰：off / kayo / skye / phoenix / yoru / breach / reyna / gecko / mix（敌方道具按维基数值 1:1）
       // 出厂默认 = 游戏默认形态（青十字，见 crosshairDefaults）；已有存档由
       // _sanitizeCfg 迁移/清洗后覆盖
@@ -159,6 +159,14 @@ export class Menu {
     c.gapSide = c.gapSide === 'right' ? 'right' : 'left' // 旧存档里的 doubleGap 一并失效忽略
     c.peekSide = ['left', 'right', 'random'].includes(c.peekSide) ? c.peekSide : CONFIG.training.peekSide
     c.weaponSkin = sanitizeSkin('vandal', c.weaponSkin)
+    // 一次性迁移（2026-09-14）：出厂默认皮肤改为混沌序曲（开火音色/枪口包；
+    // 枪模仍为本体，视觉不变）。旧存档里的 'default' 升到 'chaos'——只换声音；
+    // 旗标落盘后，之后手选回 'default' 不再被迁移覆盖
+    if (!c.skinChaosMig) {
+      c.skinChaosMig = 1
+      if (c.weaponSkin === 'default') c.weaponSkin = 'chaos'
+      saveSettings({ weaponSkin: c.weaponSkin, skinChaosMig: 1 })
+    }
     c.flash = ['kayo', 'skye', 'phoenix', 'yoru', 'breach', 'reyna', 'gecko', 'mix'].includes(c.flash) ? c.flash : 'off'
     // 旧版简化准星模型（length/gap/tShape）→ 游戏同款模型；再全量清洗防手改
     if (isLegacyCrosshair(c.crosshair)) c.crosshair = migrateLegacyCrosshair(c.crosshair)

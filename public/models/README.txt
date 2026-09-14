@@ -23,6 +23,11 @@
                           + 官方贴图 DF/NM/MRS/AEM 四件套，非官方游戏提取资源）
   viewmodel-phantom.glb   Phantom 第一人称持枪模型（GN_Carbine_S0 + 氚光瞄具 Tritium
                           自发光；同上来源）
+  viewmodel-vandal-chaos.glb
+                          Vandal 混沌序曲（Prelude to Chaos）皮肤模型——可选投放位，
+                          仓库不带此文件：缺位时皮肤回退本体枪模，仅开火音色
+                          （rifle_chaos）与枪口焰/曳光走混沌包；投放后自动换模
+                          （Audio 合成音色仍生效，可放 public/sfx/shot_rifle_chaos.* 覆盖）
                           - 转换管线：Rocklan 模型包 .blend（Blender 2.83）→
                             Blender 4.5 LTS headless 导出 GLB（贴图内嵌）→
                             glTF-Transform 材质补丁（MRS 通道语义与 glTF 不一致 →

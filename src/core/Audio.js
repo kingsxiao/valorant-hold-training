@@ -4,6 +4,9 @@
 //  - 枪声多层合成：超快脆瞬态(高频) + 腔体扫频(中频) + 低频"胸口感" + 机械循环层
 //    + 干混响尾音；每发随机抖动增益/音高，全自动连射不像采样循环
 //  - 消音武器（Phantom/Ghost）独立音色：去炸裂脆响、压低音量，保留闷"噗"与枪机轻响
+//  - 皮肤音色（rifle_chaos = 混沌序曲 Prelude to Chaos Vandal）：能量系"重锤电击"——
+//    数字脆瞬态 + 方波 zap 下扫 + 比默认更深一档的低频锤 + 电离嘶尾；各层瞬起快收
+//    → 点射段落感/确认感强（社区口碑：混沌枪声全狂徒第一梯队、点射确认感极佳）
 //  - 敌方枪声按距离低通闷化（远处的枪声"厚而闷"），配合 HRTF 可听声辨位
 //  - 爆头"叮"：不谐和钟体分音 + 金属瞬态 + 头盔"顿"感；击杀确认：分量低频 + 高频铃尾
 //  - 支持用户自有音频替换：把文件放进 public/sfx/（见该目录说明），加载后优先播放
@@ -152,7 +155,7 @@ export class AudioSys {
   async _loadUserSfx() {
     if (this._loadStarted) return
     this._loadStarted = true
-    const names = ['shot_rifle', 'shot_phantom', 'shot_pistol', 'shot_ghost', 'shot_handcannon', 'shot_knife',
+    const names = ['shot_rifle', 'shot_rifle_chaos', 'shot_phantom', 'shot_pistol', 'shot_ghost', 'shot_handcannon', 'shot_knife',
       'headshot', 'hit', 'kill', 'death', 'hurt', 'footstep', 'round_start']
     await Promise.all(names.map(async (name) => {
       for (const ext of ['mp3', 'wav', 'ogg']) {
@@ -294,14 +297,15 @@ export class AudioSys {
     this.ensure()
     if (!this.ctx) return
     const out = this._spatial(pos, listener)
-    // 用户替换优先（消音武器有专属替换则用，否则回退通用步枪/手枪替换）
+    // 用户替换优先（消音/皮肤音色有专属替换则用，否则回退通用步枪/手枪替换）
     const userKey = {
-      rifle: 'shot_rifle', rifle_suppressed: 'shot_phantom',
+      rifle: 'shot_rifle', rifle_chaos: 'shot_rifle_chaos', rifle_suppressed: 'shot_phantom',
       pistol: 'shot_pistol', pistol_suppressed: 'shot_ghost',
       handcannon: 'shot_handcannon', knife: 'shot_knife',
     }[kind]
     const userBuf = this.user[userKey] ?? (kind === 'rifle_suppressed' ? this.user.shot_rifle
-      : kind === 'pistol_suppressed' ? this.user.shot_pistol : null)
+      : kind === 'pistol_suppressed' ? this.user.shot_pistol
+      : kind === 'rifle_chaos' ? this.user.shot_rifle : null)
     if (userBuf) { this._playBuffer(userBuf, out, { gain: pos ? 0.8 : 1 }); return }
 
     const own = !pos
@@ -321,6 +325,21 @@ export class AudioSys {
         this._noiseBurst(out, { dur: 0.022, freq: 3000, q: 2.5, gain: 0.26 * v * hb, delay: 0.045 }) // 栓机回位
         this._osc(out, { type: 'square', freq: 620, dur: 0.012, gain: 0.06 * v, delay: 0.045 })
         if (heat > 0.65) this._metal(out, 2900, 0.16, 0.05, 0.06) // 枪管过热余振
+        break
+      case 'rifle_chaos': // 混沌序曲 Vandal：能量系"重锤电击"。段落感 = 各层瞬起
+        // 快收（主段 ≤75ms）+ 层间微错位：点射读成"电-爆-坠"三拍，每发独立成段。
+        // 比默认 vandal 更暗更重（低频锤低一整档≈Odin 分量感）、攻击更"电"更脆
+        this._noiseBurst(out, { dur: 0.009, freq: 6900 * j * hb, q: 0.5, gain: 1.22 * v, type: 'highpass' }) // 数字裂空脆响
+        this._osc(out, { type: 'square', freq: 2350 * j, freqEnd: 400, dur: 0.024, gain: 0.24 * v }) // 能量 zap 主音（快下扫）
+        this._osc(out, { type: 'square', freq: 2380 * j, freqEnd: 405, dur: 0.024, gain: 0.18 * v }) // zap 失谐伴生（拍频电噪质感）
+        this._noiseBurst(out, { dur: 0.075, freq: 950 * j * ht, freqEnd: 230, q: 0.85, gain: 0.98 * v, delay: 0.004 }) // 腔体爆扩（更暗更厚）
+        this._osc(out, { type: 'sawtooth', freq: 155 * j * ht, freqEnd: 42, dur: 0.07, gain: 0.6 * v }) // 低频锤体
+        this._thump(out, { freq: 118 * ht, freqEnd: 36, dur: 0.1, gain: 0.78 * v }) // 胸口重坠（深一档）
+        this._osc(out, { type: 'sine', freq: 74, freqEnd: 47, dur: 0.13, gain: 0.18 * v, delay: 0.014 }) // 能量下坠余韵
+        this._noiseBurst(out, { dur: 0.032, freq: 3700 * hb, q: 4.2, gain: 0.2 * v, delay: 0.03 }) // 电离嘶鸣
+        this._noiseBurst(out, { dur: 0.02, freq: 2300, q: 2.8, gain: 0.2 * v, delay: 0.05 }) // 栓机循环（更暗更紧）
+        this._osc(out, { type: 'square', freq: 540, dur: 0.011, gain: 0.05 * v, delay: 0.05 })
+        if (heat > 0.65) this._metal(out, 3100, 0.15, 0.05, 0.06) // 能量芯过热嗡鸣
         break
       case 'rifle_suppressed': // Phantom："噗"——无炸裂脆响，整体更轻
         this._noiseBurst(out, { dur: 0.065, freq: 1050 * j * ht, freqEnd: 260, q: 0.9, gain: 0.85 * v })

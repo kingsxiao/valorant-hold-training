@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { SKINS, vmKeyFor, baseWeaponOf, sanitizeSkin } from '../src/weapons/skinMap.js'
+import { SKINS, vmKeyFor, baseWeaponOf, sanitizeSkin, soundKindFor } from '../src/weapons/skinMap.js'
 
 describe('skinMap 键解析', () => {
   it('default/空皮肤 → 武器本体键', () => {
@@ -21,19 +21,42 @@ describe('skinMap 键解析', () => {
   })
   it('baseWeaponOf 剥皮肤后缀；普通键原样', () => {
     expect(baseWeaponOf('vandal:aristocrat')).toBe('vandal')
+    expect(baseWeaponOf('vandal:chaos')).toBe('vandal')
     expect(baseWeaponOf('phantom')).toBe('phantom')
   })
   it('sanitizeSkin 白名单外回退 default', () => {
     expect(sanitizeSkin('vandal', 'aristocrat')).toBe('aristocrat')
+    expect(sanitizeSkin('vandal', 'chaos')).toBe('chaos')
     expect(sanitizeSkin('vandal', 'prime')).toBe('default')
     expect(sanitizeSkin('vandal', undefined)).toBe('default')
     expect(sanitizeSkin('phantom', 'aristocrat')).toBe('default')
   })
-  it('皮肤目录：default 无文件，其余有 GLB 文件名', () => {
+  it('皮肤目录：default 无文件，其余有 GLB 文件名（投放位，缺文件运行时回退本体）', () => {
     expect(SKINS.vandal.some(s => s.id === 'default' && !s.file)).toBe(true)
     for (const s of SKINS.vandal.filter(s => s.id !== 'default')) {
       expect(s.file).toMatch(/^viewmodel-vandal-[a-z0-9]+\.glb$/)
     }
+  })
+  it('混沌序曲在册：音效皮肤（GLB 投放位 + rifle_chaos 音色）', () => {
+    const chaos = SKINS.vandal.find(s => s.id === 'chaos')
+    expect(chaos, 'chaos 皮肤条目存在').toBeTruthy()
+    expect(chaos.file).toBe('viewmodel-vandal-chaos.glb') // 投放位：仓库不带，缺位回退本体枪模
+    expect(chaos.audio).toBe('rifle_chaos')
+  })
+})
+
+describe('soundKindFor（音效皮肤 → 开火音色）', () => {
+  it('混沌序曲 → rifle_chaos（WeaponSystem._fireOne 消费，弹道不动）', () => {
+    expect(soundKindFor('vandal', 'chaos')).toBe('rifle_chaos')
+  })
+  it('无 audio 字段的皮肤 / 默认皮肤 → null（用武器默认音色）', () => {
+    expect(soundKindFor('vandal', 'default')).toBeNull()
+    expect(soundKindFor('vandal', 'aristocrat')).toBeNull() // 有 GLB 无音效包：仍用本体音色
+  })
+  it('未知皮肤 / 其他武器（皮肤目录只登记 vandal）→ null', () => {
+    expect(soundKindFor('vandal', 'ion')).toBeNull()
+    expect(soundKindFor('phantom', 'chaos')).toBeNull()
+    expect(soundKindFor('classic', 'chaos')).toBeNull()
   })
 })
 

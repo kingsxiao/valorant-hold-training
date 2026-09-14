@@ -9,6 +9,11 @@
 export const SKINS = {
   vandal: [
     { id: 'default', label: '默认' },
+    // 混沌序曲（Prelude to Chaos）：能量系音效皮肤。audio 给出开火音色 kind
+    //（Audio.shot 的 rifle_chaos），枪口焰/曳光走 WeaponSystem.CHAOS_FX 同包。
+    // GLB 不随仓库分发（file 仅为投放位：放入 models/viewmodel-vandal-chaos.glb
+    // 即自动换模，缺位回退本体枪模）——弹道/散布/后坐与皮肤无关，一概不动
+    { id: 'chaos', label: '混沌序曲（Chaos）', file: 'viewmodel-vandal-chaos.glb', audio: 'rifle_chaos' },
     { id: 'aristocrat', label: 'Aristocrat（鎏金）', file: 'viewmodel-vandal-aristocrat.glb' },
   ],
 }
@@ -23,6 +28,14 @@ export function vmKeyFor(weaponId, skin, available) {
 // 'vandal:aristocrat' → 'vandal'（普通键原样返回）
 export function baseWeaponOf(key) {
   return String(key).split(':')[0]
+}
+
+// weaponId + 皮肤 id → 开火音色 kind（Audio.shot 的 kind 参数）。音效皮肤在
+// 条目上带 audio 字段（如混沌序曲 'rifle_chaos'）；无该字段/未知皮肤/其他武器
+// 返回 null，调用方回退武器默认音色。皮肤只换"声音与火光"，不影响弹道
+export function soundKindFor(weaponId, skin) {
+  const entry = (SKINS[weaponId] ?? []).find(s => s.id === skin)
+  return entry?.audio ?? null
 }
 
 // 设置面板/存档清洗：白名单外的皮肤 id 回退 default

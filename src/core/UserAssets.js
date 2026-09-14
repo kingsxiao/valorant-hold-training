@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js'
 import { applyAgentTextures, applyViewmodelTextures, applyHandsTextures } from '../world/ModelTexturing.js'
 import { buildLocomotion } from './Locomotion.js'
+import { SKINS } from '../weapons/skinMap.js'
 
 // 手指修长化：J-Toastie 手为卡通比例（指节粗短）。该骨架指骨沿本地 +Y 延伸，
 // 平移 y 分量拉伸 12% 改善长宽比；Wrist/Hand 不动（手掌宽度不变）。
@@ -45,6 +46,9 @@ function smoothSkinGeometry(root) {
 //                                          含 bolt carrier / magazine / suppressor 独立网格）
 //   public/models/viewmodel-vandal-aristocrat.glb → Vandal 官方皮肤（Aristocrat 收藏集，
 //                                          内部代号 ArtDeco；Rocklan 包 .blend 转换，镀金 + RedDot 瞄具）
+//   public/models/viewmodel-vandal-chaos.glb → Vandal 皮肤（混沌序曲 Prelude to Chaos；
+//                                          仓库不带模型，投放即换模；缺位时皮肤=本体枪模+
+//                                          rifle_chaos 音效/CHAOS_FX 枪口包）
 //   public/models/viewmodel.glb          → 旧版单枪模回退（Quaternius AK47，CC0 白模，
 //                                          无贴图 → 程序化盒式投影 UV + 材质）
 //   public/models/glove.glb              → 第一人称高精度手套（当前内置：J-Toastie "Gloved Hand"，CC-BY 3.0，
@@ -73,15 +77,22 @@ export async function loadUserAssets() {
   }
   // 无畏契约英雄池：命中即整体取代 agent.glb 单模板（main.js 注入 Bot.customTemplates）
   const AGENT_POOL = ['agent-jett.glb', 'agent-phoenix.glb', 'agent-sage.glb', 'agent-sova.glb']
+  // Vandal 皮肤 GLB（skinMap 目录驱动：条目带 file 的都试装；缺文件静默回退本体
+  // 枪模 + 皮肤音效包——混沌序曲即此形态：仓库不带模型，投放即换模）
+  const SKIN_GLB = SKINS.vandal.filter(s => s.file)
   const loaded = await Promise.all([
     tryLoad('agent.glb'), ...AGENT_POOL.map(tryLoad),
     tryLoad('viewmodel-vandal.glb'), tryLoad('viewmodel-phantom.glb'),
-    tryLoad('viewmodel-vandal-aristocrat.glb'),
+    ...SKIN_GLB.map(s => tryLoad(s.file)),
     tryLoad('viewmodel.glb'), tryLoad('hands.glb'), tryLoad('glove.glb'),
   ])
   const agentGltf = loaded[0]
   const agentPoolGltfs = loaded.slice(1, 1 + AGENT_POOL.length)
-  const [vandalGltf, phantomGltf, aristocratGltf, legacyVmGltf, handsGltf, gloveGltf] = loaded.slice(1 + AGENT_POOL.length)
+  const vmStart = 1 + AGENT_POOL.length
+  const [vandalGltf, phantomGltf, legacyVmGltf, handsGltf, gloveGltf] = [
+    loaded[vmStart], loaded[vmStart + 1], ...loaded.slice(-3),
+  ]
+  const skinGltfs = loaded.slice(vmStart + 2, -3)
 
   // agent 归一化：匿名节点命名/轨道引用重写（BrainStem 类模型）→ 缩放 1.8m →
   // 居中贴地 → 白模补程序化贴图（自带 PBR 贴图的英雄 GLB 原生材质直接保留）
@@ -160,7 +171,7 @@ export async function loadUserAssets() {
     return vm
   }
   for (const [key, gltf] of [['vandal', vandalGltf], ['phantom', phantomGltf],
-    ['vandal:aristocrat', aristocratGltf]]) {
+    ...SKIN_GLB.map((s, i) => [`vandal:${s.id}`, skinGltfs[i]])]) {
     if (!gltf?.scene) continue
     const vm = normalizeViewmodel(gltf.scene)
     if (!hasRealTextures(vm)) applyViewmodelTextures(vm) // 白模才盒式投影 + 程序化材质

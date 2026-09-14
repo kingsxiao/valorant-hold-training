@@ -4,7 +4,7 @@ import { CONFIG, makeSprayPattern } from '../core/Config.js'
 import { damageFor, spreadAt, spreadParts } from './ballistics.js'
 import { buildWeaponModels, buildCustomArms } from './ViewmodelFactory.js'
 import { poseGloveHands, poseCustomHands } from './HandsRig.js'
-import { vmKeyFor, baseWeaponOf } from './skinMap.js'
+import { vmKeyFor, baseWeaponOf, soundKindFor } from './skinMap.js'
 
 // ============================================================================
 // 武器系统：命中判定（射线）+ 散布 + 后坐力弹道 + 切枪 + 第一人称持枪动画。
@@ -414,6 +414,9 @@ export class WeaponSystem {
 
   _fireOne() {
     const w = this.weapon
+    // 开火音色：音效皮肤（混沌序曲 → rifle_chaos）覆盖武器默认，其余用本体音色。
+    // 皮肤只换"声音与火光"——弹道/散布/后坐/握姿与皮肤无关（游戏同规则）
+    const snd = soundKindFor(this.currentId, this.skin) ?? w.sound
     this.onShotFired?.()
 
     // 弹道表（累计偏移）+ 散布锥。表按武器生成：水平保护弹数 / 换向节拍来自
@@ -493,11 +496,14 @@ export class WeaponSystem {
     // 枪口风格随武器：消音枪小火苗+弱光+暗曳光+淡烟（音画一致的"闷"），
     // 大口径（Sheriff）更大更亮的火球与更硬的照明
     const sup = w.suppressed ?? w.sound.endsWith('_suppressed')
+    const chaos = snd === 'rifle_chaos'
     const muzzleStyle = sup
       ? SUPPRESSOR_FX.muzzle
-      : w.sound === 'handcannon'
-        ? { scale: 1.3, lightPeak: 22, lightDur: 0.038, flashColor: 0xfff2dc } // 实测标定（FX_TIMING.lightHeavy）
-        : {}
+      : chaos
+        ? CHAOS_FX.muzzle
+        : w.sound === 'handcannon'
+          ? { scale: 1.3, lightPeak: 22, lightDur: 0.038, flashColor: 0xfff2dc } // 实测标定（FX_TIMING.lightHeavy）
+          : {}
     this.fx.muzzle(_muzzle, muzzleStyle)
     this.fx.muzzleSmoke(_muzzle, _dir, this.heat * (sup ? SUPPRESSOR_FX.smoke : 1))
     if (vm.userData.eject) {
@@ -512,10 +518,11 @@ export class WeaponSystem {
     else if (wallHit) end.set(wallHit.x, wallHit.y, wallHit.z)
     else end.multiplyScalar(maxDist).add(eye)
     // 曳光接触闪光按命中物着色：机器人/道具=蓝白电火花 / 墙=暖色碎屑 / 脱靶不闪
-    this.fx.tracer(_muzzle, end, sup ? SUPPRESSOR_FX.tracer : {}, botHit || propHit ? 'bot' : wallHit ? 'wall' : false)
+    this.fx.tracer(_muzzle, end, sup ? SUPPRESSOR_FX.tracer : chaos ? CHAOS_FX.tracer : {},
+      botHit || propHit ? 'bot' : wallHit ? 'wall' : false)
 
     // 声音（heat=连射热量 → 音色随持续射击渐变）
-    this.audio.shot(w.sound, null, { pos: eye, yaw: p.yaw }, this.heat)
+    this.audio.shot(snd, null, { pos: eye, yaw: p.yaw }, this.heat)
 
     if (propHit) {
       // 击毁技能道具（Leer 眼 60HP / Dizzy 20HP）：按躯体伤害结算，打碎即无效化
@@ -858,4 +865,13 @@ const SUPPRESSOR_FX = {
   muzzle: { scale: 0.5, opacity: 0.55, lightPeak: 5, lightDur: 0.025, color: 0xffd2a0 }, // 实测标定（FX_TIMING.lightSuppressed）
   tracer: { opacity: 0.45, sat: 0.45, width: 0.7 },
   smoke: 0.5,
+}
+
+// 混沌序曲（Prelude to Chaos）皮肤开火视觉：能量系枪口焰——更大更亮的冷白绿闪
+// + 薄荷色点光（36ms，略长于步枪默认 28ms），曳光淡绿能量色（hue 0.40，默认
+// 暖橙 0.11）。与 Audio 的 rifle_chaos"重锤电击"音色同包：音画一致的能量武器
+// 读数（皮肤能量芯为绿系发光，焰/光取薄荷绿系）。弹道/散布/后坐不变
+const CHAOS_FX = {
+  muzzle: { scale: 1.15, lightPeak: 20, lightDur: 0.036, color: 0xa9f2c8, flashColor: 0xf2fff7 },
+  tracer: { hue: 0.40, width: 1.05, opacity: 0.9 },
 }

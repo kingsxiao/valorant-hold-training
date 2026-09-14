@@ -622,8 +622,14 @@ export class Bot {
     // 蹲踞时 idle（全身站立待机）按蹲姿权重退缩——否则站立腿型与蹲姿五五混
     // 合（半蹲脚悬空，贴地跟踪跟着追不上）
     if (A.idle) A.idle.setEffectiveWeight(W.idle * (1 - (this._crouchW ?? 0)))
-    A.walk.setEffectiveWeight(A.idle ? W.walkN : W.walkNoIdle)
-    if (A.run) A.run.setEffectiveWeight(W.runN)
+    // 蹲走权威：蹲走起来时站姿 loco 层（走/跑/横移）按 (1−cwWW) 退缩——否则
+    // mixer 归一化把 crouchWalk/strafeWalk/crouchIdle 摊成三份，蹲姿被稀释成
+    // 三分之一（实测骨盆高 0.92 vs 官方 0.825，浅蹲 9cm + 膝屈不足；165 轮。
+    // 160 轮只给锚管道加了 locoK/cwW 门，姿态权重从未同步——滑速探针量不出
+    // 姿态稀释，锚已经把脚钉住了）
+    const cwK = 1 - Math.min(1, Math.max(0, this._crouchWW ?? 0))
+    A.walk.setEffectiveWeight((A.idle ? W.walkN : W.walkNoIdle) * cwK)
+    if (A.run) A.run.setEffectiveWeight(W.runN * cwK)
     const ph = ((this.walkPhase % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
     A.walk.time = (ph / (Math.PI * 2)) * A.walk.getClip().duration
     if (A.run) A.run.time = (ph / (Math.PI * 2)) * A.run.getClip().duration
@@ -631,8 +637,8 @@ export class Bot {
     // STRAFE_STEP_LEN 换算——那套 1.15m 节奏只属于程序化侧移覆盖）
     if (A.strafe) {
       const S = A.strafe[this._strafeSide ?? 'E']
-      S.walk.setEffectiveWeight(W.walkS)
-      S.run.setEffectiveWeight(W.runS)
+      S.walk.setEffectiveWeight(W.walkS * cwK)
+      S.run.setEffectiveWeight(W.runS * cwK)
       S.walk.time = (ph / (Math.PI * 2)) * S.walk.getClip().duration
       S.run.time = (ph / (Math.PI * 2)) * S.run.getClip().duration
       // 非当前侧的对侧动作压零（防 _strafeSide 切换后残留权重）
@@ -648,7 +654,7 @@ export class Bot {
       for (const s of this._runAddKeys) {
         const a = A.runAdd[s]
         a.time = (ph / (Math.PI * 2)) * a.getClip().duration
-        a.setEffectiveWeight(s === addSide ? W.runN + W.runS : 0)
+        a.setEffectiveWeight(s === addSide ? (W.runN + W.runS) * cwK : 0)
       }
     }
   }
@@ -1619,7 +1625,10 @@ export class Bot {
         this._jumpArcY = 0
       }
       if (this.anim.crouchIdle) {
-        this.anim.crouchIdle.setEffectiveWeight(this._crouchW)
+        // 蹲走起来时让位（×(1−cwWW)）：crouchWalk 自己就是蹲姿——crouchIdle
+        // 再挂 1/3 权重会把骨盆多压 ~1cm + 待机摆动混进步频（165 轮，与
+        // _setAnimWeights 的 cwK 同源）
+        this.anim.crouchIdle.setEffectiveWeight(this._crouchW * (1 - this._crouchWW))
       }
       if (this.anim.stopAdd) {
         this._braceW = smoothW(this._braceW ?? 0, braceTarget, dt, 8, 7)

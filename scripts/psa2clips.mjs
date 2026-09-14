@@ -188,6 +188,93 @@ for (const [hero, files] of Object.entries(SRC)) {
     out[hero][k] = typeof spec === 'string' ? clipFrom(spec) : clipFromFull(spec.path)
   }
 }
+
+// ── 蹲族单侧 IK 锚 z 抬高修复（165 轮）────────────────────────────────
+// 全库锚 z 普查：所有 clip 两侧触地平台都落在 0.116~0.136，唯蹲族三处例外
+// （实测 psa 原始数据即如此，非转换错误）：
+//   CrouchIdle      R 侧恒 0.172（L 0.123）→ 蹲踞站定右脚悬空 4.9cm
+//   CrouchWalkE  R 侧最低 0.152（L 0.123）→ 蹲走 E 右脚悬空 ~2.9cm
+//   CrouchWalkW  L 侧最低 0.160（R 0.124）→ 蹲走 W 左脚悬空 ~3.6cm
+// 判定为数据缺陷而非官方踮脚的依据：实测脚尖（L_Toe/R_Toe 世界高）同样悬
+// 空 3~7cm（好侧脚尖 0.00~0.04 贴地）——若是踮脚姿态，脚尖应在地面。
+// 修复口径：整条 z 曲线下沉 δ = 坏侧平台 − 同 clip 好侧平台（walkW 坏侧摆动
+// 峰 0.288−0.036=0.252 与好侧 0.251 互证 = 全曲线恒定偏移；横向 y 与触地窗
+// 扫速不动——坏侧 stance 段 ~1.5 m/s 扫速本来就与好侧一致，只缺落地）
+const IK_Z_REPAIRS = [
+  { clip: out.crouch.idle, bad: 'R', name: 'crouchIdle' },
+  { clip: out.crouch.walkE, bad: 'R', name: 'crouchWalkE' },
+  { clip: out.crouch.walkW, bad: 'L', name: 'crouchWalkW' },
+  // 斜向蹲走同族缺陷（L 侧抬高 1.3~1.6cm；165 轮普查发现，当前无波型使用、
+  // 数据先治好备将来斜向波）：SE 0.136/0.120、SW 0.136/0.123
+  { clip: out.crouch.walkSE, bad: 'L', name: 'crouchWalkSE' },
+  { clip: out.crouch.walkSW, bad: 'L', name: 'crouchWalkSW' },
+]
+const CW_STEP_CANON = 0.735 // 官方蹲走步距（Locomotion.CROUCH_WALK_STEP 同源）
+for (const { clip, bad, name } of IK_Z_REPAIRS) {
+  const good = bad === 'L' ? 'R' : 'L'
+  const minZ = (side) => {
+    let m = Infinity
+    for (let i = 0; i < clip.n; i++) m = Math.min(m, clip.ik[side][i * 3 + 2])
+    return m
+  }
+  const dz = minZ(bad) - minZ(good)
+  for (let i = 0; i < clip.n; i++) {
+    clip.ik[bad][i * 3 + 2] = +(clip.ik[bad][i * 3 + 2] - dz).toFixed(5)
+  }
+  console.log(`IK z repair: ${name} side ${bad} dz=${dz.toFixed(4)}`)
+}
+
+// 蹲走坏侧第二/三刀（165 轮续，按侧别实测择优）：
+//  第二刀 z 平台压平（E+W 都启用）：δ 下沉后坏侧仍无平台段（好侧 9~14 帧平
+//   段，坏侧窗边 0.137~0.168 波动轻吻几下）——整窗压平 = 官方 IK 目标的整窗
+//   落地约束。触地窗内锚 z 恒平台，可达段脚全窗贴地
+//  第三刀 y 线性化（仅 W）：实测 W 触地窗内「锚自身世界速度 med 0.91 m/s」
+//   （钳制仅占 27%）——W 原始 y 窗内扫速分布 2.11/0.0/1.45 m/s@自然速率
+//   （净幅对、分布错），线性化 = 恒 2×0.735/周期（med 0.87→0.68）。E 侧实测
+//   反而劣化（触地 51→5 帧）——E 原始 y「慢起步再加速」与骨盆起伏相位耦合
+//   （髋高相位恰逢锚远端 dTarget 1.13 > 腿长 0.948，恒速线性化让远端停留更
+//   久 = 越距窗更长），E 的 y 保持原样
+//  stance 窗手工定案（反相窗 + 净扫幅双验证）：E R = f09-f17（净扫 0.459 vs
+//   官方 0.457）、W L = f19-f03 环回（0.756 vs 0.763）。touchdown 值不动，
+//   liftoff 随扫幅差平移，摆动段按相位仿射校正（官方摆动形状保留）。自动
+//   窗检测会把摆动低段框进来（实测 24 帧把脚胶死地面），勿回退
+const IK_STANCE_REBUILD = [
+  { clip: null, bad: 'R', name: 'crouchWalkE', from: 9, to: 17, linear: false },
+  { clip: null, bad: 'L', name: 'crouchWalkW', from: 19, to: 3, linear: true },
+]
+for (const rep of IK_STANCE_REBUILD) {
+  rep.clip = { crouchWalkE: out.crouch.walkE, crouchWalkW: out.crouch.walkW }[rep.name]
+}
+for (const { clip, bad, name, from, to, linear } of IK_STANCE_REBUILD) {
+  const n = clip.n
+  const ik = clip.ik[bad]
+  const steps = ((to - from + n) % n) // 窗内区间数（环回）
+  const frameDt = clip.duration / (n - 1)
+  // z 压平到平台
+  const plat = Math.min(...Array.from({ length: n }, (_, i) => ik[i * 3 + 2]))
+  for (let k = 0; k <= steps; k++) ik[((from + k) % n) * 3 + 2] = +plat.toFixed(5)
+  let yLog = 'y:原样'
+  if (linear) {
+    // y 线性化（官方口径扫速，方向取数据自身的净扫向）
+    const y0 = ik[from * 3 + 1]
+    const y1old = ik[to * 3 + 1]
+    const rate = CW_STEP_CANON * 2 / clip.duration
+    const dir = Math.sign(y1old - y0) || 1
+    const y1new = +(y0 + dir * rate * steps * frameDt).toFixed(5)
+    for (let k = 1; k <= steps; k++) {
+      ik[((from + k) % n) * 3 + 1] = +(y0 + dir * rate * k * frameDt).toFixed(5)
+    }
+    // 摆动段仿射校正：from 端不动，to 端平移 (y1new − y1old) 按相位 u 线性分摊
+    const swingSteps = n - 1 - steps
+    for (let k = 1; k < swingSteps; k++) {
+      const idx = ((to + k) % n) * 3 + 1
+      const u = k / swingSteps
+      ik[idx] = +(ik[idx] + u * (y1new - y1old)).toFixed(5)
+    }
+    yLog = `y: ${y0.toFixed(3)}→${y1new.toFixed(3)} (was ${y1old.toFixed(3)})`
+  }
+  console.log(`IK stance rebuild: ${name} ${bad} f${from}→f${to} (${steps + 1}f) z→${plat.toFixed(4)} ${yLog}`)
+}
 // 急停支架（Spine1-3+Neck 上身后压 + 腿，0.667s）：加法层，叠在 kamae 上——
 // 单条目全骨骼 clip（SRC 循环是「集合→多 clip」语义，stopAdd 不适用故单独导出）
 out.stopAdd = clipFromFull('assets-raw/core-psa/TP_Core_StopAdd.psa')

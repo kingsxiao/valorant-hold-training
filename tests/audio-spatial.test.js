@@ -236,3 +236,62 @@ describe('shot rifle_chaos（混沌序曲开火音色）', () => {
     expect(rig().a && true).toBe(true) // 合成路径由上面的分层用例覆盖
   })
 })
+
+// 击杀确认 Kovaak 化（166 轮）：donk = 瞬态敲 + 三角波音高下坠 + 紧致低频 +
+// 高频微点。口径：四层与入参 delay 同瞬间落地（无 +45/55ms 铃尾）、~90ms 收
+// 干净、无中频撕裂噪声层（与弹着/身体命中的噪声族一耳分开）
+describe('kill（Kovaak 风 donk 击杀确认）', () => {
+  const rig = (user = null) => {
+    const a = new AudioSys()
+    a.ctx = {}
+    if (user) a.user = user
+    const calls = []
+    for (const m of ['_noiseBurst', '_osc', '_thump', '_metal']) {
+      a[m] = (dest, opts) => calls.push([m, opts])
+    }
+    a._playBuffer = (buf, dest, opts) => calls.push(['_playBuffer', { buf, ...opts }])
+    return { a, calls }
+  }
+
+  it('donk 四层齐全：瞬态敲（2.3kHz click）+ 三角波 350→165 下坠 + 150→52 低频 + 8kHz 微点', () => {
+    const { a, calls } = rig()
+    a.kill(0, 1, false)
+    expect(calls.length).toBe(4)
+    expect(calls.some(([m, o]) => m === '_noiseBurst' && o.dur === 0.006 && o.freq === 2300 && o.gain > 0.3)).toBe(true)
+    expect(calls.some(([m, o]) => m === '_osc' && o.type === 'triangle' && o.freq === 350 && o.freqEnd === 165 && o.dur === 0.085)).toBe(true)
+    expect(calls.some(([m, o]) => m === '_thump' && o.freq === 150 && o.freqEnd === 52 && o.dur <= 0.08)).toBe(true)
+    expect(calls.some(([m, o]) => m === '_noiseBurst' && o.type === 'highpass' && o.freq > 8000 && o.dur <= 0.005)).toBe(true)
+  })
+
+  it('四层同瞬间落地、总长 ≤90ms：无延迟铃尾（旧版 +45/55ms 合音感已移除）', () => {
+    const { a, calls } = rig()
+    a.kill(0, 1, false)
+    for (const [, o] of calls) expect(o.delay ?? 0).toBe(0)
+    for (const [, o] of calls) expect((o.delay ?? 0) + o.dur).toBeLessThanOrEqual(0.09)
+    expect(calls.some(([m]) => m === '_metal')).toBe(false)
+  })
+
+  it('连杀 pitch 抬整调（音头/低频随 pitch 缩放）；soft 只压亮层（敲/微点 ×0.8）', () => {
+    const { a, calls } = rig()
+    a.kill(0, 1.5, true)
+    expect(calls.some(([m, o]) => m === '_osc' && o.freq === 350 * 1.5 && o.freqEnd === 165 * 1.5)).toBe(true)
+    expect(calls.some(([m, o]) => m === '_thump' && o.freq === 150 * 1.5)).toBe(true)
+    expect(calls.some(([m, o]) => m === '_osc' && o.gain === 0.6)).toBe(true) // 音头不压
+    expect(calls.some(([m, o]) => m === '_noiseBurst' && o.freq === 2300 * 1.5 && Math.abs(o.gain - 0.38 * 0.8) < 1e-9)).toBe(true)
+  })
+
+  it('爆头路径 delay=0.1 全层顺延——_thump 透传 delay（旧版被吞提前响的回归）', () => {
+    const { a, calls } = rig()
+    a.kill(0.1, 1, true)
+    for (const [, o] of calls) expect(o.delay).toBe(0.1)
+    const thump = calls.find(([m]) => m === '_thump')
+    expect(thump[1].delay).toBe(0.1)
+  })
+
+  it('用户替换优先：kill 缓冲命中即整段播放（合成层不再排）', () => {
+    const buf = { duration: 0.2 }
+    const { a, calls } = rig({ kill: buf })
+    a.kill(0, 1, false)
+    expect(calls).toEqual([['_playBuffer', { buf, delay: 0, rate: 1 }]])
+  })
+})

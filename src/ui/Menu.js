@@ -167,6 +167,14 @@ export class Menu {
       if (c.weaponSkin === 'default') c.weaponSkin = 'chaos'
       saveSettings({ weaponSkin: c.weaponSkin, skinChaosMig: 1 })
     }
+    // 一次性迁移（2026-09-15）：出场节奏提速 + 两段式随机掷法（见 BotManager）。
+    // 旧存档里仍是出厂默认对 600/2600 的升到新默认 400/1400；用户自定义过的
+    // 值（拖过滑条落盘）原样保留——只迁移默认，不覆盖选择
+    if (!c.delayMig) {
+      c.delayMig = 1
+      if (c.delayMin === 600 && c.delayMax === 2600) { c.delayMin = 400; c.delayMax = 1400 }
+      saveSettings({ delayMin: c.delayMin, delayMax: c.delayMax, delayMig: 1 })
+    }
     c.flash = ['kayo', 'skye', 'phoenix', 'yoru', 'breach', 'reyna', 'gecko', 'mix'].includes(c.flash) ? c.flash : 'off'
     // 旧版简化准星模型（length/gap/tShape）→ 游戏同款模型；再全量清洗防手改
     if (isLegacyCrosshair(c.crosshair)) c.crosshair = migrateLegacyCrosshair(c.crosshair)

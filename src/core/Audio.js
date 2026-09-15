@@ -262,10 +262,11 @@ export class AudioSys {
     o.start(t); o.stop(t + dur + 0.02)
   }
 
-  // 低频"分量"层：正弦速降（开火胸口感 / 击杀落点），频率微抖避免每发一样
+  // 低频"分量"层：正弦速降（开火胸口感 / 击杀落点），频率微抖避免每发一样。
+  // delay 必须透传：爆头击杀路径 kill(delay=0.1) 的低频层要等"叮"落完再落
   _thump(dest, { freq = 160, freqEnd = 48, dur = 0.08, gain = 0.5, delay = 0 } = {}) {
     const jitter = 1 + (Math.random() * 2 - 1) * 0.08
-    this._osc(dest, { type: 'sine', freq: freq * jitter, freqEnd, dur, gain })
+    this._osc(dest, { type: 'sine', freq: freq * jitter, freqEnd, dur, gain, delay })
   }
 
   // 不谐和金属钟体：f / 1.5f / 2.5f 分音指数衰减（爆头叮 / 击杀铃尾共用）
@@ -398,20 +399,26 @@ export class AudioSys {
     }
   }
 
-  // soft=爆头击杀路径：叮（hitMark head）承载"爆头"信息先落，确认音的高频
-  // 铃尾层 ×0.8 让位——两套金属分音不糊在一起，层级分明
+  // soft=爆头击杀路径：叮（hitMark head）承载"爆头"信息先落，确认音的亮层
+  // ×0.8 让位——两套金属分音不糊在一起，层级分明
   kill(delay = 0, pitch = 1, soft = false) {
     this.ensure()
     if (!this.ctx) return
     if (this.user.kill) { this._playBuffer(this.user.kill, this.bus, { delay, rate: pitch }); return }
-    // 击杀确认：低频"分量"落点 + 撕裂脆层 + 上行铃尾（确认感）+ 高频光泽
-    // pitch：连杀每级升半音（上限 +4），听觉反馈连杀节奏
+    // 击杀确认（166 轮 Kovaak 化"donk"）：打击乐化——瞬态敲击 + 圆润音高下坠 +
+    // 紧致低频分量 + 高频微点，四层同瞬间落地、~90ms 收干净。旧版的中频撕裂
+    // 噪声层与 +45/55ms 延迟铃尾（Valorant 击杀横幅的合音感）移除：确认感来自
+    // 音头下坠本身；tonal 音色也让它与弹着/身体命中的噪声族一耳分开。
+    // pitch：连杀每级升半音（上限 +4），donk 整体抬调
     const hs = soft ? 0.8 : 1
-    this._thump(this.dryBus, { freq: 170 * pitch, freqEnd: 44, dur: 0.13, gain: 0.55, delay })
-    this._noiseBurst(this.dryBus, { dur: 0.09, freq: 700 * pitch, freqEnd: 170, q: 0.9, gain: 0.4, delay })
-    this._noiseBurst(this.dryBus, { dur: 0.05, freq: 6500, q: 0.8, gain: 0.16 * hs, type: 'highpass', delay })
-    this._osc(this.dryBus, { type: 'triangle', freq: 1568 * pitch, dur: 0.07, gain: 0.2 * hs, delay: delay + 0.045 })
-    this._metal(this.dryBus, 2093 * pitch, 0.24, 0.18 * hs, delay + 0.055)
+    // 瞬态"敲"：6ms 木质 click——打击感的起音
+    this._noiseBurst(this.dryBus, { dur: 0.006, freq: 2300 * pitch, q: 0.8, gain: 0.38 * hs, delay })
+    // 音头主体"咚"：三角波 350→165Hz 快速下坠（Kovaak donk 的圆润核心）
+    this._osc(this.dryBus, { type: 'triangle', freq: 350 * pitch, freqEnd: 165 * pitch, dur: 0.085, gain: 0.6, delay })
+    // 低频分量：150→52Hz 短 thump（落点的"重"，比旧版 0.13s 收紧近半）
+    this._thump(this.dryBus, { freq: 150 * pitch, freqEnd: 52, dur: 0.08, gain: 0.45, delay })
+    // 高频光泽：4ms 8kHz 微 click——"干净"的顶（点一下就走，不留嘶尾）
+    this._noiseBurst(this.dryBus, { dur: 0.004, freq: 8200 * pitch, q: 0.6, gain: 0.1 * hs, type: 'highpass', delay })
   }
 
   // 子弹掠过（对枪失败 Bot 朝你开火）：超音速爆裂"啪" + 下滑呼啸尾，

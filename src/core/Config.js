@@ -187,8 +187,8 @@ export const CONFIG = {
   // ---- 训练模式默认参数（可在菜单改）----
   training: {
     roundSeconds: 60,       // 30 / 60 / 120 / 0=无限
-    peekDelayMinMs: 600,    // 架枪模式：Bot 出现前的随机等待
-    peekDelayMaxMs: 2600,
+    peekDelayMinMs: 400,    // 架枪模式：Bot 出现前的随机等待下限（两段式掷法见 BotManager）
+    peekDelayMaxMs: 1400,   // 上限：单次最长也就 ~1.4s，不干等
     peekSide: 'left',       // Bot 出场侧：left / right 固定一侧练同向预瞄，random 保留两侧随机
     weaponSkin: 'default',  // Vandal 皮肤：default / aristocrat（官方商城 Aristocrat 收藏集，镀金）
     crouchWalkChance: 0.2,  // pull 波掷定蹲走拉出的概率（官方蹲走循环，命中区 ×0.70）
@@ -196,6 +196,8 @@ export const CONFIG = {
                             // （1.4-2.7）——步幅恒定、步频随移速（151 轮定案，回归测试锁死）
     crossChance: 0.5,       // 每波风格：侧面跑过（贯穿缺口顺跑向）vs 正面横移走出（面向玩家拉出即缩）
     pullJiggleChance: 0.3,  // 拉出波里"露头即缩"jiggle-peek 的概率（拉到中段折返）
+    doublePeekChance: 0.18, // 双拉波概率：同一波两人同帧拉出（同侧同风格锁步跟随）
+    doublePeekLane: 0.9,    // 双拉第二人沿横移方向的后退量（m）≈ 0.17s 身位差
     // 161 轮起：Bot 不跳、不停顿（无急停/站定对枪/跳 peek 波；aimTime 判负随
     // 停顿一并移除，漏杀 = 完整走完波次未被击杀）
   },

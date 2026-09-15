@@ -2,7 +2,8 @@ import { Bot } from './Bot.js'
 import { CROUCH_WALK_SPEED } from '../core/Locomotion.js'
 import { CONFIG } from '../core/Config.js'
 
-// 纯架枪训练：随机延迟后 Bot 以两种节奏出掩体（连出两波同风格强制换）
+// 纯架枪训练：三段式随机延迟（快速补拉/短段/长段）后 Bot 以两种节奏出掩体
+// （连出两波同风格强制换），偶发双拉波——同一波两人锁步拉出（模拟双拉转火）。
 // ——贯穿跑过（面向玩家横移贯穿缺口）或拉出即缩（面向玩家横移拉到折返点即
 // 缩回，含"露头即缩"变体）。全程面朝玩家、不开枪、不跳、不停顿——纯移动靶
 // 练习，漏掉的 Bot（完整走完波次未被击杀）只进统计
@@ -20,6 +21,20 @@ export function pickIdleBot(idle, corpses = [], poolSize, cap, random = Math.ran
   if (idle.length) return idle[Math.floor(random() * idle.length)]
   if (!corpses.length) return null
   return corpses.reduce((oldest, b) => (b.corpseAt < oldest.corpseAt ? b : oldest))
+}
+
+// 双拉第二人波次规格：整条横移线路沿行进方向平移 off（起点/折返/终点/jiggle
+// 折返点一起搬），速度与风格全同 → 两人在场上锁步跟随、路径平行永不交叉穿模。
+// 展开成新对象（不共享引用）：pull 的 phase/exitX 会被各自波次原地改写
+export function shiftPeek(pk, off) {
+  const s = { ...pk, startX: pk.startX + off }
+  if (pk.style === 'cross') s.endX = pk.endX + off
+  else {
+    s.turnX = pk.turnX + off
+    s.endX = pk.endX + off
+    if (pk.jiggleAt) s.jiggleAt = pk.jiggleAt + off
+  }
+  return s
 }
 
 export class BotManager {
@@ -132,9 +147,12 @@ export class BotManager {
   get _rampDelay() { return Math.max(0.45, Math.pow(0.93, this._rampKills)) }
   get _rampSpeed() { return Math.min(1.3, this.params.speedMult * Math.pow(1.02, this._rampKills)) }
 
-  // 架枪对枪调度：单缺口单槽位——每波走完缩回/对枪失败后按延迟区间重新排程
+  // 架枪对枪调度：单缺口主槽常驻排程 + 双拉副槽（只在主槽双拉波同帧唤醒，平时休眠）
   _initHold() {
-    return { slots: [{ nextAt: 0, bot: null }] }
+    return { slots: [
+      { nextAt: 0, bot: null },
+      { nextAt: Infinity, bot: null, partner: true },
+    ] }
   }
 
   _stepHold(dt) {
@@ -147,10 +165,20 @@ export class BotManager {
     const nowMs = this.now() * 1000
     const activeBot = slot.bot && slot.bot.active && slot.bot.mode === 'peek' ? slot.bot : null
 
-    if (slot.nextAt === 0) { // 未排程 → 按渐进难度随机下一次出现时间
+    if (slot.nextAt === 0) { // 未排程 → 重新掷下一次出现时间
+      if (slot.partner) { slot.nextAt = Infinity; return } // 副槽不自主排程：只随双拉波唤醒
       const dMin = Math.max(250, this.params.delayMin * this._rampDelay)
       const dMax = Math.max(dMin + 100, this.params.delayMax * this._rampDelay)
-      slot.nextAt = nowMs + rand(dMin, dMax)
+      // 三段式掷法（166 轮）：快速补拉（队友即刻跟上，还原对枪补位/双拉节奏）+
+      // 短段（快连靶）+ 长段（留一段呼吸重置预瞄）——快慢交替比均匀分布更像真人
+      // 推点；上限仍是 dMax，不会出现干等的长间隔。补拉段随 dMin 缩放（拖慢
+      // 滑条时它也变慢，不越权推翻用户节奏）
+      const mid = dMin + (dMax - dMin) * 0.45
+      const bMin = Math.max(150, dMin * 0.45)
+      const bMax = Math.max(bMin + 80, dMin * 0.7)
+      const r = Math.random()
+      slot.nextAt = nowMs + (r < 0.18 ? rand(bMin, bMax)
+        : r < 0.75 ? rand(dMin, mid) : rand(mid, dMax))
       return
     }
 
@@ -196,6 +224,17 @@ export class BotManager {
       slot.nextAt = 0
       slot.lastStyles.push(b.peek.style)
       if (slot.lastStyles.length > 2) slot.lastStyles.shift() // 只留最近两条防连击判断
+      // 双拉波（166 轮）：掷中则第二人同帧拉出——同侧同风格，整条线路沿行进
+      // 方向后退一个身位 → 场上锁步跟随。还原本体双拉情景：一次缺口曝光两个
+      // 目标，杀完第一个要立刻转火。副槽上一只还在场时本轮放弃双拉（不叠三人）
+      const partner = this.hold?.slots[1]
+      if (partner && !partner.bot?.active && Math.random() < CONFIG.training.doublePeekChance) {
+        const b2 = this._bot()
+        b2.peek = shiftPeek(b.peek, -b.peek.dir * CONFIG.training.doublePeekLane)
+        b2.place(b2.peek.startX, this.map.peekLineZ, 'peek')
+        b2.slot = partner
+        partner.bot = b2
+      }
       return
     }
 
@@ -208,7 +247,7 @@ export class BotManager {
         if (activeBot.mode === 'peek') this.stats.duelsLost++
         activeBot.hide()
         slot.bot = null
-        slot.nextAt = 0
+        slot.nextAt = slot.partner ? Infinity : 0 // 副槽回休眠，主槽重掷下一波
       }
       if (pk.style === 'pull') {
         // 正面横移拉出（不停顿）：out（面向玩家横移拉出）→ leave（缩回原掩体）
@@ -264,8 +303,8 @@ export class BotManager {
       bot.startDeath()
       // 击杀即波次结束：从击杀时刻重掷下一波延迟（finishWave 同语义）。不重置
       // 的话 slot.nextAt 仍是"出场时刻+旧延迟"，中后段击杀的下一波会零延迟
-      // 出场、绕过 delayMin 下限（节奏训练器的核心口径）
-      if (bot.slot) { bot.slot.bot = null; bot.slot.nextAt = 0 }
+      // 出场、绕过 delayMin 下限（节奏训练器的核心口径）。副槽回休眠（不自主排程）
+      if (bot.slot) { bot.slot.bot = null; bot.slot.nextAt = bot.slot.partner ? Infinity : 0 }
       // 击杀时的爆头"叮"由 main 播（那里才知道连杀数 → 按连杀升调，与击杀
       // 确认音同一 pitch 阶梯）；未击杀命中的叮仍在下方（基础音高）
       this.onEvent?.('killed', { bot, zone })
@@ -279,7 +318,7 @@ export class BotManager {
   // 就地回收并重排下一波——不走完旧线（会从已封死的墙段里穿出来）。
   // 尸体也一并回收（躺在旧缺口坐标，新墙可能穿过它）
   onMapRebuilt() {
-    for (const slot of this.hold?.slots ?? []) { slot.bot = null; slot.nextAt = 0 }
+    for (const slot of this.hold?.slots ?? []) { slot.bot = null; slot.nextAt = slot.partner ? Infinity : 0 }
     for (const b of this.bots) {
       // dying（死亡动画中）也要回收：不回收会在动画结束时转成 corpse，永久
       // 躺在旧缺口的横移线上——新墙可能直接穿过尸体
@@ -294,7 +333,7 @@ export class BotManager {
     if (!h || this.now() < this.countdownUntil) return
     const target = (this.now() + afterSec) * 1000
     for (const slot of h.slots) {
-      if (slot.bot?.active) continue
+      if (slot.partner || slot.bot?.active) continue // 副槽不单飞：闪拉只催主槽下一波
       slot.nextAt = Math.min(slot.nextAt > 0 ? slot.nextAt : Infinity, target)
     }
   }

@@ -62,7 +62,7 @@ describe('BotManager 双拉波', () => {
   it('cross 掷中双拉：第二人同帧出场，线路后退一个身位（startX = x0-2.2-LANE）', () => {
     const { bots, partner } = spawnWave([0, 0]) // 风格 0→cross / 双拉 0<0.18 → 掷中
     expect(bots.length).toBe(2)
-    const [b1, b2] = bots
+    const [, b2] = bots
     expect(partner.bot).toBe(b2)
     expect(b2.slot).toBe(partner)
     expect(b2.peek.style).toBe('cross')

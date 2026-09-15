@@ -116,7 +116,7 @@ nginx:alpine 自带的默认配置已含 gzip 与 MIME；如需上面那套缓�
 
 ## 附：GLB 模型压缩管线
 
-仓库内置模型已经过 [gltf-transform](https://gltf-transform.dev/) 量化压缩（几何 f32 → 8~14bit，KHR_mesh_quantization，three.js GLTFLoader 原生支持、无需解码器；agent.glb 另删除了未使用的动画 clip），整体 -46% ~ -55%。
+仓库内置模型已经过 [gltf-transform](https://gltf-transform.dev/) 量化压缩（几何 f32 → 8~14bit，KHR_mesh_quantization，three.js GLTFLoader 原生支持、无需解码器），整体 -46% ~ -55%。
 
 同名换入你自己的模型后，一键重新压缩：
 

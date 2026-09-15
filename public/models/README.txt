@@ -2,8 +2,8 @@
 
   agent-jett.glb          无畏契约英雄池（jett / phoenix / sage / sova，每只 Bot
   agent-phoenix.glb       随机抽一名；池最多 4 只、波次轮换出场英雄——不是整局
-  agent-sage.glb          锁死一名，见 BotManager.pickIdleBot。命中任一文件即
-  agent-sova.glb          整体取代 agent.glb 单模板）
+  agent-sage.glb          锁死一名，见 BotManager.pickIdleBot。四文件即唯一模板
+  agent-sova.glb          来源（无单模板回退；缺位的兜底是 Bot 内置程序化假人）
   agent-sage.glb          - UE 风格骨架（Pelvis / L_Hip / L_Knee / L_Foot / L_Toe /
   agent-sova.glb            Spine…），骨名映射见 src/core/GaitBake.js（兼容 Mixamo）
                           - 自带 PBR 贴图直接保留；白模才走程序化装甲贴图
@@ -11,13 +11,6 @@
                             现场烘焙（周期 2×1.15m/参考速度，与移速锁相不滑步；
                             跑动上身保持持枪姿态，手臂不出烘焙轨道）
                           - ⚠ 非官方游戏提取资源，无再分发授权（仅个人本地使用）
-
-  agent.glb               训练机器人（假人）外观（英雄池缺位时的单模板回退）
-                          - Y-up、面向 -Z；自动缩放到总高 1.8m、脚底对地、水平居中
-                          - 含 idle/walk/run 动画时按实际移速加权混合（脚步与位移同步）；
-                            单动画模型取走路段播放、静止时冻结
-                          - 建议单网格或少量网格；命中判定不依赖你的网格几何
-                            （固定头/胸/腿球体区域，但会跟随受击后仰/横移侧倾等姿态）
 
   ability-hawk.glb       Skye 闪光鹰 / Gekko Dizzy 官方技能模型（Rocklan 包
   ability-dizzy.glb      .blend 转出；非官方游戏提取资源）——闪光干扰选 skye/
@@ -95,10 +88,9 @@
 - 文件缺失时自动使用内置模型，不影响运行。
 
 当前内置资产与来源（CC-BY 作品请保留署名）：
-  agent.glb               Mixamo "X Bot" 机器人（经 three.js 官方示例分发，
-                          examples/models/gltf/Xbot.glb；动画含 idle/walk/run，
-                          训练靶按实际移速混合播放）。原 BrainStem 备份为
-                          models-optional/agent.brainstem.bak.glb（Microsoft, CC-BY 4.0）。
+  agent-{jett,phoenix,sage,sova}.glb
+                          无畏契约英雄模型（非官方游戏提取资源，经 Rocklan
+                          模型包 .blend 转出）
   viewmodel-vandal.glb    无畏契约 Vandal 几何（非官方游戏提取资源，经
                           github.com/yseho031018/codex-vibe-fps 分发；纯网格，
                           程序化贴图。原 CC-BY AK 备份为
@@ -108,7 +100,13 @@
                           贴图 JPEG 重编码，2026-09-04）
   viewmodel-phantom.glb   "AK 47 Tactical Upgrade" by Mateusz Woliński
                           （Sketchfab，CC-BY 4.0；经 Objaverse 分发，同上压缩管线）
-  hands.glb               J-Toastie "Rigged FPS Arms"（CC-BY 3.0，poly.pizza 分发）
-  glove.glb               J-Toastie "Gloved Hand"（CC-BY 3.0，poly.pizza 分发）
+  arms-official.glb       无畏契约官方第一人称手臂（Phoenix，非官方游戏提取
+                          资源，Rocklan 包 phoenixFirstPerson.blend 转出；官方
+                          104 骨 1P 骨架 + 官方 DF/MRAE/NM 贴图；动画轨道 =
+                          官方 FP_Core_{AK,Carbine}_S0_IdlePose 持枪姿势）
+  hands.glb               J-Toastie "Rigged FPS Arms"（CC-BY 3.0，poly.pizza 分发；
+                          arms-official 缺位时的回退件）
+  glove.glb               J-Toastie "Gloved Hand"（CC-BY 3.0，poly.pizza 分发；
+                          同上回退件）
   （旧版 viewmodel.glb = Quaternius AK47，CC0，备份为
    models-optional/viewmodel.quaternius.bak.glb）

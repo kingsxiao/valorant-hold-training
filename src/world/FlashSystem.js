@@ -292,7 +292,17 @@ export class FlashSystem {
         entry.group.add(root)
         entry.official = root
         entry.bones = bones
-        if (entry.proc) entry.proc.visible = false
+        // 官方模型就位：程序化近似不再是兜底而是死重——从场景图摘除并释放
+        // GPU 资源（仅隐藏虽不渲染，128Hz 的矩阵更新仍会遍历它）
+        if (entry.proc) {
+          entry.group.remove(entry.proc)
+          entry.proc.traverse(o => {
+            o.geometry?.dispose?.()
+            const ms = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])
+            for (const m of ms) m.dispose?.()
+          })
+          entry.proc = null
+        }
       },
       undefined,
       () => { /* 缺文件：程序化兜底 */ },

@@ -195,7 +195,6 @@ export class Menu {
     head.innerHTML = `
       <div>
         <h1>架枪训练 <em>HOLD ANGLE TRAINER</em></h1>
-        <div class="tagline">WebGL 第一人称训练器 · 移速/射速/后坐力按 Valorant 公开参数调校 · 原创程序化建模</div>
       </div>
       <div class="menu-best" hidden></div>
       <div class="head-badge">VHT // 01<small>AIM · HOLD · WIN</small></div>
@@ -226,7 +225,7 @@ export class Menu {
 
       <h2>参数</h2>
       <div class="slider-grid">
-        <div class="slider-row"><label>灵敏度（游戏同换算）</label><input type="range" data-key="sens" min="0.05" max="1.5" step="0.01"><span class="val"></span></div>
+        <div class="slider-row"><label>灵敏度</label><input type="range" data-key="sens" min="0.05" max="1.5" step="0.01"><span class="val"></span></div>
         <div class="slider-row"><label>回合时长</label><input type="range" data-key="roundSeconds" min="0" max="180" step="30"><span class="val"></span></div>
         <div class="slider-row"><label>Bot 出现最小延迟</label><input type="range" data-key="delayMin" min="200" max="2000" step="100"><span class="val"></span></div>
         <div class="slider-row"><label>Bot 出现最大延迟</label><input type="range" data-key="delayMax" min="500" max="5000" step="100"><span class="val"></span></div>
@@ -244,7 +243,7 @@ export class Menu {
       </div>
 
       <div class="tab-page" data-page="crosshair" hidden>
-      <h2>准星 <small class="h2-sub">与游戏设置 1:1 · 支持导入游戏准星代码</small></h2>
+      <h2>准星</h2>
       <div class="ch-wrap">
         <div class="ch-preview"><canvas></canvas></div>
         <div class="ch-groups">
@@ -335,7 +334,6 @@ export class Menu {
         <button class="btn-continue btn-start" hidden>继续训练</button>
         <button class="btn-start">开始训练</button>
         <button class="btn-ghost btn-clear-records">清除纪录</button>
-        <span class="hint" style="margin:0">点击后锁定鼠标 · ESC 暂停（可继续当前回合）· 完整操作见「说明」页</span>
       </div>
     `
     p.append(head, tabs, scroll, foot)
@@ -360,14 +358,13 @@ export class Menu {
     }
 
     // 武器按钮
-    const wname = { vandal: 'Vandal（自动步战）', phantom: 'Phantom（消音/衰减）', sheriff: 'Sheriff（重左轮）', classic: 'Classic（手枪/右键三连发）', ghost: 'Ghost（消音手枪）' }
     for (const group of ['primary', 'secondary']) {
       const box = p.querySelector(`[data-group=${group}]`)
       for (const [id, w] of Object.entries(CONFIG.weapons)) {
         if (w.slot !== group) continue
         const b = document.createElement('button')
         b.className = 'opt-btn'
-        b.textContent = wname[id] ?? w.name
+        b.textContent = w.name
         b.dataset.value = id
         b.onclick = () => { this.cfg[group] = id; this.syncButtons(); saveSettings({ [group]: id }); this.applyAll?.() }
         box.appendChild(b)
@@ -421,14 +418,14 @@ export class Menu {
     const fBox = p.querySelector('[data-group=flashMode]')
     for (const [v, label] of [
       ['off', '闪光干扰 · 关'],
-      ['kayo', 'KAY/O（弹跳手雷）'],
-      ['skye', '斯凯（追踪鹰·官方模型）'],
-      ['phoenix', '火男（弧线球）'],
-      ['yoru', 'Yoru（盲侧碎片·无声）'],
-      ['breach', 'Breach（穿墙闪）'],
-      ['reyna', 'Reyna（凝视之眼·可击落）'],
-      ['gecko', 'Gekko（Dizzy·官方模型）'],
-      ['mix', '七种混合（随机）'],
+      ['kayo', 'KAY/O'],
+      ['skye', '斯凯'],
+      ['phoenix', '火男'],
+      ['yoru', 'Yoru'],
+      ['breach', 'Breach'],
+      ['reyna', 'Reyna'],
+      ['gecko', 'Gekko'],
+      ['mix', '七种混合'],
     ]) {
       const b = document.createElement('button')
       b.className = 'opt-btn'
@@ -441,7 +438,7 @@ export class Menu {
     // 训练开关（渐进难度）
     const tBox = p.querySelector('[data-group=trainOpts]')
     for (const [key, label] of [
-      ['rampUp', '渐进难度（击杀后 Bot 越出越快/越快横移）'],
+      ['rampUp', '渐进难度'],
     ]) {
       const b = document.createElement('button')
       b.className = 'opt-btn'
@@ -453,7 +450,7 @@ export class Menu {
 
     // 画质开关（自适应分辨率 / 阴影 / FPS 显示）
     const gBox = p.querySelector('[data-group=gfxOpts]')
-    for (const [key, label] of [['autoRes', '自适应分辨率（掉帧自动降）'], ['shadows', '阴影'], ['heatShimmer', '热浪扭曲（枪口折射）'], ['showFps', 'FPS 面板']]) {
+    for (const [key, label] of [['autoRes', '自适应分辨率'], ['shadows', '阴影'], ['heatShimmer', '热浪扭曲'], ['showFps', 'FPS 面板']]) {
       const b = document.createElement('button')
       b.className = 'opt-btn'
       b.textContent = label
@@ -584,7 +581,7 @@ export class Menu {
     // 高级开关（开火淡出 / 移动淡出 / 误差叠加间距）
     const advBox = p.querySelector('[data-group=chAdv]')
     for (const [key, label] of [
-      ['fadeFire', '开火时准星淡出（游戏默认开）'],
+      ['fadeFire', '开火时准星淡出'],
       ['fadeMove', '移动时准星淡出'],
       ['overrideFireOffset', '开火误差叠加在准星间距上'],
     ]) {

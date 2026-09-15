@@ -13,8 +13,8 @@ export const SKINS = {
     //（Audio.shot 的 rifle_chaos），枪口焰/曳光走 WeaponSystem.CHAOS_FX 同包。
     // GLB 不随仓库分发（file 仅为投放位：放入 models/viewmodel-vandal-chaos.glb
     // 即自动换模，缺位回退本体枪模）——弹道/散布/后坐与皮肤无关，一概不动
-    { id: 'chaos', label: '混沌序曲（Chaos）', file: 'viewmodel-vandal-chaos.glb', audio: 'rifle_chaos' },
-    { id: 'aristocrat', label: 'Aristocrat（鎏金）', file: 'viewmodel-vandal-aristocrat.glb' },
+    { id: 'chaos', label: '混沌序曲', file: 'viewmodel-vandal-chaos.glb', audio: 'rifle_chaos' },
+    { id: 'aristocrat', label: 'Aristocrat', file: 'viewmodel-vandal-aristocrat.glb' },
   ],
 }
 

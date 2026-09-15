@@ -7,7 +7,7 @@ import { CONFIG } from '../core/Config.js'
 // ——贯穿跑过（面向玩家横移贯穿缺口）或拉出即缩（面向玩家横移拉到折返点即
 // 缩回，含"露头即缩"变体）。全程面朝玩家、不开枪、不跳、不停顿——纯移动靶
 // 练习，漏掉的 Bot（完整走完波次未被击杀）只进统计
-export const MODE_INFO = { label: '架枪对枪', desc: 'Bot 全程面朝玩家横移 peek · 不反击不跳不停' }
+export const MODE_INFO = { label: '架枪对枪' }
 
 const rand = (a, b) => a + Math.random() * (b - a)
 

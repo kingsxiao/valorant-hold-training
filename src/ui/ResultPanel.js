@@ -18,7 +18,6 @@ export class ResultPanel {
       <header class="panel-head">
         <div>
           <h1>回合结算 <em>ROUND RESULT</em></h1>
-          <div class="tagline">本回合训练数据汇总 · 对比上局找短板，下一局保持节奏</div>
         </div>
         <div class="head-badge">VHT // RESULT<small>AIM · HOLD · WIN</small></div>
       </header>
@@ -35,7 +34,6 @@ export class ResultPanel {
         <button class="btn-start">再来一局</button>
         <button class="btn-ghost">调整设置</button>
       </div>
-      <div class="hint">结算后可在设置中微调 Bot 延迟 / 击杀时限，针对性练习。</div>
     `
     this.overlay.appendChild(p)
     this.panel = p

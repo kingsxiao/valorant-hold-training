@@ -303,7 +303,6 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 
 .panel h1 { font-size: 32px; font-weight: 700; letter-spacing: 6px; line-height: 1.15; }
 .panel h1 em { color: var(--accent); font-style: normal; font-size: 13px; font-weight: 700; letter-spacing: 5px; margin-left: 14px; vertical-align: 5px; }
-.panel .tagline { opacity: 0.5; font-size: 12.5px; letter-spacing: 1px; margin-top: 6px; }
 .head-badge {
   flex: none; text-align: right;
   font-family: var(--font-num); font-weight: 700; font-size: 13px; letter-spacing: 3px;
@@ -391,7 +390,6 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
 .slider-row .val { width: 70px; flex: none; text-align: right; font-family: var(--font-num); font-weight: 600; font-size: 13.5px; color: rgba(236, 232, 225, 0.9); font-variant-numeric: tabular-nums; }
 
 /* ===== 准星编辑器（设置面板内，与游戏设置 1:1）===== */
-.panel h2 .h2-sub { margin: 0 0 0 12px; font-size: 11px; font-weight: 500; letter-spacing: 1.5px; opacity: 0.45; }
 .ch-wrap { display: grid; grid-template-columns: 222px 1fr; gap: 18px; align-items: start; }
 /* 预览吸顶：调下面分组滑条时预览常驻视野（游戏设置面板预览同理常驻）；
    画布 backing 480×280 不变、显示 200×117——收窄预览列给双列分组腾宽度 */

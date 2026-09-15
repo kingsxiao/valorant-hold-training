@@ -270,7 +270,7 @@ function startRound(cfg) {
   fx.clearAll() // 清上一局残留的弹孔/弹壳等特效，新回合干净靶场
   hud.setAmmo(weapons.weapon)
   hud.clearKillfeed() // 新回合干净的信息流
-  hud.setMode(MODE_INFO.label, MODE_INFO.desc)
+  hud.setMode(MODE_INFO.label, '')
 
   menu.hide()
   result.hide()
@@ -364,7 +364,7 @@ engine.renderFrame = (alpha, dtMs) => {
   const remainS = bots.params.roundSeconds > 0 && bots.running && bots.roundEndAt > 0
     ? Math.max(0, bots.roundEndAt - bots.now())
     : null
-  hud.setMode(MODE_INFO.label, remainS != null ? `${remainS.toFixed(1)}s` : MODE_INFO.desc) // 游戏时钟：暂停时倒计时冻结
+  hud.setMode(MODE_INFO.label, remainS != null ? `${remainS.toFixed(1)}s` : '') // 游戏时钟：暂停时倒计时冻结
   hud.setTimerUrgent(remainS != null && remainS <= 10 && state.playing) // 最后 10s 红色告急
   _hudAccum.stats += dtMs
   if (_hudAccum.stats > 200) { _hudAccum.stats = 0; hud.setStats(bots.stats, engine) }

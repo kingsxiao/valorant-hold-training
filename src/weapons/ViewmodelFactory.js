@@ -149,7 +149,10 @@ function buildRevolver(M) {
   cyl(g, M.dark, 0.006, 0.13, 0, -0.008, -0.15, 8)                // 排壳杆外壳
   orientVm(g, {
     muzzle: new THREE.Vector3(0, 0.014, -0.25),
-    pos: new THREE.Vector3(0.13, -0.125, -0.24),
+    // y 重校（2026-09-16 渲染帧实测）：-0.125 是旧取景标定，现 baseVmScale/holder
+    // 组合下整枪沉在视锥下缘外（切枪后画面无枪，仅枪口顶缘露 15px）——与
+    // vandal GLB 挂位（y=0）对齐后整枪回到右下标准 FPS 取景
+    pos: new THREE.Vector3(0.13, 0.115, -0.24),
     scale: 0.92,
     eject: new THREE.Vector3(0.024, 0.01, -0.05),
   })
@@ -178,10 +181,10 @@ function buildPistol(M, suppressed) {
   box(g, M.dark, 0.005, 0.014, 0.007, 0, -0.018, -0.02)           // 扳机
   if (suppressed) {
     cyl(g, M.dark, 0.015, 0.1, 0, 0.02, -0.2)                     // 消音管
-    orientVm(g, { muzzle: new THREE.Vector3(0, 0.02, -0.26), pos: new THREE.Vector3(0.13, -0.125, -0.24), scale: 0.95, eject: new THREE.Vector3(0.018, 0.024, -0.05) })
+    orientVm(g, { muzzle: new THREE.Vector3(0, 0.02, -0.26), pos: new THREE.Vector3(0.13, 0.115, -0.24), scale: 0.95, eject: new THREE.Vector3(0.018, 0.024, -0.05) })
   } else {
     cyl(g, M.dark, 0.009, 0.02, 0, 0.02, -0.155)                  // 枪口
-    orientVm(g, { muzzle: new THREE.Vector3(0, 0.02, -0.17), pos: new THREE.Vector3(0.13, -0.125, -0.24), scale: 0.95, eject: new THREE.Vector3(0.018, 0.024, -0.02) })
+    orientVm(g, { muzzle: new THREE.Vector3(0, 0.02, -0.17), pos: new THREE.Vector3(0.13, 0.115, -0.24), scale: 0.95, eject: new THREE.Vector3(0.018, 0.024, -0.02) })
   }
   return g
 }
@@ -203,7 +206,7 @@ function buildKnife(M) {
   const grip = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.04, 0.12), gripM)
   grip.position.set(0, 0, 0.055)
   k.add(blade, tip, guard, grip)
-  orientVm(k, { muzzle: new THREE.Vector3(0, 0, -0.3), pos: new THREE.Vector3(0.15, -0.13, -0.22), scale: 0.95 })
+  orientVm(k, { muzzle: new THREE.Vector3(0, 0, -0.3), pos: new THREE.Vector3(0.15, 0.11, -0.22), scale: 0.95 }) // y 重校同 sheriff（2026-09-16）
   return k
 }
 

@@ -19,6 +19,11 @@
                           - 建议单网格或少量网格；命中判定不依赖你的网格几何
                             （固定头/胸/腿球体区域，但会跟随受击后仰/横移侧倾等姿态）
 
+  ability-hawk.glb       Skye 闪光鹰 / Gekko Dizzy 官方技能模型（Rocklan 包
+  ability-dizzy.glb      .blend 转出；非官方游戏提取资源）——闪光干扰选 skye/
+                          gecko 时挂载，翼骨/悬浮运行时驱动；缺位自动回退程序化
+                          模型（FlashSystem._loadOfficial）
+
   viewmodel-vandal.glb    Vandal 第一人称持枪模型（无畏契约本体：GN_AK_S0 骨架网格
                           + 官方贴图 DF/NM/MRS/AEM 四件套，非官方游戏提取资源）
   viewmodel-phantom.glb   Phantom 第一人称持枪模型（GN_Carbine_S0 + 氚光瞄具 Tritium
@@ -41,6 +46,12 @@
                             其余武器几何素材（Operator/Odin/Sheriff 等未接入）在
                             models-optional/weapons-raw/
                           - 旧版单文件 viewmodel.glb 仍支持（两把步枪共用，作回退）
+
+  viewmodel-vandal-aristocrat.glb
+                          Vandal Aristocrat（鎏金）皮肤枪模（Rocklan 包
+                          aristocratVandal.blend 转出；非官方游戏提取资源）——
+                          菜单皮肤选 aristocrat 时加载；缺位回退本体 Vandal 枪模
+                          （仅标签可选，见 weapons/skinMap.js）
 
   hands.glb               第一人称手臂（含 Hand.L / Hand.R 骨骼的蒙皮模型）
                           - 按骨骼"左手/右手"位置自动对位到枪的握把/护木，手腕下压成持握姿势

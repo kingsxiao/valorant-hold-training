@@ -13,3 +13,6 @@ coverage/
 .video_agent/
 .v2c/
 __pycache__/
+
+# 无授权再分发的原始素材（本地管线数据源，脚本按路径引用，永不入库）
+assets-raw/

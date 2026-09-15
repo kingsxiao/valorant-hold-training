@@ -408,37 +408,50 @@ function applyWeaponSkin(skin) {
   }
 }
 
-// 用户/开源资产（可选）：public/models/ 下的无畏契约英雄池 agent-{jett,phoenix,
-// sage,sova}.glb（命中即取代单模板，每 bot 随机一名英雄）、agent.glb（单模板回退，
-// 当前内置 Mixamo X Bot）、viewmodel-vandal/phantom.glb（双枪各有高模；旧
-// viewmodel.glb 单模型作回退）、glove.glb 与 hands.glb
-loadUserAssets().then(({ agent, agentAnimations, agents, viewmodel, viewmodels, glove, hands }) => {
-  if (agents?.length) { Bot.customTemplates = agents }
-  else if (agent) { Bot.customTemplate = agent; Bot.customAnimations = agentAnimations }
-  const vmMap = {}
-  for (const id of ['vandal', 'phantom']) if (viewmodels?.[id]) vmMap[id] = viewmodels[id]
-  if (!Object.keys(vmMap).length && viewmodel) vmMap.vandal = vmMap.phantom = viewmodel // 旧单模型
-  if (Object.keys(vmMap).length) {
-    // setCustomViewmodel 会把传入场景原地改造成第一人称枪模（pivot 重包裹 + 取景
-    // 参数偏移）。Bot 第三人称挂枪模板与皮肤换装都必须用改造前的纯净克隆——
-    // 否则枪体带着第一人称取景偏移整体平移（实测 vandal 前飘 0.4m，bot 双手全离枪）
-    const vmAll = { ...vmMap }
-    for (const k of Object.keys(viewmodels ?? {})) if (k.includes(':')) vmAll[k] = viewmodels[k]
-    const pristine = Object.fromEntries(Object.entries(vmAll).map(([k, v]) => [k, v.clone(true)]))
-    Bot.weaponTemplates = Object.fromEntries(Object.entries(vmMap).map(([k]) => [k, pristine[k]]))
-    // 皮肤枪模（键 'vandal:aristocrat'）并入 WeaponSystem，但不进 Bot 模板池——
-    // Bot 的 vandal 项由 applyWeaponSkin 按当前皮肤从纯净克隆显式替换，两把枪 50/50 出场不变
-    weapons.setCustomViewmodel(vmAll)
-    vmSkinAssets.base = pristine.vandal ?? null
-    vmSkinAssets.skins = Object.fromEntries(
-      Object.entries(pristine).filter(([k]) => k.includes(':')))
-    applyWeaponSkin(state.cfg.weaponSkin) // 资产晚到：按已存设置补一次皮肤
+// 用户/开源资产：public/models/ 下的无畏契约英雄池 agent-{jett,phoenix,sage,
+// sova}.glb（每 bot 随机一名英雄；缺位的兜底是 Bot 内置程序化假人）、
+// viewmodel-vandal/phantom.glb（双枪各有高模）、glove.glb 与 hands.glb。
+// 分两批到货（UserAssets.loadUserAssets）：关键批（首英雄+vandal+手件）先开局，
+// 后台批（其余英雄+phantom+皮肤）到货后增量接线——枪模只接新键，
+// 重跑 setCustomViewmodel 会把旧枪二次包裹/缩放
+const appliedVmKeys = new Set()
+function wireViewmodels(viewmodels) {
+  const fresh = Object.keys(viewmodels ?? {}).filter(k => !appliedVmKeys.has(k))
+  if (!fresh.length) return
+  for (const k of fresh) appliedVmKeys.add(k)
+  // setCustomViewmodel 会把传入场景原地改造成第一人称枪模（pivot 重包裹 + 取景
+  // 参数偏移）——原件交给 WeaponSystem 改造；Bot 第三人称挂枪模板与皮肤换装都
+  // 用改造前的纯净克隆——否则枪体带着第一人称取景偏移整体平移（实测 vandal
+  // 前飘 0.4m，bot 双手全离枪）
+  const pristine = Object.fromEntries(fresh.map(k => [k, viewmodels[k].clone(true)]))
+  weapons.setCustomViewmodel(Object.fromEntries(fresh.map(k => [k, viewmodels[k]])))
+  for (const k of fresh) {
+    // 本体枪（vandal/phantom）进 Bot 挂枪模板池；皮肤键（'vandal:aristocrat'）
+    // 不进池——Bot 的 vandal 项由 applyWeaponSkin 按当前皮肤从纯净克隆显式替换，
+    // 两把枪 50/50 出场不变
+    if (k.includes(':')) vmSkinAssets.skins[k] = pristine[k]
+    else {
+      if (!Bot.weaponTemplates) Bot.weaponTemplates = {}
+      Bot.weaponTemplates[k] = pristine[k]
+      if (k === 'vandal') vmSkinAssets.base = pristine[k]
+    }
   }
-  // 手部方案（2026-09-03 定稿）：glove.glb 五指手套双手实例为主路径——五指独立
-  // 骨骼可逐指贴合真实握枪姿势（合并指的 hands.glb 做不到逐指）；建模袖臂仍取
-  // hands.glb（placeArmsIK 两骨 IK + 解剖学定尺精确衔接手套腕口）。
-  // hands.glb 整臂（四指合并）保留为后备（glove 缺失/骨架不符时回退）。
-  // 手部方案：glove 主路径，缺失/骨架不符（返回 false）回退 hands 整臂
+  applyWeaponSkin(state.cfg.weaponSkin) // 皮肤资产晚到：按已存设置补一次
+}
+loadUserAssets((assets) => {
+  wireViewmodels(assets.viewmodels)
+  // 官方 1P 手臂随后台批到货（onLate 在 out.fpArms 赋值后才触发）；在位后
+  // weaponMeshFor 的三层优先级自然接管显隐，glove/hands 转为回退件
+  if (assets.fpArms) weapons.setOfficialArms(assets.fpArms)
+})
+  .then(({ agents, viewmodels, glove, hands }) => {
+  if (agents?.length) { Bot.customTemplates = agents } // 后台英雄 push 进同一数组即生效
+  wireViewmodels(viewmodels)
+  // 手部方案（2026-09-15 官方件落地后三层优先级）：
+  //   1. arms-official.glb 官方 1P 手臂（Phoenix 官方模型+官方 IdlePose 持枪姿势，
+  //      OfficialArms 三点拟合贴枪）——主路径，后台批到货即接管
+  //   2. glove.glb 五指手套双手实例 + hands.glb 袖臂 IK——官方件缺失/装配失败回退
+  //   3. hands.glb 整臂（四指合并）——末级回退
   const gloveOk = !!glove && weapons.setGloveHands(glove, hands) !== false
   if (!gloveOk && hands) weapons.setCustomHands(hands)
   // 模板晚到不打断任何状态：未开局时 startRound → resetRound 自然清池换新模板；

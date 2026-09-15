@@ -4,6 +4,7 @@ import { CONFIG, makeSprayPattern } from '../core/Config.js'
 import { damageFor, spreadAt, spreadParts } from './ballistics.js'
 import { buildWeaponModels, buildCustomArms } from './ViewmodelFactory.js'
 import { poseGloveHands, poseCustomHands } from './HandsRig.js'
+import { attachOfficialArms, animateOfficialArms } from './OfficialArms.js'
 import { vmKeyFor, baseWeaponOf, soundKindFor } from './skinMap.js'
 
 // ============================================================================
@@ -138,6 +139,11 @@ export class WeaponSystem {
     this.handsAnim = null // glove 路径的手部动画基准（HandsRig.poseGloveHands 注入）
     this._gloveAssets = null // {scene, arms}：切枪重摆（双枪各自握姿）用
     this._handsPoseFor = null // 当前已摆姿态对应的武器 id
+    this._armsAssets = null // 官方 1P 手臂 {scene, animations}（arms-official.glb）
+    this.officialArms = null // 已装配的官方手臂实例（挂 vmHolder 下）
+    this._armsPoseFor = null // 官方手臂已装配姿势对应的武器 id
+    this._armsAnim = null // 官方手臂动画层（OfficialArms.buildArmsAnim：idle/ads/equip/fireD）
+    this._armsEquipU = 1 // 官方 equip 动画进度 1=不播（_animateHands 按切枪时间轴写）
   }
 
   // 当前武器的自有枪模（无则 null）。双枪（vandal/phantom）各有 GLB；
@@ -165,11 +171,19 @@ export class WeaponSystem {
     for (const [vid, v] of Object.entries(this.viewmodels)) v.visible = !useCustom && vid === id
     for (const v of Object.values(this.customVms)) v.visible = v === vm
     this.muzzleOffset.copy((vm ?? this.viewmodels[id]).userData.muzzle)
-    if (this.customArms) this.customArms.visible = useCustom && !this.customHands // 自有枪模手臂随其显隐
-    if (this.customHands) this.customHands.visible = useCustom // GLB 手臂随步枪显隐
+    // 官方 1P 手臂优先（官方姿势+官方贴图），在位时旧手臂/手套路径全部让位。
+    // 切枪重摆：官方姿势逐枪不同（vandal/phantom 各自的 IdlePose），装配含
+    // 三点拟合（毫秒级，被切枪动画遮住无感知）
+    if (useCustom && this._armsAssets && this._armsPoseFor !== id) {
+      if (attachOfficialArms(this, this._armsAssets, id)) this._armsPoseFor = id
+    }
+    const armsOn = useCustom && !!this.officialArms
+    if (this.customArms) this.customArms.visible = useCustom && !this.customHands && !armsOn // 自有枪模手臂随其显隐
+    if (this.customHands) this.customHands.visible = useCustom && !armsOn // GLB 手臂随步枪显隐
+    if (this.officialArms) this.officialArms.visible = armsOn
     // 双枪各自握姿：切枪且手部资产在位时重摆（cloneSkinned×2 + IK，毫秒级，
-    // 被切枪动画遮住无感知）
-    if (useCustom && this._gloveAssets && this._handsPoseFor !== id) {
+    // 被切枪动画遮住无感知）。官方手臂在位时跳过（handsAnim 已置 null）
+    if (useCustom && this._gloveAssets && this._handsPoseFor !== id && !armsOn) {
       poseGloveHands(this, this._gloveAssets.scene, this._gloveAssets.arms, id)
     }
   }
@@ -177,7 +191,15 @@ export class WeaponSystem {
   // ---- GLB 手部装配委托（姿态数学见 HandsRig.js）----
   setGloveHands(scene, arms) {
     this._gloveAssets = { scene, arms }
+    if (this.officialArms) return true // 官方手臂在位时 glove 只存模板不摆（回退备用）
     return poseGloveHands(this, scene, arms, this.currentVmId)
+  }
+  // 官方 1P 手臂（arms-official.glb，装配数学见 OfficialArms.js）
+  setOfficialArms(gltf) {
+    this._armsAssets = gltf
+    const ok = attachOfficialArms(this, gltf, this.currentVmId)
+    this.weaponMeshFor(this.currentVmId) // 刷新三层手臂显隐（官方件接管/回退）
+    return ok
   }
   setCustomHands(hands) { return poseCustomHands(this, hands) }
 
@@ -554,6 +576,7 @@ export class WeaponSystem {
     this.grip = 1
     this.heat = Math.min(1, this.heat + 0.13)
     this.vmBolt = 1
+    if (this._armsAnim?.fire) this._armsAnim.fire.t = 0 // 官方手臂 fire 加法层重触发
     if (this.currentId === 'sheriff') this._indexCylinder()
     this.lastFireTime = this.now
   }
@@ -724,7 +747,7 @@ export class WeaponSystem {
       THREE.MathUtils.lerp(WeaponSystem.vmBaseYaw, AH.yaw, ak) + this.sYaw.x + this.swayX * 2 + swYaw,
       THREE.MathUtils.lerp(WeaponSystem.vmBaseRoll, 0, ak) + this.strafeRoll + this.sRoll.x + this.airK * 0.03 + raise * 0.5,
     )
-    this._animateHands(dt)
+    this._animateHands(dt, epc, !!this._pendingVmSwap)
     this._updateVmParts(dt)
   }
 
@@ -747,7 +770,16 @@ export class WeaponSystem {
   // 待机肌腱微动：五指不同相位慢频 ±0.4° 漂移 —— 长时间架枪时手不僵死
   // （架枪训练器的核心场景是持枪等待，静帧死手最出戏）
   static FINGER_TWITCH = { thumb: 0, index: 1.3, middle: 2.1, ring: 3.4, pinky: 4.2 }
-  _animateHands(dt) {
+  _animateHands(dt, epc = 1, swapping = false) {
+    // 官方手臂姿势管线：equipU 按切枪时间轴换算（两段式切枪 SWAP_AT=0.35：
+    // 阶段1 旧枪下移期 swapping=true 保持 idle；阶段2/开局首取枪 epc<1 时按
+    // (epc-0.35)/0.65 播官方 equip——attach 恰发生在换枪瞬间 = equip(0) 起点，
+    // 末帧=idle 分毫不差，进出无跳变）
+    if (this._armsAnim) {
+      this._armsEquipU = (swapping || epc >= 1) ? 1
+        : THREE.MathUtils.clamp((epc - 0.35) / 0.65, 0, 1)
+      animateOfficialArms(this, dt)
+    }
     const ha = this.handsAnim
     if (!ha) return
     // 扳机扣合度：快扣慢松（扣 40ms 级，松 ~100ms）

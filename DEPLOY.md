@@ -403,3 +403,178 @@ main.applyWeaponSkin 克隆替换（敌我同步换肤）。
 5. **过渡平滑性回归门**：`scripts/verify-transitions.mjs` 量测全部过渡（起跳
    坡/滞空 crossfade/落地/蹲走起立）的 Head 帧间位移与 Spine1 角步进，断言
    ≤0.09m/≤4°；改动跳跃或蹲走链路后必跑。
+
+## 附：官方第一人称手臂（Phoenix 1P）获取与还原（2026-09-15）
+
+**产物**：`public/models/arms-official.glb`（1.19MB，Phoenix 官方 1P 手臂：7471 顶点
+蒙皮 + 104 骨官方 1P 骨架 + 官方 DF/MRAE/NM 2048² 贴图内嵌；动画轨道
+`vandal_idle` / `phantom_idle` = 官方持枪待机姿势）。运行时 `src/weapons/OfficialArms.js`
+装配，glove/hands 开源件降级为回退件。
+
+**素材来源**（均在 Rocklan 官方包 Drive，文件夹 ID 见上附录）：
+- 手臂：`Agents/Phoenix/phoenixFirstPerson.blend`（本地 `assets-raw/abilities/`，
+  贴图已打包在 blend 内）。骨架名即官方 1P 约定：`R/L_{Clavicle,Shoulder,Elbow,Hand}`
+  + 五指 `{Index,Middle,Ring,Pinky}{0..3}` / `L_Thumb{1..3}` + `Camera`（1P 相机骨，
+  head=相机位）+ `R/L_WeaponPoint` / `MasterWeapon` / `WeaponADS`（官方挂枪点）。
+- 官方持枪姿势：`Animations/Shared/First Person/FP_Core_{AK,Carbine}_S0_IdlePose.psa`
+  （AK=Vandal、Carbine=Phantom；Weapon Animations/<枪>/ 目录里只有 Fire/Equip/Reload，
+  idle 全在 Shared 下）。已下载 8 个 1P psa 到 `assets-raw/fp-arms-psa/`。
+
+**psa → Blender 姿态应用配方**（`scripts/fp-arms-from-psa.py`，渲染验证双手呈官方
+握持手型、MasterWeapon 落在官方腰射枪位）：psa 局部四元数**不能**直接按父链 ⊗ 合成
+（Rocklan blend 的骨局部已被 Blender 化）。用 Befzz blender3d_import_psk_psa 的
+"非 psk 骨架"分支配方：
+```
+post_quat = q_parent⁻¹ ⊗ q_bone        # rest 旋转差（blend 层级父骨）
+chanQ = (p_quat ⊗ post_quat)⁻¹         # 根骨先共轭 p_quat（bDontInvertRoot=True）
+chanP = post_quat⁻¹ ⊗ (p_pos×0.01 − orig_loc)
+pb.rotation_quaternion = chanQ ; pb.location = chanP
+```
+（psa 位置 cm→m；父链用 blend 层级——BONENAMES+72 的 parent 字段与实际不符）
+
+**GLB 导出**（`scripts/fp-arms-export.py`）：姿势在 Blender 摆好后**烘成 action** 再
+随 GLB 导出动画轨道（`export_animation_mode='NLA_TRACKS'`，bind=ref）——比手工换算
+通道稳健（glTF 导出器骨节点约定自洽）。两个坑：① NLA 轨道建好必须立即 `mute=True`，
+否则 depsgraph 求值会把后续 apply_pose 的通道覆盖回第一条（四姿势全变第一个姿势即此）；
+② Blender 4.5.9 无 `export_bone_directions` 参数。
+
+**贴图补丁** `scripts/arms-glb-patch.mjs`（MRAE→glTF ORM 语义不一致，摘除 +
+metal 0.02/rough 0.85 布料参数；法线保留）→ `scripts/optimize-models.mjs`（7.4MB→
+1.19MB；prune 会删掉一个冗余 Skin，主 skin 104 joints 完好）。
+
+**运行时装配**（OfficialArms.attachOfficialArms）：
+1. cloneSkinned 实例 + 动画轨道首帧写骨局部量 = 官方姿势；
+2. 三点相似拟合贴枪：官方 `R_Hand`/`L_Hand` 骨 ↔ 现役枪 GLOVE_POSES 腕锚（与手套
+   路径同一标定），官方 `Camera` 骨 ↔ vmScene 原点（1P 相机位置，眼对眼）；旋转由
+   三点定向、缩放只取腕-腕边（握把到护木的真实跨度）、**平移按右腕精确锚定**（腕轴
+   已被旋转+缩放精确映射 → 双腕同时零误差落锚；相机点只承担姿态余量——两侧三角形
+   不相似，质心式定位会把残差摊到手上，实测双腕偏 11.4cm 即此因）；
+3. `vmHolder.attach(root)` 保持世界变换 → 后坐/摇摆/ADS 缩放全程手不脱枪。
+（四五轮后终态：枪本地系两点拟合 + 数据解滚转，root 直接挂 vm 下——见末两节）
+切枪重摆走 `weaponMeshFor`（`_armsPoseFor` 键），非 GLB 枪（Sheriff 等）自动隐藏。
+`_animateHands` 逐指动画对官方手臂停用（官方姿势自带扳机指放置，骨名也不兼容）。
+
+**后续可扩展**（数据已就位未接入）：`FP_Core_*_S0_{Fire,WalkAdd,RunAdd,Equip}.psa`
+官方 1P 开火后坐/移动摆动/切枪动画（同一管线烘轨道，运行时插值播放）；
+Phantom ADS 官方姿势 = `FP_Core_Carbine_S0_Aim2{E,S,W}.psa`（Aim2N 缺失）；
+其余英雄 1P 手臂在 Drive `Agents/<英雄>/` 同路径（KayO 已在本地 abilities/）。
+
+### 附：官方 1P 手臂二轮打磨（2026-09-15 下午）
+
+**腕锚校准（ARMS_ANCHORS）**：GLOVE_POSES 的腕锚是为 J-Toastie 手套掌型调的，
+官方手掌相对腕骨偏置不同——直用时左手悬空 11-20mm（指尖到枪面）。页面内扫描
+（双手五指尖到枪面最近顶点距离均值最小化 + <3.5mm 穿插罚项，粗 6mm/细 2.5mm
+两轮网格）收敛出官方手臂专用锚：
+```
+vandal:  handR [0.257, 0.016, -0.072]   handL [-0.239, 0.0385, 0.0175]
+phantom: handR [0.239, -0.0285, -0.056] handL [-0.2025, -0.003, 0.0185]
+```
+收敛后双手指尖 3.6-15.5mm（与手套路径同档）。调参缝：`globalThis.__ARMS_ANCHORS`
+运行时可覆盖（OfficialArms 读取），扫描方法见本节。
+
+**官方 fire 加法层（vandal_fire / phantom_fire 轨道）**：
+- 数据：`FP_Core_{AK,Carbine}_S0_{Fire,FireAdd}.psa`（20 帧 0.317s，帧 0≈ref、
+  踢完归零）。**IdleAdd 系（AK AltIdleAdd / Carbine IdleAdd）实测 83 帧全零**——
+  官方呼吸不在这批文件里（手臂挂 vmHolder 已继承整枪呼吸摆动，够用）。
+- 导出坑 ×2：① Blender 默认 24fps——psa 60fps 采样烘帧后轨道被拉长 2.5 倍
+  （fire 0.833s 即此因），导出前 `scene.render.fps = 60`；② optimize 的 resample
+  把恒定轨道抽稀到 2 键——运行时必须按每骨自带 times 采样，不能按全局帧号索引。
+- 运行时（OfficialArms.buildFireLayer + animateOfficialArmsFire）：fire 是
+  「ref 姿势 + 踢动」的全量局部轨道——加法增量以 **fire 轨道自身帧 0 为参考**
+  D(t)=F(0)⁻¹⊗F(t)（makeClipAdditive 默认口径）。以 idle 为参考会引入 idle↔ref
+  常量偏差（实测 R_Elbow 恒偏 87°）。`_fireOne` 置零 t 重触发（连发逐发重启），
+  `_animateHands` 每帧推进 `final = base⊗D(t)`。R_Elbow 峰值 ~10° 于 117ms、
+  0.333s 归零；开火中右手按官方踢动离锚 ~19mm（官方真实行为），射后精确归位。
+
+**实测回归锚点**：腰射/ADS 往返/射后 双腕-锚误差恒 0.00000（手臂挂 holder 随
+枪刚体运动 + fire 增量只叠在骨局部量上，不动根变换）。
+
+### 附：官方 1P 手臂三轮增强（2026-09-15 傍晚）
+
+**官方 equip 切枪动画（vandal_equip / phantom_equip 轨道）**：
+- 数据：`FP_Core_{AK,Carbine}_S0_Equip.psa`（100 帧 1.65s，60fps）；**末帧与 idle
+  逐骨 0.0° 分毫不差**——进出 equip 无需混合，天然无缝。
+- 运行时（animateOfficialArms 管线）：两段式切枪（SWAP_AT=0.35）阶段 1 旧枪
+  手臂保持 idle；换枪瞬间 attach 恰为 equip(0) 起点，阶段 2 按
+  `u = (epc−0.35)/0.65` 采样（1.65s 官方曲线压进 0.65s 抬枪窗），开局首取枪
+  同路径。管线：`base = equip(u)`（切枪中）`否则 idle`（见下条 ADS 结论），
+  `final = base ⊗ fireD(t)`（equip 期间无法开火，天然互斥）。
+
+**Aim2 数据结论（phantom_ads 撤销）**：Aim2E/S/W 是**瞄准方向偏移**（±偏航，
+E-W 仅差 ≤17.4°；E/W 四元数半球对齐平均 ≈ identity，合成姿势与 idle 仅差
+0.49°）——不是 ADS 抬枪姿势。官方 ADS 抬枪在武器自身动画（我们由 holder
+刚体完成），手臂在 ADS 下就是 idle。运行时 ADS 混合管线保留但无轨道时闲置。
+另：合成绝对姿势的正确复合是 `idle ⊗ delta`（后乘，与 fire 层同构）；直用
+Aim2 增量会把 R_Hand 放倒原点（idle↔增量格式不可混）。
+
+**移动叠加层结论（未接入）**：`FP_Core_AK_S0_{WalkAdd,RunAdd}.psa` 实测帧间
+<0.3°、近恒定——与 IdleAdd 同为空数据（官方移动摆动不在这批文件；手臂挂
+vmHolder 已继承整枪 bob/breath）。Phantom（Carbine）侧 Drive 仅 14 个 clip，
+无移动/跳跃/蹲族——跨枪借用 AK 移动层亦无意义（源数据本身为空）。
+
+**GLB 终态**：1.65MB（idle×2 + fire×2 + equip×2 轨道，104 骨蒙皮 + 官方贴图）。
+
+### 附：官方 1P 手臂四轮——网格级穿模修复（2026-09-15 深夜）
+
+**等价手定尺（OFFICIAL_HAND_EQUIV = 0.082）**：官方手（腕→中指尖 ~19-22cm）必须
+缩放到 glove 路径的手大小（相机系 8.2cm），锚才是为这个尺寸调的。手长的取法三条路
+只有一条对：
+- ✅ **骨链分段求和**（`R_Hand→Middle0→1→2→3` 逐段距离相加）——姿势无关的解剖长；
+- ❌ 腕锚跨度比（|dstL−dstR|/|srcL−srcR| ≈ 0.78）——锚是为 8.2cm 手调的，会把手
+  放大 ~1.7×，皮肉整体嵌枪（实测 502 顶点入枪）；
+- ❌ 腕→尖直线距（弯曲握持姿势下仅 ~5cm）——会放大 3 倍（scale 1.58 即此因）。
+
+**穿透检测（扫描的目标函数）**：手臂蒙皮顶点（`applyBoneTransform(i,v)` 后
+`localToWorld`——两步都不能省）对枪三角做 **+X 世界光线奇偶判定**（odd=枪内）。
+加速结构：枪顶点 30mm 3D 桶（broadphase，>45mm 直接跳过）+ 三角 YZ 平面 2D 桶
+（光线只测所在格的三角）。**坑：最近顶点+法线符号法会漏深度嵌入**——6mm 距离门
+在粗网格区（握把）把大量枪内顶点判为"非接触"（符号法 12 vs 奇偶法 407 的假象即此），
+奇偶才是真值。
+
+**锚扫描收敛（ARMS_ANCHORS 终值，穿透计数 + 十指尖悬停距离双目标）**：
+```
+vandal:  handR [0.24, -0.009, -0.109]     handL [-0.247, 0.0225, -0.0045]
+phantom: handR [0.237, -0.0495, -0.097]   handL [-0.2065, -0.017, 0.0025]
+```
+基态（GLOVE_POSES 锚 + 等价手定尺）495/325 顶点嵌枪（掌根/鱼际）→ 收敛后残留
+45/12（旧世界基口径）全在玩家视角被枪体遮挡区（左前臂下侧/拇指远侧）。
+
+### 附：官方 1P 手臂五轮——扭曲根治：枪本地两点拟合 + 数据解滚转（2026-09-15）
+
+**病因**：三点拟合的第三个点（相机）在 attach 时刻读实时世界位，而切枪 attach 恰在
+holder 抬枪瞬态中段——滚转被瞬态倾斜共轭污染（phantom 真路径 333→407 顶点嵌枪
+稳定复现；vandal 开局 instant 无倾斜故侥幸正确，扫描与真路径对不上即此因）。
+迭代史：世界系（倾斜泄漏）→ holder 本地系（单位混乱，臂掉 0.9m）→ attach 后本地
+滚转（与锚方程冲突无解）→ **终态：纯枪本地系两点拟合，相机实时位姿完全退出**：
+```
+q = setFromUnitVectors(官方腕腕轴 → 锚轴)          # 双腕精确落锚
+滚转 = 数据解夹角（见下）                            # 绕锚轴 premultiply
+sLocal = 0.082 / handLen骨链 / 枪链世界系数           # 等价手定尺
+root.position = dstR_g − (q·srcR)·sLocal             # 右腕精确锚定（左腕随轴对齐同精）
+root 挂 vm 下（枪的一切刚体运动手臂同行，且与 attach 时刻无关）
+```
+位置公式坑：root 的局部系是**官方骨骼系**——srcR 必须用官方系本体（曾把 5.7u 的
+枪本地向量塞进公式，双腕偏 0.9m）。
+
+**数据解滚转（ARMS_ROLL 手调常数退役）**：手调滚转两轮换基即废（世界系→holder 系
+→枪本地系）。终态由两边数据直接解出：
+```
+d1 = 官方 Camera 骨 − 官方双腕中点        （官方 pose 自带「臂面相对官方相机」）
+d2 = rest 相机 − 锚中点                    （rest 取景 = vmBase + vmBaseYaw/Roll +
+                                            baseVmScale + vm 本地阵的逆作用于原点）
+roll = atan2((d1⊥×d2⊥)·span, d1⊥·d2⊥)    （两方向在 span 平面上的有向夹角）
+```
+全程静态常数（相机的实时位姿不参与——倾斜泄漏的源头），attach 结果与切枪瞬态无关。
+vandal 解出 −167.1°——数值大≠错：setFromUnitVectors 的最小旋转在 ⊥ 平面里滚转
+本来就是任意的，−167° 只是那个任意偏置。`globalThis.__ARMS_ROLL` 保留为**加性**
+微调缝（数据解之上叠加，vhtdbg 扫描用）。
+
+**指标陷阱（为什么不能只扫 pierce 选滚转）**：pierce 随 |roll| 双向单调下降
+（两枪都在 0° 出峰值）——极端滚转把手转离枪、穿透自然变小，但那正是扭曲。目标函数
+必须 = 奇偶穿透 + 指尖贴枪 + 肘方位 + 截图视觉终审。
+
+**终态实测**（45mm 带内奇偶，双枪零手调）：
+- vandal：35 顶点残留 / 指尖最小 1.4mm / 双肘下方自然位；截图评审 7.5/10、扭曲已解决；
+- phantom：56 顶点残留 / 指尖最小 2.4mm；截图评审 7/10、无扭曲；
+- 残留均在被枪体遮挡区（截图上 2-4px 边缘重叠）。
+回归：npm test 384/384；腕-锚误差恒 0；清理后代码复测数值分毫不差。

@@ -8,6 +8,13 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230f1923'/%3E%3Cpath d='M7 8l9 16 9-16h-5l-4 8-4-8z' fill='%23ff4655'/%3E%3C/svg%3E" />
   <!-- Rajdhani 字体自托管（src/assets/fonts，SIL OFL 1.1），无第三方请求 -->
   <link rel="stylesheet" href="./src/style.css" />
+  <!-- 开局关键批预取（UserAssets.loadUserAssets 的阻塞集）：模块脚本下载/解析
+       期间就并行拉取，后台批（其余英雄/phantom/皮肤）不预取，避免挤占首屏带宽 -->
+  <link rel="preload" as="fetch" href="./models/agent-jett.glb" crossorigin />
+  <link rel="preload" as="fetch" href="./models/viewmodel-vandal.glb" crossorigin />
+  <link rel="preload" as="fetch" href="./models/glove.glb" crossorigin />
+  <link rel="preload" as="fetch" href="./models/hands.glb" crossorigin />
+  <link rel="preload" as="fetch" href="./models/locomotion.json" crossorigin />
 </head>
 <body>
   <canvas id="game"></canvas>

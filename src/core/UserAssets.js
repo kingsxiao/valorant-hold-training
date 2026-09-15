@@ -30,14 +30,14 @@ function smoothSkinGeometry(root) {
   })
 }
 
-// 用户/开源模型加载：
+// 用户/开源模型加载（分两批，见 loadUserAssets）：
 //   public/models/agent-{jett,phoenix,sage,sova}.glb → 无畏契约英雄池（每 bot 随机一名，
 //                                          UE 风格骨架 + 内嵌 PBR 贴图 + kamae 持枪待机 clip；
 //                                          走/跑/横移优先官方 .psa 曲线（locomotion.json），
 //                                          缺数据才由 core/GaitBake 步态数学现场烘焙）
-//   public/models/agent.glb              → 训练机器人外观（当前内置：Mixamo "X Bot"，CC-BY，
-//                                          含骨骼走路动画；英雄池缺位时的单模板回退；自动缩放到
-//                                          总高 1.8m、脚底对地、面向 -Z）
+//                                          ——唯一模板来源（166 轮起去掉 agent.glb 单模板
+//                                          回退：英雄池随仓库分发永不缺位，缺位的兜底是
+//                                          Bot 内置程序化假人，无需再下载 1.5MB 死重）
 //   public/models/viewmodel-vandal.glb   → Vandal 第一人称枪模（"AK-47 Kalashnikov" by
 //                                          Mateusz Woliński, Sketchfab, CC-BY 4.0；真实 PBR 贴图，
 //                                          原生材质直接保留；作者系枪管沿 -X，与管线约定一致）
@@ -49,15 +49,26 @@ function smoothSkinGeometry(root) {
 //   public/models/viewmodel-vandal-chaos.glb → Vandal 皮肤（混沌序曲 Prelude to Chaos；
 //                                          仓库不带模型，投放即换模；缺位时皮肤=本体枪模+
 //                                          rifle_chaos 音效/CHAOS_FX 枪口包）
-//   public/models/viewmodel.glb          → 旧版单枪模回退（Quaternius AK47，CC0 白模，
-//                                          无贴图 → 程序化盒式投影 UV + 材质）
 //   public/models/glove.glb              → 第一人称高精度手套（当前内置：J-Toastie "Gloved Hand"，CC-BY 3.0，
 //                                          五指独立三关节骨骼；WeaponSystem 双实例化 + 五指 IK 持枪）
-//   public/models/hands.glb              → 第一人称手臂备选（当前内置：J-Toastie "Rigged FPS Arms"，CC-BY 3.0；
-//                                          glove.glb 缺失时回退使用）
+//   public/models/hands.glb              → 第一人称手臂（当前内置：J-Toastie "Rigged FPS Arms"，CC-BY 3.0；
+//                                          glove 主路径的袖臂建模取自此模型（placeArmsIK 衔接
+//                                          手套腕口），glove 缺位时才整体回退）
+//   public/models/arms-official.glb      → 官方 1P 手臂（Phoenix，Rocklan 官方包转换；104 骨官方
+//                                          1P 骨架 + 官方 DF/MRAE/NM 贴图；动画轨道 = 官方
+//                                          FP_Core_{AK,Carbine}_S0_IdlePose 持枪姿势，见
+//                                          scripts/fp-arms-export.py）。主路径；缺失/装配失败
+//                                          回退 glove/hands 开源件
 // 文件缺失时静默跳过，回退到内置程序化模型。
-export async function loadUserAssets() {
-  const out = { agent: null, agentAnimations: null, agents: [], viewmodel: null, viewmodels: {}, hands: null, glove: null }
+//
+// 加载分两批（时间到可玩优先）：
+//   关键批（await）：首位英雄 + vandal + glove/hands + locomotion.json——开局最小集，
+//     全部走 index.html 的 preload，模块脚本一下来就并行拉取
+//   后台批（不阻塞）：其余英雄 + phantom + 皮肤 GLB——到货后 push 进同一 out 对象
+//     （agents 数组/viewmodels 映射是同一实例，main 持有的引用天然看到增量），
+//     再回调 onLate(out) 让 main 增量接线枪模
+export async function loadUserAssets(onLate = null) {
+  const out = { agents: [], viewmodels: {}, hands: null, glove: null, fpArms: null }
   const loader = new GLTFLoader()
   const tryLoad = (file) => new Promise((res) => {
     loader.load(
@@ -80,19 +91,21 @@ export async function loadUserAssets() {
   // Vandal 皮肤 GLB（skinMap 目录驱动：条目带 file 的都试装；缺文件静默回退本体
   // 枪模 + 皮肤音效包——混沌序曲即此形态：仓库不带模型，投放即换模）
   const SKIN_GLB = SKINS.vandal.filter(s => s.file)
-  const loaded = await Promise.all([
-    tryLoad('agent.glb'), ...AGENT_POOL.map(tryLoad),
-    tryLoad('viewmodel-vandal.glb'), tryLoad('viewmodel-phantom.glb'),
-    ...SKIN_GLB.map(s => tryLoad(s.file)),
-    tryLoad('viewmodel.glb'), tryLoad('hands.glb'), tryLoad('glove.glb'),
+
+  // 官方 .psa 走/跑/横移曲线（scripts/psa2clips.mjs 从 Rocklan 官方动画转出）：
+  // 每英雄按 GLB 骨名后缀解析成 AnimationClip——有官方数据就直接播官方骨骼曲线，
+  // 没有才退回 GaitBake 的步态数学烘焙。关键批与后台批共用一次拉取
+  let locoJson = null
+  const loadLoco = fetch(new URL('models/locomotion.json', document.baseURI).href)
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)
+
+  const [firstAgentGltf, vandalGltf, handsGltf, gloveGltf, loco] = await Promise.all([
+    tryLoad(AGENT_POOL[0]), tryLoad('viewmodel-vandal.glb'),
+    tryLoad('hands.glb'), tryLoad('glove.glb'),
+    loadLoco,
   ])
-  const agentGltf = loaded[0]
-  const agentPoolGltfs = loaded.slice(1, 1 + AGENT_POOL.length)
-  const vmStart = 1 + AGENT_POOL.length
-  const [vandalGltf, phantomGltf, legacyVmGltf, handsGltf, gloveGltf] = [
-    loaded[vmStart], loaded[vmStart + 1], ...loaded.slice(-3),
-  ]
-  const skinGltfs = loaded.slice(vmStart + 2, -3)
+  locoJson = loco
 
   // agent 归一化：匿名节点命名/轨道引用重写（BrainStem 类模型）→ 缩放 1.8m →
   // 居中贴地 → 白模补程序化贴图（自带 PBR 贴图的英雄 GLB 原生材质直接保留）
@@ -132,28 +145,14 @@ export async function loadUserAssets() {
     if (!hasRealTextures(agent)) applyAgentTextures(agent) // GLB 白模 → 程序化装甲/关节贴图
     return { root: agent, clips: animations }
   }
-  for (let i = 0; i < agentPoolGltfs.length; i++) {
-    const gltf = agentPoolGltfs[i]
-    if (!gltf?.scene) continue
+  const addAgent = (gltf, i) => {
+    if (!gltf?.scene) return
     const entry = normalizeAgent(gltf)
     entry.hero = AGENT_POOL[i].replace(/^agent-/, '').replace(/\.glb$/, '')
-    out.agents.push(entry)
+    if (locoJson) entry.locomotion = buildLocomotion(locoJson, entry.hero, entry.root)
+    out.agents.push(entry) // 同一数组实例：main 的 Bot.customTemplates 引用不变，即推即生效
   }
-  // 官方 .psa 走/跑/横移曲线（scripts/psa2clips.mjs 从 Rocklan 官方动画转出）：
-  // 每英雄按 GLB 骨名后缀解析成 AnimationClip——有官方数据就直接播官方骨骼曲线，
-  // 没有才退回 GaitBake 的步态数学烘焙
-  if (out.agents.length) {
-    let locoJson = null
-    try {
-      locoJson = await (await fetch(new URL('models/locomotion.json', document.baseURI).href)).json()
-    } catch { /* 缺文件静默退回烘焙 */ }
-    if (locoJson) for (const e of out.agents) e.locomotion = buildLocomotion(locoJson, e.hero, e.root)
-  }
-  if (!out.agents.length && agentGltf?.scene) {
-    const a = normalizeAgent(agentGltf)
-    out.agent = a.root
-    out.agentAnimations = a.clips
-  }
+  addAgent(firstAgentGltf, 0)
 
   // 枪模归一化：最长水平轴对齐到 Z（枪管向），随后按包围盒尺寸归一到 0.85m
   // （90° 水平旋转只交换 x/z，最大边不变 → 缩放用旋转前的 size 即可）。
@@ -170,18 +169,14 @@ export async function loadUserAssets() {
     vm.position.z -= c.z
     return vm
   }
-  for (const [key, gltf] of [['vandal', vandalGltf], ['phantom', phantomGltf],
-    ...SKIN_GLB.map((s, i) => [`vandal:${s.id}`, skinGltfs[i]])]) {
-    if (!gltf?.scene) continue
+  const addViewmodel = (key, gltf) => {
+    if (!gltf?.scene) return
     const vm = normalizeViewmodel(gltf.scene)
     if (!hasRealTextures(vm)) applyViewmodelTextures(vm) // 白模才盒式投影 + 程序化材质
     out.viewmodels[key] = vm
   }
-  if (legacyVmGltf?.scene) {
-    const vm = normalizeViewmodel(legacyVmGltf.scene)
-    applyViewmodelTextures(vm) // 无 UV 白模 → 盒式投影 UV + 金属/木纹贴图
-    out.viewmodel = vm
-  }
+  addViewmodel('vandal', vandalGltf)
+
   // 手臂：原始场景原样返回，对位/缩放在 WeaponSystem.setCustomHands 里按骨骼位置计算
   if (handsGltf?.scene) {
     applyHandsTextures(handsGltf.scene) // 袖/肤/手套 → 布料/皮肤贴图
@@ -194,6 +189,37 @@ export async function loadUserAssets() {
     smoothSkinGeometry(gloveGltf.scene)
     elongateFingers(gloveGltf.scene, 1.12)
     out.glove = gloveGltf.scene
+  }
+
+  // 后台批（不阻塞开局）：其余英雄 + phantom + 皮肤。全部到货后并入同一 out
+  // 并回调 onLate——main 只增量接线新到的枪模键（已接过的重跑 setCustomViewmodel
+  // 会二次包裹枪体）；英雄池走同一数组引用无需通知。加载失败静默留缺位回退
+  if (onLate) {
+    ;(async () => {
+      try {
+        const rest = await Promise.all([
+          ...AGENT_POOL.slice(1).map(tryLoad),
+          tryLoad('viewmodel-phantom.glb'),
+          tryLoad('arms-official.glb'),
+          ...SKIN_GLB.map(s => tryLoad(s.file)),
+        ])
+        const nAgents = AGENT_POOL.length - 1
+        for (let i = 0; i < nAgents; i++) addAgent(rest[i], i + 1)
+        addViewmodel('phantom', rest[nAgents])
+        // 官方 1P 手臂（原样返回：OfficialArms attach 时克隆+摆姿+拟合；
+        // 动画轨道 = 官方 IdlePose，随 gltf.animations 带出）
+        const armsGltf = rest[nAgents + 1]
+        if (armsGltf?.scene) {
+          out.fpArms = { scene: armsGltf.scene, animations: armsGltf.animations ?? [] }
+        }
+        for (let i = 0; i < SKIN_GLB.length; i++) {
+          addViewmodel(`vandal:${SKIN_GLB[i].id}`, rest[nAgents + 2 + i])
+        }
+        onLate(out)
+      } catch (e) {
+        console.error('[VHT] background asset batch failed', e)
+      }
+    })()
   }
   return out
 }

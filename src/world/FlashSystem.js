@@ -894,9 +894,10 @@ export class FlashSystem {
       yoru: { light: 0xcff5ff, ring: 0x7deaff, ringMax: 2.6, s1: [0.45, 0.9, 1], s2: [1, 1, 1] },
       breach: { light: 0xd6e2ff, ring: 0x9db8ff, ringMax: 3.0, s1: [0.62, 0.72, 1], s2: [1, 1, 1] },
     }[type]
-    // 爆闪照明：主场景灯在真实爆点（峰值 3× 步枪枪口焰、驻留 0.26s），
-    // 第一人称通道由 vmPopGlow 以类型色点亮枪身+手套
-    fx.muzzle(pos, { scale: 7, opacity: 1, light: 3, lightDur: 0.26, color: C.light })
+    // 爆闪照明：主场景灯在真实爆点（显式 18cd：技能糊脸爆闪刻意大亮，不受
+    // 枪口基准收敛影响；驻留 0.26s），第一人称通道由 vmPopGlow 以类型色点亮
+    // 枪身+手套（默认峰值已按近距约束收敛）
+    fx.muzzle(pos, { scale: 7, opacity: 1, lightPeak: 18, lightDur: 0.26, color: C.light })
     fx.vmPopGlow(C.light)
     if (type === 'breach') {
       // 竖直光柱：贴墙面拔起的竖条爆闪（本体形态）——加法混合圆柱，0.32s

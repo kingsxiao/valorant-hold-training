@@ -524,7 +524,7 @@ export class WeaponSystem {
       : chaos
         ? CHAOS_FX.muzzle
         : w.sound === 'handcannon'
-          ? { scale: 1.3, lightPeak: 22, lightDur: 0.038, flashColor: 0xfff2dc } // 实测标定（FX_TIMING.lightHeavy）
+          ? { scale: 1.3, lightPeak: 3.2, lightDur: 0.038, flashColor: 0xfff2dc } // 实测标定（FX_TIMING.lightHeavy）；峰值随 2.4cd 枪口基准等比下调
           : {}
     this.fx.muzzle(_muzzle, muzzleStyle)
     this.fx.muzzleSmoke(_muzzle, _dir, this.heat * (sup ? SUPPRESSOR_FX.smoke : 1))
@@ -890,11 +890,12 @@ const _rx = new THREE.Vector3()
 const _eye = new THREE.Vector3()
 
 // 消音武器的开火视觉（FX.muzzle/FX.tracer style 参数，本地与 origin/main 两套
-// 风格表的合流值）：焰缩 50%、基准亮度压至 0.55、点光峰值 5（步枪的 ~1/3）、
-// 曳光更淡更细更低饱和、烟量减半 —— 远处看你的枪线更隐蔽，近处自己的反馈
-// 也不喧宾夺主（消音的意义）；音、焰、烟、曳光四线一致地"闷"
+// 风格表的合流值）：焰缩 50%、基准亮度压至 0.55、点光峰值 2.5（步枪的 ~40%、
+// 6cd 局部暖光基准）、曳光更淡更细更低饱和、烟量减半 —— 远处看你的枪线更
+// 隐蔽，近处自己的反馈也不喧宾夺主（消音的意义）；音、焰、烟、曳光四线
+// 一致地"闷"
 const SUPPRESSOR_FX = {
-  muzzle: { scale: 0.5, opacity: 0.55, lightPeak: 5, lightDur: 0.025, color: 0xffd2a0 }, // 实测标定（FX_TIMING.lightSuppressed）
+  muzzle: { scale: 0.5, opacity: 0.55, lightPeak: 1, lightDur: 0.025, color: 0xffd2a0 }, // 实测标定（FX_TIMING.lightSuppressed）；随 2.4cd 枪口基准等比
   tracer: { opacity: 0.45, sat: 0.45, width: 0.7 },
   smoke: 0.5,
 }
@@ -904,6 +905,6 @@ const SUPPRESSOR_FX = {
 // 暖橙 0.11）。与 Audio 的 rifle_chaos"重锤电击"音色同包：音画一致的能量武器
 // 读数（皮肤能量芯为绿系发光，焰/光取薄荷绿系）。弹道/散布/后坐不变
 const CHAOS_FX = {
-  muzzle: { scale: 1.15, lightPeak: 20, lightDur: 0.036, color: 0xa9f2c8, flashColor: 0xf2fff7 },
+  muzzle: { scale: 1.15, lightPeak: 2.8, lightDur: 0.036, color: 0xa9f2c8, flashColor: 0xf2fff7 },
   tracer: { hue: 0.40, width: 1.05, opacity: 0.9 },
 }

@@ -41,9 +41,10 @@ describe('FX 枪口焰双通道', () => {
     // 尺寸落在玩家档（0.20-0.30 × scale 1）
     expect(fx.vmFlashSprite.scale.x).toBeGreaterThanOrEqual(0.19)
     expect(fx.vmFlashSprite.scale.x).toBeLessThanOrEqual(0.31)
-    // 世界+第一人称两路灯都点亮（第一人称峰值按 muzzle 灯峰值折算）
+    // 世界+第一人称两路灯都点亮（第一人称峰值 = 0.6cd 基准：灯离手/枪面
+    // 0.1-0.3m，decay=2 下更高峰值会把枪模刷白读作"开枪画面变亮"）
     expect(fx.lightLife).toBeGreaterThan(0)
-    expect(fx.vmPeak).toBeCloseTo(1.2, 5)
+    expect(fx.vmPeak).toBeCloseTo(0.6, 5)
   })
 
   it('机器人开火/爆闪（普通对象）：走世界精灵，vm 精灵不被误触', () => {
@@ -94,10 +95,10 @@ describe('FX 命中点光', () => {
   it('地面命中弱一档（与闷"噗"音色同语言）', () => {
     const { fx } = makeFx()
     fx.impact(0, 0, -5, 0, 1, 0) // 地面：ny>0.7
-    expect(fx.impactPeak).toBeLessThan(4)
+    expect(fx.impactPeak).toBe(1.2)
     const wallFx = makeFx()
     wallFx.fx.impact(0, 1.2, -5, 0, 0, 1)
-    expect(wallFx.fx.impactPeak).toBe(4)
+    expect(wallFx.fx.impactPeak).toBe(2)
   })
 
   it('连发多次命中：单灯顶替（last-wins），不累积', () => {

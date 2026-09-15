@@ -250,7 +250,12 @@ export class FX {
     scene.add(this.flash)
     this.flashLife = 0 // 世界精灵寿命钟（机器人枪口焰/爆闪）
     this.flashBase = 0.9 // 当前焰基准不透明度（消音武器压低；update 按比例衰减）
-    this.flashLight = new THREE.PointLight(0xffbe7a, 0, 11, 2)
+    // 枪口照明灯：峰值/距离按"局部暖光"标定。decay=2 的物理衰减下照度=峰值/d²，
+    // 贴门框架枪时脚下地面/身旁墙面距枪口只有 0.4-1.5m——峰值必须按最贴近的
+    // 表面标定而不是"室中间观感"：2.4cd/2.2m 时地面峰值 ≈1.2×太阳（轻微脉动），
+    // 2m 外归零（曾为 16cd/11m：贴墙时近表面数十倍太阳，持续开火整屏被点白，
+    // 读作"开枪后游戏变亮"；6cd/4.5m 仍会在贴墙位把近侧地面打出 +20% 亮度）
+    this.flashLight = new THREE.PointLight(0xffbe7a, 0, 2.2, 2)
     this.flashLight.castShadow = false
     scene.add(this.flashLight)
     this.lightLife = 0
@@ -263,8 +268,10 @@ export class FX {
 
     // 命中点光（单灯池化，last-wins）：墙面/硬表面命中瞬间的局部照明 pop——
     // Valorant 打墙那一记"亮一下"的读感。与枪口焰灯分开持有：连发时枪口灯常驻
-    // 命中点，弹着点的照明不能被它吃掉。地面命中弱一档（闷"噗"的语言）
-    this.impactLight = new THREE.PointLight(0xffc9a0, 0, 8, 2)
+    // 命中点，弹着点的照明不能被它吃掉。地面命中弱一档（闷"噗"的语言）。
+    // 距离 8→3.5：脱靶打近墙/门套时弹着点离玩家常 <2m，4cd 物理衰减下同枪口灯
+    // 一样的近距爆亮问题
+    this.impactLight = new THREE.PointLight(0xffc9a0, 0, 3.5, 2)
     this.impactLight.castShadow = false
     scene.add(this.impactLight)
     this.impactLife = 0
@@ -398,9 +405,9 @@ export class FX {
   //  suppressed：贴消音器的暗小火苗 + 弱光（消音枪不该有照明弹般的火球）
   //  heavy：大口径（Sheriff）更大更亮的火球与更硬的照明
   // opacity=焰基准不透明度（update 按其比例衰减）；
-  // lightPeak=照明峰值（绝对值）或 light=峰值倍率（×16，二者取先传者）
+  // lightPeak=照明峰值（绝对值）或 light=峰值倍率（×2.4，二者取先传者）
   muzzle(worldPos, { scale = 1, opacity = 0.9, lightPeak = null, light = 1, lightDur = FX_TIMING.lightRifle, color = 0xffbe7a, flashColor } = {}) {
-    const peak = lightPeak ?? 16 * light
+    const peak = lightPeak ?? 2.4 * light
     const player = !!(worldPos?.isVector3 && this.vmFlashSprite)
     const sprite = player ? this.vmFlashSprite : this.flash
     if (player) {
@@ -429,13 +436,17 @@ export class FX {
       this.lightDur = lightDur
       this.lightLife = lightDur + 0.008
       // vmScene 通道同款闪光点光：仅玩家开火参与（bot 枪口位映到相机系毫无意义）。
-      // 世界侧爆闪（非 player）显式清零残留峰值——否则玩家上一枪的 vmPeak 会按
-      // 本次世界爆闪的 lightLife 错误点亮枪模（vmPopGlow 若随后调用会再设正值）
+      // vm 灯只照 0.7m 内的枪身+手套（不影响全局曝光），但灯离手/枪面只有
+      // 0.1-0.3m——decay=2 下照度=峰值/d²，峰值必须按这个最近距离标定：
+      // 0.6cd 时手上 ≈6-20×太阳（发后 1-2 帧的辉光），再高就会把整片枪模
+      // 刷白读作"开枪画面变亮"。峰值随世界灯按 2.4cd 基准等比。世界侧爆闪
+      // （非 player）显式清零残留峰值——否则玩家上一枪的 vmPeak 会按本次
+      // 世界爆闪的 lightLife 错误点亮枪模（vmPopGlow 若随后调用会再设正值）
       if (this.vmFlash) {
         if (player) {
           this.vmFlash.position.copy(this.vmFlashSprite.position)
           this.vmFlash.color.setHex(color)
-          this.vmPeak = 1.2 * (peak / 16)
+          this.vmPeak = 0.6 * (peak / 2.4)
         } else {
           this.vmPeak = 0
         }
@@ -446,8 +457,9 @@ export class FX {
   // 爆闪照明点亮第一人称通道：爆点在数米外、且传普通坐标对象——muzzle 的
   // vmFlash 映射分支不会触发；这里把 vmFlash 放到枪口正前方 0.45m（vmFlashLight
   // 有效距离 0.7m 内），以道具类型色照亮枪身+手套（强度随 muzzle 设的
-  // lightLife/lightDur 同步衰减）
-  vmPopGlow(colorHex, peak = 2.5) {
+  // lightLife/lightDur 同步衰减）。峰值按最近枪面 ~0.2m 标定（decay=2 下
+  // 0.8cd ≈ 20×太阳的手部辉光，再高刷白枪模）
+  vmPopGlow(colorHex, peak = 0.8) {
     if (!this.vmFlash) return
     this.vmFlash.position.set(0, 0, -0.45)
     this.vmFlash.color.setHex(colorHex)
@@ -461,7 +473,7 @@ export class FX {
     const floor = ny > 0.7
     this.impactLight.position.set(x + nx * 0.07, y + ny * 0.07, z + nz * 0.07)
     this.impactLight.color.setHex(0xffc9a0)
-    this.impactPeak = floor ? 2.4 : 4
+      this.impactPeak = floor ? 1.2 : 2
     this.impactDur = 0.09
     this.impactLife = this.impactDur + 0.008 // +半帧出生补偿（瞬态族同法）
     const nSparks = floor ? 4 : 8
@@ -557,21 +569,23 @@ export class FX {
     r.life = (r.dur = head ? 0.42 : 0.34) + 0.008 // +半帧出生补偿（瞬态族第四员）
     r.maxScale = head ? 2.0 : 1.5
     // 光脉冲：主场景灯在击杀点（世界被照亮），第一人称通道同款辉光
-    // （枪身+手套吃到击杀光，峰值略高于枪口焰的 1.2——击杀读得出来）。
-    // 连杀递进：色向金 #ffd27a 插值（每级 22%，3 连杀起明显）、峰值 +0.25/级。
+    // （枪身+手套吃到击杀光，峰值略高于枪口焰的 0.6——击杀读得出来）。
+    // 连杀递进：色向金 #ffd27a 插值（每级 22%，3 连杀起明显）、峰值小幅递增。
     // heavy=大口径（Sheriff）：光脉冲更深更久（×1.25 峰值 / 0.22s 驻留）——
-    // 与它的深低频枪声、重锤击锤同一份"重"的语言
+    // 与它的深低频枪声、重锤击锤同一份"重"的语言。世界峰值同样按近距表面
+    // 约束收敛（×0.25）：近距离击杀时 bot 身上的爆闪仍可见，远距本就衰减
+    // 到不可见
     const k = Math.min(1, (streak - 1) * 0.22)
     _kc.setHex(head ? 0xff6a55 : 0xffa050).lerp(_kg.setHex(0xffd27a), k)
     this.flashLight.position.set(p.x, p.y + 0.2, p.z)
     this.flashLight.color.copy(_kc)
-    this.lightPeak = ((head ? 26 : 18) + (streak - 1) * 0.25 * 16) * (heavy ? 1.25 : 1)
+    this.lightPeak = ((head ? 6.5 : 4.5) + (streak - 1) * 1) * (heavy ? 1.25 : 1)
     this.lightDur = heavy ? 0.22 : 0.16
     this.lightLife = this.lightDur + 0.008 // +半帧出生补偿（与枪口焰/曳光同法）
     if (this.vmFlash) {
       this.vmFlash.position.set(0, 0, -0.5)
       this.vmFlash.color.copy(_kc)
-      this.vmPeak = ((head ? 1.9 : 1.5) + (streak - 1) * 0.25) * (heavy ? 1.2 : 1)
+      this.vmPeak = ((head ? 0.7 : 0.55) + (streak - 1) * 0.1) * (heavy ? 1.2 : 1)
     }
   }
 

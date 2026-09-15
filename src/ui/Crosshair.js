@@ -7,8 +7,7 @@ import { crosshairColor, sanitizeCrosshair } from './crosshairCode.js'
 // Advanced 选项同样支持。帮助建立"急停-开枪"的时机感：收束完成才是出手时机。
 //
 // 渲染几何对齐游戏：
-//  - 间距 offset = 中心到线段内缘的距离；带开火误差的线组静止时再 +4px 底距
-//    （未开"误差叠加在间距上"时；这是游戏里开火误差线组的起始扩张位）
+//  - 间距 offset = 中心到线段内缘的距离（所见即所得，0 = 四线贴住中心）
 //  - 轮廓为逐元素方形框（thickness 0-6），所有框并成一条路径一次填充——
 //    框与框相邻/重叠处不叠加加深（等价游戏 UI 的恒定不透明度行为）
 //  - 中心点是边长 = dotSize 的正方形（游戏即方块，非圆点）
@@ -29,8 +28,10 @@ export function paintCrosshair(ctx, s, { movePx = 0, firePx = 0, alphaScale = 1,
   for (const name of ['inner', 'outer']) {
     const g = s[name]
     if (!g.show || g.opacity <= 0 || g.thickness <= 0) continue
+    // 间距即所见：offset=0 时线内缘贴住中心（用户设置的间距就是真实间距——
+    // 不再叠开火误差线组的隐藏底距，"间隔为零还有缝"曾由此而来）；误差扩张
+    // （移动/开火）从 offset 之上按像素展开
     const gap = g.offset
-      + (g.fireErr && !s.overrideFireOffset ? 4 : 0)
       + (g.moveErr ? movePx * g.moveMult : 0)
       + (g.fireErr ? firePx * g.fireMult : 0)
     const l = g.length, vl = g.linked ? g.length : g.vlength, t = g.thickness

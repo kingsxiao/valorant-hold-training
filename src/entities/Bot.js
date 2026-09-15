@@ -84,7 +84,6 @@ const _fpPole = new THREE.Vector3() // 脚钉地：膝极向参考点（髋前�
 const _fwdAxis = new THREE.Vector3() // 脚钉地：面朝方向暂存
 const _IDENTITY = new THREE.Quaternion()
 const _ZAXIS = new THREE.Vector3(0, 0, 1) // 枪轴滚转轴（holder 局部 Z = 枪管向）
-const _headC = new THREE.Vector3() // 蹲姿头部区：Head 骨世界位暂存
 
 export class Bot {
   static customTemplate = null   // 用户 GLB 模板（UserAssets 注入）
@@ -122,16 +121,17 @@ export class Bot {
     this.breathW = 0     // 呼吸权重（静止淡入 / 移动快速淡出，防与步态叠加）
     this._yBase = 0      // 步态/急停的高度基线（呼吸偏移在其上绝对合成，防累积）
 
-    // 命中区域：{ y, r, zone }
-    // 命中区骨锚跟随：每区锚定其解剖骨（官方蹲姿=收拢球，头部/躯干/腿全部随
-    // 骨位走，站姿 lift = 站姿区中心 − 站姿骨高实测）。蹲姿权重插值：
-    // 中心 = lerp(站姿位, 骨世界位, 蹲姿权重)——蹲/起全程连续，render 即真相
+    // 命中区域：{ y, r, zone }。y 仅对无骨的程序化假人生效（静态高度表，按
+    // 1.8m 假人标定）；有骨模型每区锚定其解剖骨（raycast 取骨世界位 + lift），
+    // lift = 骨原点到命中区中心的解剖微调（膝区上提补偿大腿空档，官方英雄
+    // 池实测：Head 骨 1.87 / Spine2 1.365 / Spine1 1.25 / Knee 0.80 / Foot 0.28，
+    // 骨锚后命中柱 ~0.25-1.98 与可见模型连续贴合）
     this.zones = [
       { y: 1.63, r: 0.13, zone: 'head', bone: 'Head', lift: -0.024 },
       { y: 1.3, r: 0.21, zone: 'body', bone: 'Spine2', lift: 0.159 },
-      { y: 0.95, r: 0.2, zone: 'body', bone: 'Spine1', lift: -0.091 },
-      { y: 0.55, r: 0.16, zone: 'leg', bone: 'L_Knee', lift: -0.153 },
-      { y: 0.55, r: 0.16, zone: 'leg', bone: 'R_Knee', lift: -0.153 },
+      { y: 0.95, r: 0.2, zone: 'body', bone: 'Spine1', lift: -0.12 },
+      { y: 0.55, r: 0.16, zone: 'leg', bone: 'L_Knee', lift: -0.06 },
+      { y: 0.55, r: 0.16, zone: 'leg', bone: 'R_Knee', lift: -0.06 },
       { y: 0.22, r: 0.14, zone: 'leg', bone: 'L_Foot', lift: 0.11 },
       { y: 0.22, r: 0.14, zone: 'leg', bone: 'R_Foot', lift: 0.11 },
     ]
@@ -1051,6 +1051,11 @@ export class Bot {
       leg.knee.matrixWorld.decompose(_fpKnee, _q2, _gscl)
       _fpKneeWClip.setFromRotationMatrix(leg.knee.matrixWorld) // clip 膝世界 Q（此刻矩阵=还原后的 clip 姿态）
       _fpAnchor.copy(st.anchor).lerp(_fpFoot, 1 - st.w)
+      // 目标地面钳制：权重坡途中目标 = 锚（贴地）与 clip 原始姿（起步混合段踝可
+      // 低至 -0.10，实测 pull/out 加速段穿地 ~20cm 脚底）的中值——中值同样穿地。
+      // 正常步态锚高 0.10+ 不受影响；只把异常下探抬回脚踝最低线（脚底仍略 below
+      // 踝，0.03 只挡穿透不做"悬浮修正"）
+      if (_fpAnchor.y < 0.03) _fpAnchor.y = 0.03
       // 膝极向 = 面朝方向（psa 原始腿曲线是官方 FootIK 之前的姿态，膝常反折，
       // 跟随当前肘方向会把反关节保留下来；官方 UE TwoBoneIK 同样用显式极向）。
       // GLB 视觉正面 = 局部 +Z（164 轮）：极向取 +Z 侧（旧 -Z 在 180° 翻转的
@@ -1775,24 +1780,25 @@ export class Bot {
     for (const m of Object.values(this.mats)) m.emissive?.setHex?.(c)
   }
 
-  // 射线 vs 命中球体。命中球中心跟随网格当前姿态（受击踉跄后仰/横移侧倾
-  // 会让头部视觉偏移可达 ~0.4m，命中区不跟着转会"看着打头却打空气"）：
-  // 局部 (0, z.y, 0) 经网格四元数旋转 + 网格位置。绕 Y 的朝向对轴上点无平移，
-  // 实际生效的是后仰（rot.x）与侧倾（rot.z）
+  // 射线 vs 命中球体。命中球中心恒取解剖骨世界位（render 即真相）：官方模型
+  // 的头/胸/盆/膝/脚球随步态、蹲姿、受击踉跄、跳跃实时贴着可见模型走——静态
+  // 高度表只对无骨骼的程序化假人生效。曾用"站姿静态位 + 蹲姿才 lerp 骨位"，
+  // 但静态表按 1.8m 假人标定（头 1.63/腹 0.95/膝 0.55），官方英雄池骨骼整体
+  // 偏高（实测 Head 骨 1.87 / Pelvis 1.22 / Knee 0.80）：瞄可见头部/肩胸的
+  // 子弹从命中柱上方穿过去落在远处地面——弹孔"错位到地上"的根因
   raycast(ox, oy, oz, dx, dy, dz, maxT) {
     if (this.invulnerable) return null
-    // 命中区骨锚跟随：蹲姿（cw>0）时每区中心 lerp 到其解剖骨世界位（官方蹲姿
-    // = 收拢球：头部/躯干/腿骨位全部随姿态走，固定高度区必错位）；cw=0 走
-    // 站姿静态位（程序化假人/无骨区自动回退）
-    const cw = this._crouchW ?? 0
     let bestT = maxT, bestZone = null
     for (const z of this.zones) {
-      _v.set(0, z.y, 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
-      if (cw > 0.001 && z._boneObj) {
+      if (z._boneObj) {
         z._boneObj.updateWorldMatrix(true, false)
         const be = z._boneObj.matrixWorld.elements
-        _headC.set(be[12], be[13] + z.lift, be[14])
-        _v.lerp(_headC, cw)
+        _v.set(be[12], be[13] + z.lift, be[14])
+      } else {
+        // 无骨区（程序化假人/骨名不匹配的老模型）：局部 (0, z.y, 0) 经网格
+        // 四元数旋转 + 网格位置。绕 Y 的朝向对轴上点无平移，实际生效的是
+        // 后仰（rot.x）与侧倾（rot.z）
+        _v.set(0, z.y, 0).applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
       }
       const t = raySphere(ox, oy, oz, dx, dy, dz, _v.x, _v.y, _v.z, z.r)
       if (t !== null && t < bestT) { bestT = t; bestZone = z.zone }

@@ -78,6 +78,7 @@ const _fpHip = new THREE.Vector3() // 脚钉地：髋/膝/脚世界位置 + 锚�
 const _fpKnee = new THREE.Vector3()
 const _fpFoot = new THREE.Vector3()
 const _fpAnchor = new THREE.Vector3()
+const _fpKneeWClip = new THREE.Quaternion() // 脚钉地：clip 膝世界 Q（脚朝向反旋转基准）
 const _fpBlend = new THREE.Vector3() // 脚钉地：多锚源加权混合累加器
 const _fpPole = new THREE.Vector3() // 脚钉地：膝极向参考点（髋前面）
 const _fwdAxis = new THREE.Vector3() // 脚钉地：面朝方向暂存
@@ -725,12 +726,13 @@ export class Bot {
     }
     _gaim.copy(_gv1).addScaledVector(_gv2, 4) // 手线远点（默认目标）
     if (pickAimTarget({ style: this.peek?.style, stopped, moving }) === 'player') {
-      // 站定对枪：枪口全权重钉玩家眼位——瞄准里只要混着手线分量，待机呼吸摆动
-      // 胸廓 → 手线转 → 瞄准跟转 → 左手 IK 又追新枪轴，闭环在部分英雄臂展下
-      // 增益≈1，枪口会画几度的圈；本体表现是身体微动、枪口纪律性压住目标。
-      // 拉出/跑动中保留 0.5 扫入过渡（枪从携枪位压向玩家的进入感）
-      const k = moving ? 0.5 : 1
-      _gaim.lerp(_v.set(player.pos.x, player.pos.y + player.eyeHeight, player.pos.z), k)
+      // 枪口全权重钉玩家眼位（167 轮起移动中同样 k=1）：瞄准目标里混手线分量
+      // （旧 moving k=0.5）会把 kamae 携枪方向（偏离瞄准向 ~17°）的一半留在枪口
+      // 上——13m 外实测枪口指着目标旁 ~2m（7~9°），读作「人没对准我」。扫入
+      // 过渡感由下方 aimQ.slerp 的时间常数承担（出场从携枪位压向玩家 ~70ms 摆
+      // 过去）；瞄准目标不再依赖手线 = 无待机呼吸→枪口画圈的闭环（k=1 的前提
+      // 本来就是这个）
+      _gaim.set(player.pos.x, player.pos.y + player.eyeHeight, player.pos.z)
     }
     solveGunAim(_gv1, _gaim, _gq3)
     if (!G.init) { G.aimQ.copy(_gq3); G.init = true } // 出场首帧直接落位不甩枪
@@ -831,8 +833,12 @@ export class Bot {
     if (!rig) return
     // 相位由 step() 的 mixer 分支统一推进（位移锁相，见 step）——这里只消费
     const lx = this.velX * Math.cos(this.mesh.rotation.y) // 模型局部横向速度（模型空间 x 分量；GLB 正面 +Z ⇒ 右侧为 -x）
-    // 侧倾：向移动方向倾，回正比起倾更快（急停干净利落，与 _stepLegs 同节奏）
-    const leanTarget = w > 0 ? leanInto(lx) : 0
+    // 侧倾：向移动方向倾，回正比起倾更快（急停干净利落，与 _stepLegs 同节奏）。
+    // ⚠ 官方横移 clip 路径不叠 mesh 级侧倾（167 轮）：官方 RunE/W 盆骨自带
+    // ±5~10° 侧倾，再倾一层 6° = 全身刚体倒 11~16°，而脚被钉地 IK 按住 →
+    // 膝/踝被动剪切、双腿读作别扭交叉步（实测去掉后官方骨盆侧倾 ±2~6.5°
+    // 独挑，步态即正常跑姿）——mesh 侧倾只属于程序化侧移覆盖路径
+    const leanTarget = w > 0 && !this.anim?.strafe ? leanInto(lx) : 0
     const leanRate = Math.abs(leanTarget) > Math.abs(this.lean) ? 8 : 18
     this.lean += (leanTarget - this.lean) * Math.min(1, dt * leanRate)
     this.mesh.rotation.z = this.lean
@@ -1001,11 +1007,15 @@ export class Bot {
       //    射直接落到 mesh 系（前=−Z、上=+Y）再升世界；侧轴符号以「世界系支撑
       //    期静止」为准。锚世界高 = psaZ（与 mesh.y 无关，psa 地面即世界地面——
       //    跳跃弧线（mesh.y 加成）自动把锚抬升 = 收腿随体）
-      //    ⚠ psa 的 IK 目标骨命名与脚反号（L 目标曲线跟随右脚，实测锁定）
+      //    ⚠ 锚曲线与脚同名同侧（167 轮翻转）：旧「L 目标曲线跟随右脚」反号
+      //    在 runN 上锚 y 仅 ±0.05~0.13（近中线）两种配对都可达、分辨不出；
+      //    strafe 族锚 y 扫 ±0.5 且交叉脚前伸 0.25-0.30——反号配对让每脚追
+      //    对侧+交叉锚（水平 0.65+0.30 超 0.795 腿长预算）→ 一脚整支撑期悬空
+      //    6-10cm 滑冰；同侧配对（离线可达性实测）双脚全程可达
       let wSum = 0
       _fpBlend.set(0, 0, 0)
       for (const s of srcs ?? []) {
-        if (!sampleIkAnchor(s.ik, s.dur, s.ik.n, s.a.time, leg.side === 'L' ? 'R' : 'L', _fpAnchor)) continue
+        if (!sampleIkAnchor(s.ik, s.dur, s.ik.n, s.a.time, leg.side, _fpAnchor)) continue
         _fpBlend.x += _fpAnchor.x * s.w
         _fpBlend.y += _fpAnchor.y * s.w
         _fpBlend.z += _fpAnchor.z * s.w
@@ -1039,6 +1049,7 @@ export class Bot {
       //    solver 自然钳为指向锚的满展位 = 蹬地推移。绝不 skip IK
       leg.up.matrixWorld.decompose(_fpHip, _q1, _gscl)
       leg.knee.matrixWorld.decompose(_fpKnee, _q2, _gscl)
+      _fpKneeWClip.setFromRotationMatrix(leg.knee.matrixWorld) // clip 膝世界 Q（此刻矩阵=还原后的 clip 姿态）
       _fpAnchor.copy(st.anchor).lerp(_fpFoot, 1 - st.w)
       // 膝极向 = 面朝方向（psa 原始腿曲线是官方 FootIK 之前的姿态，膝常反折，
       // 跟随当前肘方向会把反关节保留下来；官方 UE TwoBoneIK 同样用显式极向）。
@@ -1061,6 +1072,16 @@ export class Bot {
       _q3.setFromUnitVectors(_ikDir, sol.dirCb)
       _q3.slerp(_IDENTITY, 1 - st.w)
       leg.knee.quaternion.premultiply(_q4.copy(_gq1).invert().multiply(_q3).multiply(_gq1))
+      // 脚骨朝向反旋转（167 轮「脚歪」修复）：两骨 IK 只重瞄准髋/膝，脚骨保持
+      // clip 局部值跟着被重瞄准的小腿走——实测世界朝向被带偏可达 ~100°（脚尖
+      // 向内拧 + 下扣，支撑脚侧立）。官方脚旋转轨本身有 0→62° 的动态（着地/蹬
+      // 地/摆动，作曲内容）——把脚世界姿态钉回 clip 原作：delta = IK后膝世界⁻¹ ·
+      // clip 膝世界，前乘到脚局部（膝世界含 mesh 变换=场景系，两膝世界同系可
+      // 直乘），按 st.w 与髋/膝增量同权重混合
+      _gq2.copy(_gq1).multiply(leg.knee.quaternion) // IK 后膝世界 Q
+      _q3.copy(_gq2).invert().multiply(_fpKneeWClip)
+      _q3.slerp(_IDENTITY, 1 - st.w)
+      leg.foot.quaternion.premultiply(_q3)
     }
   }
 
@@ -1506,7 +1527,10 @@ export class Bot {
     })
     let dy = targetYaw - this.mesh.rotation.y
     dy = Math.atan2(Math.sin(dy), Math.cos(dy)) // 取最短角差
-    this.mesh.rotation.y += dy * Math.min(1, dt * 14)
+    // 跟踪增益 30/s（167 轮）：14/s 在横移 ω≈0.4rad/s（5.4m/s@13m）下留 ~1.7°
+    // 稳态滞后——本体对枪角色身体始终压着瞄准向；30/s 残差 <0.8°，出场初始
+    // 180° 转身也收得更快（τ 33ms），不再带半转身滑出墙
+    this.mesh.rotation.y += dy * Math.min(1, dt * 30)
 
     // 蹲姿对枪（BotManager 在急停时按 crouchChance 掷定）：蹲下压低命中区，
     // 逼玩家下压准星——本体对枪蹲。蹲姿优先：蹲下时不出转身踏步/支架（腿部

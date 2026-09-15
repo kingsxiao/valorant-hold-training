@@ -198,12 +198,41 @@ describe('sampleIkAnchor 官方落地锚采样', () => {
     }
   })
 
-  it('psa IK 目标骨命名与脚反号：L 目标的侧偏为正、R 为负（换侧采样的依据）', () => {
+  it('psa IK 目标锚与脚同名同侧（167 轮翻转锁死）：L 目标侧偏为正、R 为负', () => {
     for (const key of ['runN', 'walkN']) {
       const c = locoJson.core[key]
       const mid = 3 * Math.floor(c.n / 2)
-      expect(c.ik.L[mid + 1]).toBeGreaterThan(0)  // L 目标 Y（侧偏）>0
+      expect(c.ik.L[mid + 1]).toBeGreaterThan(0)  // L 目标 Y（侧偏，+Y=左）>0
       expect(c.ik.R[mid + 1]).toBeLessThan(0)
+    }
+  })
+
+  it('支撑锚同侧可达性（同侧配对的几何依据）：strafe 族支撑锚到同侧髋恒近于对侧', () => {
+    // 走/跑 N 族锚侧偏仅 ±0.05~0.13（近中线），两种配对都可达、分辨不出侧别；
+    // strafe 族锚侧扫 ±0.5 且交叉脚前伸 0.25~0.30——反号配对让每脚追对侧+交叉
+    // 锚，水平距离 0.65+0.30 超出腿长水平预算 sqrt(1.11²−0.775²)≈0.795 → 一脚
+    // 整支撑期悬空滑冰（167 轮实测）。本测试锁「同侧髋更近」的数据事实。
+    const clips = [
+      locoJson.core.runN, locoJson.core.walkN,
+      locoJson.strafe.runE, locoJson.strafe.walkE,
+      locoJson.strafe.runW, locoJson.strafe.walkW,
+    ]
+    const HIP = 0.115 // L_Hip 11.522cm（psa↔GLB 分毫不差互证）
+    for (const c of clips) {
+      for (const side of ['L', 'R']) {
+        const hip = side === 'L' ? HIP : -HIP
+        let maxIpsi = 0, maxContra = 0
+        let zMin = Infinity
+        for (let f = 0; f < c.n; f++) zMin = Math.min(zMin, c.ik[side][f * 3 + 2])
+        for (let f = 0; f < c.n; f++) {
+          if (c.ik[side][f * 3 + 2] > zMin + 0.045) continue // 支撑帧（锚贴地窗）
+          const y = c.ik[side][f * 3 + 1]
+          maxIpsi = Math.max(maxIpsi, Math.abs(y - hip))
+          maxContra = Math.max(maxContra, Math.abs(y + hip))
+        }
+        expect(maxIpsi).toBeLessThan(maxContra) // 同侧髋更近 = 命名不反号
+        expect(maxIpsi).toBeLessThan(0.65)     // 腿长水平预算内（0.795−前伸余量）
+      }
     }
   })
 })

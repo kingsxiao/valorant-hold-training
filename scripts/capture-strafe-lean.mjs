@@ -63,7 +63,7 @@ async function driveAndShoot(tag, neutralLean) {
       pelvis.updateWorldMatrix(true, false)
       const e = pelvis.matrixWorld.elements
       // 盆骨局部 up ≈ 世界矩阵作用后的 (0,1,0)：取矩阵第二列
-      const upx = e[0 * 4 + 1], upy = e[1 * 4 + 1], upz = e[2 * 4 + 1]
+      const upx = e[0 * 4 + 1], upy = e[1 * 4 + 1]
       window.__m = {
         phase: shot, meshRollDeg: +(b.mesh.rotation.z * 180 / Math.PI).toFixed(1),
         pelvisRollDeg: +(Math.atan2(upx, upy) * 180 / Math.PI).toFixed(1),

@@ -30,6 +30,43 @@ function smoothSkinGeometry(root) {
   })
 }
 
+// 模型自带任意贴图（map）即视为真实 PBR 材质，原生材质直接保留；
+// 白模才走程序化贴图（agent/viewmodel 共用，含 requestSkin 的按需皮肤）
+function hasRealTextures(root) {
+  let any = false
+  root.traverse(o => {
+    const ms = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])
+    if (ms.some(m => m.map)) any = true
+  })
+  return any
+}
+
+// 枪模归一化（关键批/后台批/requestSkin 共用）：最长水平轴对齐到 Z（枪管向），
+// 随后按包围盒尺寸归一到 0.85m（90° 水平旋转只交换 x/z，最大边不变 → 缩放用
+// 旋转前的 size 即可）。自带贴图的模型（Objaverse 系 AK）原生 PBR 材质直接
+// 保留；白模才走程序化贴图
+function normalizeViewmodel(vm) {
+  vm.updateMatrixWorld(true)
+  const size = new THREE.Box3().setFromObject(vm).getSize(new THREE.Vector3())
+  if (size.x > size.z) vm.rotation.y = -Math.PI / 2
+  vm.scale.multiplyScalar(0.85 / Math.max(0.001, Math.max(size.x, size.y, size.z)))
+  vm.updateMatrixWorld(true)
+  const c = new THREE.Box3().setFromObject(vm).getCenter(new THREE.Vector3())
+  vm.position.x -= c.x
+  vm.position.y -= c.y
+  vm.position.z -= c.z
+  return vm
+}
+
+// 归一化 + 白模补程序化贴图后写入 out.viewmodels[key]（三个加载入口共用的
+// 落库口径：requestSkin 到货的皮肤键与两批资产完全同构，main 增量接线无特判）
+function addViewmodel(out, key, gltf) {
+  if (!gltf?.scene) return
+  const vm = normalizeViewmodel(gltf.scene)
+  if (!hasRealTextures(vm)) applyViewmodelTextures(vm) // 白模才盒式投影 + 程序化材质
+  out.viewmodels[key] = vm
+}
+
 // 用户/开源模型加载（分两批，见 loadUserAssets）：
 //   public/models/agent-{jett,phoenix,sage,sova}.glb → 无畏契约英雄池（每 bot 随机一名，
 //                                          UE 风格骨架 + 内嵌 PBR 贴图 + kamae 持枪待机 clip；
@@ -45,10 +82,13 @@ function smoothSkinGeometry(root) {
 //                                          Mateusz Woliński, Sketchfab, CC-BY 4.0；带消音器/导轨，
 //                                          含 bolt carrier / magazine / suppressor 独立网格）
 //   public/models/viewmodel-vandal-aristocrat.glb → Vandal 官方皮肤（Aristocrat 收藏集，
-//                                          内部代号 ArtDeco；Rocklan 包 .blend 转换，镀金 + RedDot 瞄具）
+//                                          内部代号 ArtDeco；Rocklan 包 .blend 转换，镀金 + RedDot 瞄具）。
+//                                          不随两批分发——requestSkin 点选/启动补拉才下载
+//                                          （默认皮肤 chaos 的用户用不到，按需省 1.9MB 传输 + 34.5MB VRAM）
 //   public/models/viewmodel-vandal-chaos.glb → Vandal 皮肤（混沌序曲 Prelude to Chaos；
 //                                          仓库不带模型，投放即换模；缺位时皮肤=本体枪模+
-//                                          rifle_chaos 音效/CHAOS_FX 枪口包）
+//                                          rifle_chaos 音效/CHAOS_FX 枪口包；投放位探测走
+//                                          requestSkin（404 一次即负缓存，不重复失败请求））
 //   public/models/glove.glb              → 第一人称高精度手套（当前内置：J-Toastie "Gloved Hand"，CC-BY 3.0，
 //                                          五指独立三关节骨骼；WeaponSystem 双实例化 + 五指 IK 持枪）
 //   public/models/hands.glb              → 第一人称手臂（当前内置：J-Toastie "Rigged FPS Arms"，CC-BY 3.0；
@@ -64,9 +104,11 @@ function smoothSkinGeometry(root) {
 // 加载分两批（时间到可玩优先）：
 //   关键批（await）：首位英雄 + vandal + glove/hands + locomotion.json——开局最小集，
 //     全部走 index.html 的 preload，模块脚本一下来就并行拉取
-//   后台批（不阻塞）：其余英雄 + phantom + 皮肤 GLB——到货后 push 进同一 out 对象
+//   后台批（不阻塞）：其余英雄 + phantom + 官方手臂——到货后 push 进同一 out 对象
 //     （agents 数组/viewmodels 映射是同一实例，main 持有的引用天然看到增量），
 //     再回调 onLate(out) 让 main 增量接线枪模
+//   皮肤 GLB 不在两批里（P3 起按需）：requestSkin 点选/启动补拉触发，到货走
+//     onSkinArrival —— main 的第三条到货线，与两批共用 wireViewmodels/prewarm
 export async function loadUserAssets(onLate = null) {
   const out = { agents: [], viewmodels: {}, hands: null, glove: null, fpArms: null }
   const loader = new GLTFLoader()
@@ -78,19 +120,8 @@ export async function loadUserAssets(onLate = null) {
       () => res(null),
     )
   })
-  const hasRealTextures = (root) => {
-    let any = false
-    root.traverse(o => {
-      const ms = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])
-      if (ms.some(m => m.map)) any = true
-    })
-    return any
-  }
   // 无畏契约英雄池：命中即整体取代 agent.glb 单模板（main.js 注入 Bot.customTemplates）
   const AGENT_POOL = ['agent-jett.glb', 'agent-phoenix.glb', 'agent-sage.glb', 'agent-sova.glb']
-  // Vandal 皮肤 GLB（skinMap 目录驱动：条目带 file 的都试装；缺文件静默回退本体
-  // 枪模 + 皮肤音效包——混沌序曲即此形态：仓库不带模型，投放即换模）
-  const SKIN_GLB = SKINS.vandal.filter(s => s.file)
 
   // 官方 .psa 走/跑/横移曲线（scripts/psa2clips.mjs 从 Rocklan 官方动画转出）：
   // 每英雄按 GLB 骨名后缀解析成 AnimationClip——有官方数据就直接播官方骨骼曲线，
@@ -154,28 +185,8 @@ export async function loadUserAssets(onLate = null) {
   }
   addAgent(firstAgentGltf, 0)
 
-  // 枪模归一化：最长水平轴对齐到 Z（枪管向），随后按包围盒尺寸归一到 0.85m
-  // （90° 水平旋转只交换 x/z，最大边不变 → 缩放用旋转前的 size 即可）。
-  // 自带贴图的模型（Objaverse 系 AK）原生 PBR 材质直接保留；白模才走程序化贴图
-  const normalizeViewmodel = (vm) => {
-    vm.updateMatrixWorld(true)
-    const size = new THREE.Box3().setFromObject(vm).getSize(new THREE.Vector3())
-    if (size.x > size.z) vm.rotation.y = -Math.PI / 2
-    vm.scale.multiplyScalar(0.85 / Math.max(0.001, Math.max(size.x, size.y, size.z)))
-    vm.updateMatrixWorld(true)
-    const c = new THREE.Box3().setFromObject(vm).getCenter(new THREE.Vector3())
-    vm.position.x -= c.x
-    vm.position.y -= c.y
-    vm.position.z -= c.z
-    return vm
-  }
-  const addViewmodel = (key, gltf) => {
-    if (!gltf?.scene) return
-    const vm = normalizeViewmodel(gltf.scene)
-    if (!hasRealTextures(vm)) applyViewmodelTextures(vm) // 白模才盒式投影 + 程序化材质
-    out.viewmodels[key] = vm
-  }
-  addViewmodel('vandal', vandalGltf)
+  // 枪模归一化/落库已提为模块级共用件（addViewmodel），requestSkin 同口径
+  addViewmodel(out, 'vandal', vandalGltf)
 
   // 手臂：原始场景原样返回，对位/缩放在 WeaponSystem.setCustomHands 里按骨骼位置计算
   if (handsGltf?.scene) {
@@ -191,9 +202,10 @@ export async function loadUserAssets(onLate = null) {
     out.glove = gloveGltf.scene
   }
 
-  // 后台批（不阻塞开局）：其余英雄 + phantom + 皮肤。全部到货后并入同一 out
+  // 后台批（不阻塞开局）：其余英雄 + phantom + 官方手臂。全部到货后并入同一 out
   // 并回调 onLate——main 只增量接线新到的枪模键（已接过的重跑 setCustomViewmodel
-  // 会二次包裹枪体）；英雄池走同一数组引用无需通知。加载失败静默留缺位回退
+  // 会二次包裹枪体）；英雄池走同一数组引用无需通知。加载失败静默留缺位回退。
+  // 皮肤 GLB 不在此批（P3 按需化）：默认皮肤 chaos 的用户不必白拉 aristocrat
   if (onLate) {
     ;(async () => {
       try {
@@ -201,19 +213,15 @@ export async function loadUserAssets(onLate = null) {
           ...AGENT_POOL.slice(1).map(tryLoad),
           tryLoad('viewmodel-phantom.glb'),
           tryLoad('arms-official.glb'),
-          ...SKIN_GLB.map(s => tryLoad(s.file)),
         ])
         const nAgents = AGENT_POOL.length - 1
         for (let i = 0; i < nAgents; i++) addAgent(rest[i], i + 1)
-        addViewmodel('phantom', rest[nAgents])
+        addViewmodel(out, 'phantom', rest[nAgents])
         // 官方 1P 手臂（原样返回：OfficialArms attach 时克隆+摆姿+拟合；
         // 动画轨道 = 官方 IdlePose，随 gltf.animations 带出）
         const armsGltf = rest[nAgents + 1]
         if (armsGltf?.scene) {
           out.fpArms = { scene: armsGltf.scene, animations: armsGltf.animations ?? [] }
-        }
-        for (let i = 0; i < SKIN_GLB.length; i++) {
-          addViewmodel(`vandal:${SKIN_GLB[i].id}`, rest[nAgents + 2 + i])
         }
         onLate(out)
       } catch (e) {
@@ -222,4 +230,43 @@ export async function loadUserAssets(onLate = null) {
     })()
   }
   return out
+}
+
+// ============================================================================
+// 皮肤 GLB 按需拉取（P3）：皮肤模型不再随后台批发（默认皮肤是 chaos 的用户
+// 用不到 aristocrat，白背 1.9MB 传输 + 34.5MB VRAM），改为「菜单点选/启动补拉」
+// 触发。语义三要点：
+//   触发条件是条目带 file，而不是「非 default」——default 无文件无事可拉；
+//   chaos 虽是默认皮肤但带投放位 file，照样发起（文件放入 models/ 即自动换模）
+//   负缓存：请求失败（404 投放位缺文件 / 解析损坏）一次即记，会话内不再重发
+//   ——否则默认 chaos 用户每次点按钮都重发必然失败的请求
+//   到货：addViewmodel 归一化后经 onSkinArrival 回调（main 的第三条到货线做
+//   增量接线 + 预热 + applyWeaponSkin 补挂），与两批资产共用同一条管线
+// ============================================================================
+const skinRequests = new Map() // skin id → 'inflight' | 'failed' | 模板根（已到货）
+const skinArrivalCbs = []
+
+export function onSkinArrival(cb) { skinArrivalCbs.push(cb) }
+
+export function requestSkin(id) {
+  const entry = SKINS.vandal.find(s => s.id === id) // 皮肤目录目前只登记 vandal
+  if (!entry?.file || skinRequests.has(id)) return // 无 file / 已到货 / 在途 / 负缓存
+  skinRequests.set(id, 'inflight')
+  // 先 fetch 后 parse：GLTFLoader.load 的错误回调不带 HTTP 状态，无法据此做
+  // 404 负缓存；fetch 拿得到 r.ok。GLB 是自包含二进制，parse 直接吃 ArrayBuffer，
+  // path 仅供外部资源解析（皮肤 GLB 贴图均内嵌，不会真去取）
+  fetch(new URL(`models/${entry.file}`, document.baseURI).href)
+    .then((r) => (r.ok ? r.arrayBuffer() : null))
+    .then((buf) => new Promise((res) => {
+      if (!buf) return res(null)
+      new GLTFLoader().parse(buf, new URL('models/', document.baseURI).href, (gltf) => res(gltf), () => res(null))
+    }))
+    .then((gltf) => {
+      const out = { viewmodels: {} }
+      if (gltf?.scene) addViewmodel(out, `vandal:${id}`, gltf)
+      const vm = out.viewmodels[`vandal:${id}`]
+      skinRequests.set(id, vm ?? 'failed') // 空场景同负缓存（损坏文件不会自愈）
+      if (vm) for (const cb of skinArrivalCbs) cb(out.viewmodels)
+    })
+    .catch(() => skinRequests.set(id, 'failed'))
 }

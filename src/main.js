@@ -16,7 +16,7 @@ import { Menu, loadBests, saveBest, loadLastRound, saveLastRound, loadFastest, s
 import { sanitizeSkin } from './weapons/skinMap.js'
 import { ResultPanel } from './ui/ResultPanel.js'
 import { computeStats } from './core/stats.js'
-import { loadUserAssets } from './core/UserAssets.js'
+import { loadUserAssets, requestSkin, onSkinArrival } from './core/UserAssets.js'
 import { Bot } from './entities/Bot.js'
 
 // ============================================================================
@@ -412,8 +412,10 @@ function applyWeaponSkin(skin) {
 // sova}.glb（每 bot 随机一名英雄；缺位的兜底是 Bot 内置程序化假人）、
 // viewmodel-vandal/phantom.glb（双枪各有高模）、glove.glb 与 hands.glb。
 // 分两批到货（UserAssets.loadUserAssets）：关键批（首英雄+vandal+手件）先开局，
-// 后台批（其余英雄+phantom+皮肤）到货后增量接线——枪模只接新键，
-// 重跑 setCustomViewmodel 会把旧枪二次包裹/缩放
+// 后台批（其余英雄+phantom+官方手臂）到货后增量接线——枪模只接新键，
+// 重跑 setCustomViewmodel 会把旧枪二次包裹/缩放。
+// 皮肤 GLB 不在两批里（P3 按需化）：走 requestSkin（菜单点选/启动补拉）+
+// 下面的第三条到货线，省默认 chaos 用户的 1.9MB 传输与 34.5MB VRAM
 const appliedVmKeys = new Set()
 function wireViewmodels(viewmodels) {
   const fresh = Object.keys(viewmodels ?? {}).filter(k => !appliedVmKeys.has(k))
@@ -438,11 +440,49 @@ function wireViewmodels(viewmodels) {
   }
   applyWeaponSkin(state.cfg.weaponSkin) // 皮肤资产晚到：按已存设置补一次
 }
+
+// 到货即预热：GLB 模板材质懒编译（首见才链 GPU 程序），而模板池不住场景图、
+// renderer.compile 只遍历场景内对象——把到货的模板根临时挂上、prewarm 后立即
+// 摘除（挂/摘在同一同步块内完成，渲染循环观察不到中间态）。不补这步的话首个
+// Bot 出场与首枪各吃一次 ~100ms 着色器编译长帧（首轮交火卡顿的主源）。每批
+// 资产到货都调一次：compile 走全量材质初始化（visible=false 不漏，见
+// Engine.prewarm），已编过的命中程序缓存无重编；到货即挂进 vmScene 的枪模/
+// 官方手臂由 prewarm 的第二个 compile 连带初始化。抽成独立函数供 P3 的
+// requestSkin 皮肤到货线直接复用
+function prewarmTemplates(...roots) {
+  const attached = roots.filter(r => r?.isObject3D)
+  for (const r of attached) engine.scene.add(r)
+  engine.prewarm() // 主场景（模板根）+ vmScene（枪模/手臂）双场景全量
+  for (const r of attached) engine.scene.remove(r)
+}
+
+// 第三条到货线：requestSkin 按需拉取的皮肤 GLB（会话中途异步到货——菜单点选
+// 或下面的启动补拉）。wireViewmodels 增量接线（appliedVmKeys 过滤已接键）并在
+// 尾部补 applyWeaponSkin：玩家枪经 weaponMeshFor 显隐自动切到皮肤键，Bot 模板
+// 池的 vandal 项换肤；随后与两批资产同款到货即预热（克隆件与模板共享材质，
+// 编一次全暖）。先注册监听再发请求，不会漏掉更早到货的回调
+onSkinArrival((viewmodels) => {
+  wireViewmodels(viewmodels)
+  prewarmTemplates(...Object.values(Bot.weaponTemplates ?? {}))
+})
+
+// 启动补拉：localStorage 恢复的皮肤（如 aristocrat）本会话没有其他触发路径
+// （用户不点皮肤按钮就永远不来，main.js 的 applyWeaponSkin 只能静默回落本体）。
+// 默认 chaos 投放位缺文件时这一次 404 由 requestSkin 的负缓存兜住，会话内不再重发
+requestSkin(state.cfg.weaponSkin)
+
 loadUserAssets((assets) => {
   wireViewmodels(assets.viewmodels)
   // 官方 1P 手臂随后台批到货（onLate 在 out.fpArms 赋值后才触发）；在位后
   // weaponMeshFor 的三层优先级自然接管显隐，glove/hands 转为回退件
   if (assets.fpArms) weapons.setOfficialArms(assets.fpArms)
+  // 后台批到货即预热：新英雄 + phantom 模板（临时挂主场景），官方手臂已挂进
+  // vmScene 由 prewarm 连带——首装备/下一波出场不吃编译长帧（皮肤模板走
+  // requestSkin 到货线，不在此批）
+  prewarmTemplates(
+    ...(Bot.customTemplates ?? []).map(t => t.root),
+    ...Object.values(Bot.weaponTemplates ?? {}),
+  )
 })
   .then(({ agents, viewmodels, glove, hands }) => {
   if (agents?.length) { Bot.customTemplates = agents } // 后台英雄 push 进同一数组即生效
@@ -454,6 +494,9 @@ loadUserAssets((assets) => {
   //   3. hands.glb 整臂（四指合并）——末级回退
   const gloveOk = !!glove && weapons.setGloveHands(glove, hands) !== false
   if (!gloveOk && hands) weapons.setCustomHands(hands)
+  // 关键批到货即预热：首英雄 + vandal 模板（临时挂主场景编一次），玩家枪模/
+  // 手套已挂进 vmScene 由 prewarm 连带——首个 Bot 出场与首枪不吃编译长帧
+  prewarmTemplates(...(agents ?? []).map(a => a.root), ...Object.values(Bot.weaponTemplates ?? {}))
   // 模板晚到不打断任何状态：未开局时 startRound → resetRound 自然清池换新模板；
   // 进行中的回合等下一局。此处绝不主动 resetRound——它会把 BotManager 置为
   // running 并设 roundEndAt，菜单页 HUD 会凭空显示 63.0s 倒计时、还触发开局音

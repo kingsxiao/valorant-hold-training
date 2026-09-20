@@ -109,4 +109,39 @@ describe('computeStats 统计口径', () => {
     expect(c.kills).toBe(0)
     expect(c.duelsLost).toBe(0)
   })
+
+  it('aimErrors 对象化迁移：aimErrorDeg 取 .mag 均值（reduce 漏改此处即 NaN）', () => {
+    const c = computeStats({
+      shots: 4, hits: 2, headshots: 1, kills: 2, duelsLost: 0, reactions: [280],
+      aimErrors: [{ yaw: 8, pitch: 6, mag: 10 }, { yaw: -4, pitch: 0, mag: 4 }],
+    })
+    expect(c.aimErrorDeg).toBe(7)
+    expect(c.aimSamples).toBe(2)
+  })
+
+  it('带符号偏差均值保号：对称甩枪把幅值洗小、洗不掉固定符号', () => {
+    // 一右甩（yaw −9）两左偏（+9/+12）：幅值均值 ≈10.5° 看着只是"偏得多"，
+    // yaw 均值 +4° 才暴露系统性偏左 —— 方向统计正是补这个盲区
+    const c = computeStats({
+      shots: 6, hits: 4, headshots: 1, kills: 3, duelsLost: 0, reactions: [300],
+      aimErrors: [{ yaw: 9, pitch: -3, mag: 9.5 }, { yaw: -9, pitch: -3, mag: 9.5 }, { yaw: 12, pitch: -3, mag: 12.4 }],
+    })
+    expect(c.aimYawBiasDeg).toBe(4)
+    expect(c.aimPitchBiasDeg).toBe(-3)
+    expect(c.aimErrorDeg).toBe(10.5)
+  })
+
+  it('样本不足门槛（<3）带符号偏差记 0；空数组不产生 NaN', () => {
+    const c = computeStats({
+      shots: 1, hits: 1, headshots: 0, kills: 1, duelsLost: 0, reactions: [200],
+      aimErrors: [{ yaw: 5, pitch: -5, mag: 7.1 }],
+    })
+    expect(c.aimErrorDeg).toBe(7.1)
+    expect(c.aimYawBiasDeg).toBe(0)
+    expect(c.aimPitchBiasDeg).toBe(0)
+    const empty = computeStats({ reactions: [], aimErrors: [] })
+    expect(empty.aimErrorDeg).toBe(0)
+    expect(empty.aimYawBiasDeg).toBe(0)
+    expect(empty.aimPitchBiasDeg).toBe(0)
+  })
 })

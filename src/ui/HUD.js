@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { computeStats } from '../core/stats.js'
+import { computeStats, aimBiasSuffix } from '../core/stats.js'
 import { fmtMs } from './util.js'
 
 // HUD：只在文本变化时写 DOM（避免每帧重排）；FPS 曲线用小 canvas
@@ -78,7 +78,8 @@ export class HUD {
       ['反应均值', fmtMs(c.avgReactionMs) + 'ms'],
       ['最快反应', fmtMs(c.bestReactionMs) + 'ms'],
       ['反应波动', c.reactStdMs ? '±' + fmtMs(c.reactStdMs) + 'ms' : '—'],
-      ['预瞄误差', c.aimSamples ? c.aimErrorDeg + '°' : '—'],
+      // 预瞄误差带方向后缀：样本够且偏差过阈值时显示（偏左·偏高）——实时纠偏
+      ['预瞄误差', c.aimSamples ? c.aimErrorDeg + '°' + aimBiasSuffix(c) : '—'],
     ]
     const key = JSON.stringify(rows) + '|' + engine.fps + '|' + engine.low1Pct
     if (key === this._lastStatsKey) return

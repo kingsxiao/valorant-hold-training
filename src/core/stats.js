@@ -2,6 +2,39 @@
 // 训练统计汇总（纯函数）：HUD 实时面板与回合结算共用同一口径，避免两处漂移。
 // ============================================================================
 
+// 方向化预瞄偏差的判定门槛：样本 <3 只记幅值不判方向（两三发定不了"习惯"）；
+// |偏差| <4° 视为噪声级 —— 说"稳定偏左"得先有稳定且可观的偏移量
+const AIM_BIAS_MIN_SAMPLES = 3
+const AIM_BIAS_TIP_DEG = 4
+
+// 预瞄偏航方向（纯函数，符号链路在此收敛，锁死"偏左/偏右"不指反）：
+// Bot.js 采样 dyaw = p.yaw − yawTo（归一到 −180..180），而 yaw 增大 = 视线
+// 左转（Player.applyMouse：鼠标右移 dx>0 → yaw 递减，Player.js），故带符号
+// 偏航均值 >0 ⇔ 准星系统性压在目标左侧
+export function aimBiasDirection(yawBiasDeg) {
+  if (yawBiasDeg > 0) return '偏左'
+  if (yawBiasDeg < 0) return '偏右'
+  return null
+}
+
+// 预瞄俯仰方向：dpitch = p.pitch − pitchTo（Bot.js），pitch 正 = 抬头
+// （Player.js 相机 rotation.x 取 pitch，正角把视线抬向 +Y）→ 均值 >0 ⇔ 偏高
+export function aimPitchDirection(pitchBiasDeg) {
+  if (pitchBiasDeg > 0) return '偏高'
+  if (pitchBiasDeg < 0) return '偏低'
+  return null
+}
+
+// 方向化预瞄偏差文案（HUD 实时行与回合结算格共用同一拼法）：'（偏左·偏高）'
+// 形态后缀；样本不足或 |偏差| 低于阈值时返回 ''——噪声级偏差谈方向只会误导
+export function aimBiasSuffix(c) {
+  if ((c.aimSamples ?? 0) < AIM_BIAS_MIN_SAMPLES) return ''
+  const parts = []
+  if (Math.abs(c.aimYawBiasDeg ?? 0) >= AIM_BIAS_TIP_DEG) parts.push(aimBiasDirection(c.aimYawBiasDeg))
+  if (Math.abs(c.aimPitchBiasDeg ?? 0) >= AIM_BIAS_TIP_DEG) parts.push(aimPitchDirection(c.aimPitchBiasDeg))
+  return parts.length ? `（${parts.join('·')}）` : ''
+}
+
 export function computeStats(s) {
   const rs = s.reactions ?? []
   const n = rs.length
@@ -11,7 +44,16 @@ export function computeStats(s) {
   const std = n > 1 ? Math.round(Math.sqrt(rs.reduce((a, b) => a + (b - avg) ** 2, 0) / (n - 1))) : 0
   const best = n ? Math.min(...rs) : 0
   const aes = s.aimErrors ?? []
-  const aimAvg = aes.length ? Math.round(aes.reduce((a, b) => a + b, 0) / aes.length * 10) / 10 : 0
+  // aimErrors 自方向化改造后存 {yaw, pitch, mag}：幅值给"平均偏几度"的旧口径，
+  // 带符号分量给偏航/俯仰偏差（正负号含义见 aimBiasDirection / aimPitchDirection）
+  const aimAvg = aes.length ? Math.round(aes.reduce((a, b) => a + b.mag, 0) / aes.length * 10) / 10 : 0
+  // 带符号偏差均值：对称甩枪（先左甩再右甩）会把幅值均值洗小、但洗不掉固定
+  // 符号——方向统计正是补这个盲区。样本不足门槛记 0，与 aimErrorDeg"空=0"
+  // 兜底口径一致；显示/建议层再按 |偏差|≥4° 过滤噪声
+  const yawBias = aes.length >= AIM_BIAS_MIN_SAMPLES
+    ? Math.round(aes.reduce((a, b) => a + b.yaw, 0) / aes.length * 10) / 10 : 0
+  const pitchBias = aes.length >= AIM_BIAS_MIN_SAMPLES
+    ? Math.round(aes.reduce((a, b) => a + b.pitch, 0) / aes.length * 10) / 10 : 0
   return {
     kills: s.kills ?? 0,
     duelsLost: s.duelsLost ?? 0,
@@ -25,6 +67,8 @@ export function computeStats(s) {
     maxStreak: s.maxStreak ?? 0,
     aimErrorDeg: aimAvg,
     aimSamples: aes.length,
+    aimYawBiasDeg: yawBias,
+    aimPitchBiasDeg: pitchBias,
   }
 }
 
@@ -46,6 +90,19 @@ export function coachingTip(c) {
   if (c.kills + c.duelsLost === 0) return null
   if (c.duelsLost > c.kills)
     return '漏杀多于击杀 —— 把准星预先放在缺口沿的高度，Bot 出现时只需微调，不必大幅甩枪。'
+  // 系统性预瞄偏移（带方向）：|偏差|≥4° 且样本≥3 —— 习惯性压左/压右/偏高/偏低
+  // 是预瞄习惯问题，一次纠偏每波都吃到；取偏差更大的轴给建议
+  const yB = c.aimYawBiasDeg ?? 0
+  const pB = c.aimPitchBiasDeg ?? 0
+  if (c.aimSamples >= AIM_BIAS_MIN_SAMPLES && (Math.abs(yB) >= AIM_BIAS_TIP_DEG || Math.abs(pB) >= AIM_BIAS_TIP_DEG)) {
+    const useYaw = Math.abs(yB) >= Math.abs(pB)
+    const dir = useYaw ? aimBiasDirection(yB) : aimPitchDirection(pB)
+    const deg = Math.abs(useYaw ? yB : pB)
+    const fix = useYaw
+      ? (dir === '偏左' ? '整体右移' : '整体左移')
+      : (dir === '偏高' ? '整体下压' : '整体上抬')
+    return `露头瞬间准星稳定${dir} ${deg}°—— 这是习惯性偏移不是随机散布，把默认预瞄点${fix}几度，一次纠偏每波对枪都吃到。`
+  }
   if (c.aimSamples >= 3 && c.aimErrorDeg >= 12)
     return `露头瞬间准星平均偏了 ${c.aimErrorDeg}°—— 预瞄点要贴在缺口沿（A 缺口看左沿、B 缺口看右沿），出现后只补最后几度。`
   if (c.avgReactionMs >= 550)

@@ -1,6 +1,6 @@
 // 回合结算面板：与设置面板（Menu）分离的独立结算界面
 // 回合结束 → show(stats)；「再来一局」重开 / 「调整设置」回到 Menu
-import { computeStats, coachingTip, gradeFor } from '../core/stats.js'
+import { computeStats, coachingTip, gradeFor, aimBiasSuffix } from '../core/stats.js'
 
 export class ResultPanel {
   constructor({ overlay, onRestart, onSettings }) {
@@ -83,6 +83,9 @@ export class ResultPanel {
       cell(c.duelsLost, '漏杀') +
       cell(c.accuracy + '%', '命中率', delta(c.accuracy, p?.accuracy)) +
       cell(c.headshotRate + '%', '爆头率') +
+      // 预瞄偏差（幅值 + 方向后缀）：系统性偏左/偏右/偏高/偏低是预瞄习惯问题，
+      // 结算时点出来好做一次性纠偏（方向判定与后缀拼法同 HUD，共用 stats 口径）
+      cell(c.aimSamples ? c.aimErrorDeg + '°' + aimBiasSuffix(c) : '—', '预瞄偏差') +
       cell(c.maxStreak > 1 ? '×' + c.maxStreak : '—', '最长连杀') +
       cell(c.avgReactionMs ? c.avgReactionMs + 'ms' : '—', '平均反应', delta(c.avgReactionMs || null, p?.avgReactionMs || null, true)) +
       cell(c.reactStdMs ? '±' + c.reactStdMs + 'ms' : '—', '反应波动') +

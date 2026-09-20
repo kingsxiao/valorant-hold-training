@@ -65,7 +65,7 @@ export class BotManager {
       reactions: [], // ms
       lastReaction: 0,
       maxStreak: 0,   // 本局最长连杀（4.5s 窗口），main 在击杀时更新
-      aimErrors: [],  // 预瞄误差（度）：Bot 露头瞬间准星与目标的角偏差，Bot.step 采样
+      aimErrors: [],  // 预瞄误差（度）：Bot 露头瞬间准星与目标的角偏差 {yaw, pitch, mag}（带符号分量+幅值），Bot.step 采样
     }
   }
 

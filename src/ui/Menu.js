@@ -5,6 +5,7 @@ import {
 } from './crosshairCode.js'
 import { paintCrosshair } from './Crosshair.js'
 import { SKINS, sanitizeSkin } from '../weapons/skinMap.js'
+import { requestSkin } from '../core/UserAssets.js'
 
 // 设置 / 暂停面板（DOM），设置持久化 localStorage；回合结算在 ResultPanel
 const LS_KEY = 'vht-settings-v1'
@@ -386,14 +387,16 @@ export class Menu {
     }
 
     // Vandal 皮肤（官方商城皮肤，GLB 缺位自动回退默认）：实时生效——玩家枪
-    // 立即换，Bot 后续波次的挂枪跟着换（在场的不变）
+    // 立即换，Bot 后续波次的挂枪跟着换（在场的不变）。点选同时按需拉取皮肤
+    // GLB（requestSkin：无 file/default 不发请求，404 投放位负缓存不重发），
+    // 到货后 main 第三条到货线自动换模——音效/枪口包不等模型，点下即生效
     const skBox = p.querySelector('[data-group=weaponSkin]')
     for (const s of SKINS.vandal) {
       const b = document.createElement('button')
       b.className = 'opt-btn'
       b.textContent = `Vandal 皮肤 · ${s.label}`
       b.dataset.value = s.id
-      b.onclick = () => { this.cfg.weaponSkin = s.id; this.syncButtons(); saveSettings({ weaponSkin: s.id }); this.applyAll?.() }
+      b.onclick = () => { this.cfg.weaponSkin = s.id; requestSkin(s.id); this.syncButtons(); saveSettings({ weaponSkin: s.id }); this.applyAll?.() }
       skBox.appendChild(b)
     }
 

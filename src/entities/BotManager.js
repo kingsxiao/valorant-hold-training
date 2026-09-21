@@ -215,8 +215,11 @@ export class BotManager {
           ? startX + dir * rand(0.5, 0.72) * Math.abs(turnX - startX)
           : 0
         b.peek = { style: 'pull', startX, turnX, endX: startX, dir, phase: 'out', jiggleAt,
-          // 蹲走拉出掷定（非 jiggle 波；官方蹲走循环 + 命中区 ×0.70）
-          crouchWalk: !jiggleAt && Math.random() < CONFIG.training.crouchWalkChance }
+          // 蹲走拉出掷定（非 jiggle 波）：有官方蹲走循环的模型才掷（与 Bot.js
+          // 消费侧 this.anim?.crouchWalk 同口径）——程序化假人/无蹲走 clip 的
+          // 老模型不进蹲走波（否则只表现为慢速站立横移，既不蹲也不贴几何）；
+          // 命中区经骨锚跟随蹲姿
+          crouchWalk: !jiggleAt && !!b.anim?.crouchWalk && Math.random() < CONFIG.training.crouchWalkChance }
       }
       b.place(startX, this.map.peekLineZ, 'peek')
       b.slot = slot
@@ -244,7 +247,10 @@ export class BotManager {
       // 波次收尾：完整走完未被击杀 = 漏杀（只进统计，无判负机制），躲进墙后
       // 才重新排程下一波（渐进难度系数在排程时生效）
       const finishWave = () => {
-        if (activeBot.mode === 'peek') this.stats.duelsLost++
+        // 漏杀可见性门槛：整波从未进过玩家视野（firstVisibleAt<0，玩家站远/
+        // 走开）不计——与 reactions/aimErrors 的同款口径；口径变更点：旧局按
+        // 无门槛计数，结算面板漏杀数值跨局不可直接对比
+        if (activeBot.mode === 'peek' && activeBot.firstVisibleAt > 0) this.stats.duelsLost++
         activeBot.hide()
         slot.bot = null
         slot.nextAt = slot.partner ? Infinity : 0 // 副槽回休眠，主槽重掷下一波

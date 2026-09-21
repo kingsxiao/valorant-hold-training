@@ -91,21 +91,21 @@ describe('makeSprayPattern 后坐力弹道表', () => {
 
   it('首发无累计偏移；前段垂直上抬单调不减（默认 climb=16 实测标定）', () => {
     const pat = makeSprayPattern(30)
-    expect(pat[0].p).toBeCloseTo(0.71, 1) // 0.18 × 16/4.03（默认 climb=16）
+    expect(pat[0].p).toBe(0) // 首发即准星（旧表首项 0.18×16/4.03≈0.71° 系统性上偏，已置 0）
     expect(pat[0].y).toBe(0)
     for (let i = 1; i < 9; i++) expect(pat[i].p).toBeGreaterThan(pat[i - 1].p)
   })
 
-  it('实测标定锁值：Vandal 25 发累计爬升 ≈ 18°（四 take 双确认中位）、Phantom ≈ 17°（独立三样本）', () => {
+  it('实测标定锁值：Vandal 25 发累计 ≈17.1°（climb 18 − 首项 0.80，四 take 双确认中位）、Phantom ≈16.2°（climb 17 − 0.76，独立三样本）', () => {
     const vd = makeSprayPattern(25, { prot: 6, swing: 5.85, climb: CONFIG.weapons.vandal.recoil.climb })
     const ph = makeSprayPattern(25, { prot: 8, swing: 6.6, climb: CONFIG.weapons.phantom.recoil.climb })
-    expect(vd[24].p).toBeGreaterThan(17.5)
-    expect(vd[24].p).toBeLessThan(18.5)
-    expect(ph[24].p).toBeGreaterThan(16.5)
-    expect(ph[24].p).toBeLessThan(17.5)
-    // 曲线里程碑（保持原形状只放大总幅）：3 发 ~14%、9 发 ~87%、13 发 ~95%
-    expect(vd[2].p / vd[24].p).toBeGreaterThan(0.12)
-    expect(vd[2].p / vd[24].p).toBeLessThan(0.17)
+    expect(vd[24].p).toBeGreaterThan(16.6)
+    expect(vd[24].p).toBeLessThan(17.6)
+    expect(ph[24].p).toBeGreaterThan(15.6)
+    expect(ph[24].p).toBeLessThan(16.7)
+    // 曲线里程碑（保持原形状只放大总幅）：3 发 ~9%、9 发 ~87%、13 发 ~95%
+    expect(vd[2].p / vd[24].p).toBeGreaterThan(0.07)
+    expect(vd[2].p / vd[24].p).toBeLessThan(0.12)
     expect(vd[8].p / vd[24].p).toBeGreaterThan(0.84)
     expect(vd[8].p / vd[24].p).toBeLessThan(0.90)
     expect(vd[12].p / vd[24].p).toBeGreaterThan(0.93)
@@ -127,15 +127,15 @@ describe('makeSprayPattern 后坐力弹道表', () => {
     expect(Math.max(...vd.slice(18).map(({ y }) => y))).toBeGreaterThan(0.4)
   })
 
-  it('半自动武器多样本锁值：弹匣段累计（Sheriff ≈18.9 三样本压枪分离 / Classic ≈15.0 / Ghost ≈19.7 判据复核通过）', () => {
+  it('半自动武器多样本锁值：弹匣段累计（Sheriff ≈17.4 三样本压枪分离 − 首项 1.51 / Classic ≈14.3 / Ghost ≈18.7 判据复核通过）', () => {
     const seg = (climb, count) => makeSprayPattern(count, { prot: 6, swing: 5.9, climb })[count - 1].p
     const sh = seg(CONFIG.weapons.sheriff.recoil.climb, 6)
     const cl = seg(CONFIG.weapons.classic.recoil.climb, 12)
     const gh = seg(CONFIG.weapons.ghost.recoil.climb, 13)
-    // Sheriff 带宽 = 无压枪对均值 ± 对内离散 ±0.95
-    expect(sh).toBeGreaterThan(17.9); expect(sh).toBeLessThan(19.9)
-    expect(cl).toBeGreaterThan(14.4); expect(cl).toBeLessThan(15.6)
-    expect(gh).toBeGreaterThan(18.7); expect(gh).toBeLessThan(20.7)
+    // Sheriff 带宽 = 无压枪对均值 ± 对内离散 ±0.95（整表随首项置 0 下移 1.51°）
+    expect(sh).toBeGreaterThan(16.4); expect(sh).toBeLessThan(18.4)
+    expect(cl).toBeGreaterThan(13.7); expect(cl).toBeLessThan(14.9)
+    expect(gh).toBeGreaterThan(17.8); expect(gh).toBeLessThan(19.8)
     // per-shot 后坐排序（双样本维持）：Sheriff > Ghost > Classic
     expect(sh / 6).toBeGreaterThan(gh / 13)
     expect(gh / 13).toBeGreaterThan(cl / 12)

@@ -57,6 +57,36 @@ export function dizzyPlasmaBlind() {
   return { potency: G.blindPotency, fade: G.blindFade, total: G.blindPotency + G.blindFade }
 }
 
+// 受出手速度约束的弹道解算（口径速度是活约束——不由引信时长反解初速）。
+// 给定起点/目标点/出手速度/重力，反解「直射分支」的初速与飞行时间：速度向量
+// 满足 |v| = speed，且 T 时刻按抛物线 start + v·T − ½gT² 恰好落在目标点。
+// 推导：vy = dy/T + ½gT（补偿重力）代入 |v|² = (dh² + dy²)/T² + dy·g + ¼g²T²，
+// 得 ¼g²u² + (dy·g − speed²)u + (dh² + dy²) = 0（u = T²）——两根对应高抛/直射
+// 两条弹道，取直射小根（pop flash 都是平射快球）。判别式 < 0 或无正根
+// （速度打不到目标）→ null，由调用方兜底
+export function ballisticShot(start, target, speed, gravity) {
+  const dx = target.x - start.x, dy = target.y - start.y, dz = target.z - start.z
+  if (gravity < 1e-9) { // 无重力：退化为直线匀速
+    const d = Math.hypot(dx, dy, dz)
+    if (d < 1e-9) return null
+    const T = d / speed
+    return { vel: { x: dx / T, y: dy / T, z: dz / T }, T }
+  }
+  const dh2 = dx * dx + dz * dz
+  const A = 0.25 * gravity * gravity
+  const B = dy * gravity - speed * speed
+  const C = dh2 + dy * dy
+  const disc = B * B - 4 * A * C
+  if (disc < 0) return null
+  const u = (-B - Math.sqrt(disc)) / (2 * A) // 直射分支（小根）
+  if (u <= 0) return null
+  const T = Math.sqrt(u)
+  return {
+    vel: { x: dx / T, y: dy / T + 0.5 * gravity * T, z: dz / T },
+    T,
+  }
+}
+
 // 二次贝塞尔弧长表：Fixed 曲线导弹（Curveball）按恒定速度行进需要弧长参数化。
 // 返回 { point(u, out), len }——point 接受 0..len 的弧长，落到贝塞尔曲线上
 export function arcBezier(p0, p1, p2, samples = 48) {

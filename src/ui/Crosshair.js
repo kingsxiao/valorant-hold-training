@@ -35,10 +35,17 @@ export function paintCrosshair(ctx, s, { movePx = 0, firePx = 0, alphaScale = 1,
       + (g.moveErr ? movePx * g.moveMult : 0)
       + (g.fireErr ? firePx * g.fireMult : 0)
     const l = g.length, vl = g.linked ? g.length : g.vlength, t = g.thickness
-    els.push({ x: -gap - l, y: -t / 2, w: l, h: t, alpha: g.opacity }) // 左
-    els.push({ x: gap, y: -t / 2, w: l, h: t, alpha: g.opacity })      // 右
-    els.push({ x: -t / 2, y: -gap - vl, w: t, h: vl, alpha: g.opacity }) // 上
-    els.push({ x: -t / 2, y: gap, w: t, h: vl, alpha: g.opacity })     // 下
+    // 长度为 0 的线整条不参与绘制（本体与轮廓一起消失）：社区点准心代码用
+    // 0l;0 关线，只隐本体会在线位残留两侧轮廓竖条——游戏内该代码渲染为
+    // 干净带边点准心（宽度/高度为 0 的矩形无面积，无渲染语义）
+    if (l > 0) {
+      els.push({ x: -gap - l, y: -t / 2, w: l, h: t, alpha: g.opacity }) // 左
+      els.push({ x: gap, y: -t / 2, w: l, h: t, alpha: g.opacity })      // 右
+    }
+    if (vl > 0) {
+      els.push({ x: -t / 2, y: -gap - vl, w: t, h: vl, alpha: g.opacity }) // 上
+      els.push({ x: -t / 2, y: gap, w: t, h: vl, alpha: g.opacity })     // 下
+    }
   }
   const sw = s.outlines ? s.outlineThickness : 0
   if (sw > 0 && s.outlineOpacity > 0) {

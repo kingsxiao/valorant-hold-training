@@ -191,7 +191,7 @@ export const CONFIG = {
     peekDelayMaxMs: 1400,   // 上限：单次最长也就 ~1.4s，不干等
     peekSide: 'left',       // Bot 出场侧：left / right 固定一侧练同向预瞄，random 保留两侧随机
     weaponSkin: 'default',  // Vandal 皮肤：default / aristocrat（官方商城 Aristocrat 收藏集，镀金）
-    crouchWalkChance: 0.2,  // pull 波掷定蹲走拉出的概率（官方蹲走循环，命中区 ×0.70）
+    crouchWalkChance: 0.2,  // pull 波掷定蹲走拉出的概率（官方蹲走循环，命中区经骨锚跟随蹲姿）
     crouchWalkSpeed: 2.7,   // 蹲走拉出移速（m/s）：本体口径 = 50% 跑速；播放松条可调
                             // （1.4-2.7）——步幅恒定、步频随移速（151 轮定案，回归测试锁死）
     crossChance: 0.5,       // 每波风格：侧面跑过（贯穿缺口顺跑向）vs 正面横移走出（面向玩家拉出即缩）
@@ -217,7 +217,10 @@ export const CONFIG = {
     angleExp: 2,           // 视野外随角度的衰减幂次
     fadeTime: 1,           // 致盲到期后白屏渐褪 1s（维基确认值）
     // KAY/O FLASH/drive：Class 2 投掷物（1800uu/s=18m/s、重力系数 0.3×9.8=2.94），
-    // 总引信 1.6s；v10.06 起首次弹跳后改为 0.8s 引信（不延长剩余时间）；最大致盲 2.25s（v11.08 起双手同值）
+    // 总引信 1.6s；v10.06 起首次弹跳后改为 0.8s 引信（不延长剩余时间）；最大致盲 2.25s（v11.08 起双手同值）。
+    // speed 已接入 ballisticShot 弹道解算；spawn 结构为拍地弹跳 pop flash（门后砸地
+    // →首跳 0.8s 引信→穿门洞玩家侧低位起爆 ~1.05-1.15s）；过墙高位爆变体因
+    // 18m/s×1.6s≈28m ≫ 场地进深几何不成立已删去
     kayo: { speed: 18, gravity: 2.94, maxFuse: 1.6, bounceFuse: 0.8, telegraph: 0.3, maxBlind: 2.25, restitution: 0.32 },
     // Skye Guiding Light：导弹 18m/s 无重力、最长飞行 2s（v7.04）、到时自动起爆（v8.01）；
     // 最大致盲 1→2.25s 随飞行 0.75s 充能（v5.07，v10.00 修复生效）；手动激活后 0.3s 起爆（v3.06）。
@@ -230,7 +233,8 @@ export const CONFIG = {
     // Yoru Blindside：Class 3 投掷物（2900uu/s=29m/s、重力 0.45×9.8=4.41，Deployment
     // types 表）；飞行不可见也无声（v11.10 修"潜行中敌方可听"）——撞面才显形 +
     // 0.6s 预备（v2.06）；2s 未撞面消散（未确认值）；最大致盲 1.5s（v11.08，同时并入
-    // 标准闪光衰减曲线 = 现有 blindDuration 模型）
+    // 标准闪光衰减曲线 = 现有 blindDuration 模型）。speed 按口径速度反解（29m/s）
+    // 接入 ballisticShot 直射解（非按飞行时长反解初速）
     yoru: { speed: 29, gravity: 4.41, maxAir: 2, windup: 0.6, maxBlind: 1.5, restitution: 0.42 },
     // Breach Flashpoint：Placement 穿墙放置（部署距 35m / 穿墙深 10m，本图墙厚自动满足），
     // 到位后 0.5s 预备（v1.07）；最大致盲 2.25s（v11.08）
@@ -240,7 +244,8 @@ export const CONFIG = {
     // game files）；100HP 可击毁（维基）。近视附带 Deafened：音频被闷（维基
     // Status Effect：Nearsight 者同时 deafened——脚步/枪声全糊，只能贴脸听）
     reyna: { deployDist: 10, travel: 0.55, arrivalWindup: 0.4, nearsight: 1.6, visionRadius: 6, hp: 100, radius: 0.32 },
-    // Gekko Dizzy：Class 2 投掷（同 KAY/O 18m/s、g2.94）——0.65s 激活预备（未确认值）
+    // Gekko Dizzy：Class 2 投掷（同 KAY/O 18m/s、g2.94，speed 按口径速度反解（18m/s）
+    // 接入 ballisticShot 直射解——非按飞行时长反解）——0.65s 激活预备（未确认值）
     // 后减速悬停，活跃 1s（v9.08）内对 45m 视线内目标 0.35s 锁定（v7.12）喷等离子：
     // 溅射 2.5m，全屏遮蔽 2s = 1s 满效 + 1s 渐褪（game files；转身不可避——
     // 只判 LOS 不判朝向）；20HP 可击毁
@@ -263,7 +268,7 @@ export const CONFIG = {
 }
 
 // ---- 后坐力弹道表（程序化生成的压枪轨迹；幅度按实机素材实测标定）----
-// 每项为该发子弹相对准心的累计偏移（度）。
+// 每项为该发子弹相对准心的累计偏移（度）；首项恒为 0（首发即准星，无累计偏移）。
 // 幅度标定（2026-09-11，实机素材逐帧/几何测量 + 后坐比例锚定，多 take 交叉）：
 //  - Vandal 18°：专集四 take 双确认后按枪位分组（T1/T2=ADS 剔除、T3/T4=腰射）：
 //    纯腰射列跨 {17.5（主）, 21.3}° 减展宽 → climb 样本 {16.1, 20.1}，中值 18.1
@@ -289,7 +294,9 @@ export const CONFIG = {
 //  - swing：一次水平换向持续的弹数（补丁"Yaw switch time 0.6s"× 射速，Vandal ≈5.85）
 // 垂直形状：前 9 发陡升 → 高位平台（垂直停住，压枪量不再增长）。平台期不允许
 // 垂直回落——压枪过冲后还要反向上推的手感是错的，压到高点只管左右修。
-// climb 参数 = 25 发累计垂直幅度（度）；垂直增量按 climb/4.03 等比缩放基线形状，
+// climb 参数 = 25 发累计垂直幅度（度）；首项置 0 后表内 25 发累计 = climb − 首段
+// 单发 0.18×climb/4.03（vandal 17.11° / phantom 16.16°），climb 标定值不动；
+// 垂直增量按 climb/4.03 等比缩放基线形状，
 // 水平摆幅 = √比例 × 实测包络（vandal 列 x 展宽 125px/phantom 57px → 峰峰 5-8°）。
 export function makeSprayPattern(n = 25, { prot = 6, swing = 5.9, climb = 16 } = {}) {
   const K = climb / 4.03 // 垂直比例尺（基线形状 25 发累计 4.03°）
@@ -297,7 +304,11 @@ export function makeSprayPattern(n = 25, { prot = 6, swing = 5.9, climb = 16 } =
   const pat = []
   let p = 0
   for (let i = 0; i < n; i++) {
-    if (i < 3) p += 0.18 * K
+    // 首发增量 0（i=0）：第一发子弹从准星出发。旧表首项就有 0.18K 垂直增量
+    // （vandal 0.80°/sheriff 1.51°），超过 15m 外头部命中区角半径 ≈0.5°——
+    // 首发系统性偏高。后续发增量不变（整表累计 = 旧值 − 0.18K）
+    if (i === 0) { /* 首发即准星，无累计偏移 */ }
+    else if (i < 3) p += 0.18 * K
     else if (i < 9) p += (0.62 - (i - 3) * 0.05) * K
     else if (i < 13) p += 0.08 * K
     else p += 0.015 * K // 平台期微升：压枪量基本封顶，只留给水平摆动

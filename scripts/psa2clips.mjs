@@ -1,6 +1,7 @@
 // 官方 .psa 骨骼动画 → locomotion.json（运行时由 core/Locomotion.js 建 AnimationClip）
 // 数据源：assets-raw/core-psa 的 TP_Core 共享核心集（本体所有英雄的移动都用它）——
-//   走/跑 N/E/W 全 8 向里先取 6 个；死亡/跳/蹲/转身在旁待接入
+//   走/跑 N/E/W 全 8 向里先取 6 个；死亡/蹲走已接入（跳 peek/停步转身/急停支架
+//   随 161 轮玩法收敛整层下线，本脚本不再导出，运行时零消费）
 // 为什么换源（128 轮滑步根因）：各英雄 Simple 目录的套装（Jett X_Knives、
 //   Sova Q_Bow）是被剥掉跑步机分量的特殊变体——支撑期脚相对盆骨仅 ~46cm 行程，
 //   腿链可达锥（±0.5m）根本盖不住体速位移，钉地 IK 只能钉 50-90ms 然后随体滑。
@@ -107,9 +108,9 @@ function clipFromFull(path) {
     if (pVar) t.p = p.flat().map(v => +(v * 0.01).toFixed(5))
     tracks.push(t)
   }
-  // 官方 IK 落地锚（StopAdd/Turn 等整身 clip 同样带 L/R_IK_FootTarget）：
-  // 急停支架/转身踏步的官方脚部约束——不导出 = 这些状态钉地无锚，原始腿曲线
-  // （官方 FootIK 之前的姿态）直接暴露（脚穿地/悬空的 160 轮根因）
+  // 官方 IK 落地锚（死亡等整身 clip 同样带 L/R_IK_FootTarget）：官方脚部
+  // 约束——不导出 = 钉地无锚，原始腿曲线（官方 FootIK 之前的姿态）直接暴露
+  // （脚穿地/悬空的 160 轮根因）
   const ik = {}
   for (const [side, bone] of Object.entries(IK_BONES)) {
     const bi = names.indexOf(bone)
@@ -156,29 +157,6 @@ const SRC = {
     walkNW: 'assets-raw/core-psa/TP_Core_CrouchWalkNW_LB.psa',
     walkSE: 'assets-raw/core-psa/TP_Core_CrouchWalkSE_LB.psa',
     walkSW: 'assets-raw/core-psa/TP_Core_CrouchWalkSW_LB.psa',
-  },
-  // 跳 peek：JumpN=预备蹲(0.13s)→蹬伸(峰值 0.63s)→空中收腿保持（3.2s，过截
-  // 断）；抛物线本体走引擎（clip 无弧线）——由 Bot 的 mesh.y 弧线偏移驱动，
-  // 命中区随 mesh 自动跟随；JumpLand=落地压缩→回站（0.667s 一次）
-  jump: {
-    jumpN: 'assets-raw/core-psa/TP_Core_JumpN_LB.psa',
-    jumpLand: 'assets-raw/core-psa/TP_Core_JumpLand_LB.psa',
-    // 滞空段姿态续接：JumpN 蹬伸段播完后（滞空 >0.35s）切 Falling 循环保持
-    // 空中收腿姿态（根高 112-119cm 全程悬空），落地仍切 JumpLand
-    fall: 'assets-raw/core-psa/TP_Core_Falling_LB.psa',
-  },
-  // 停步转身踏步（E=向右 / W=向左 × 45/90/135/180°，全部 1.0s）：clip 本体不带
-  // 根旋转（Splitter/Pelvis Y 转角≈0）——本体引擎程序化转根，腿只出「转身踏步」
-  // 步型；我们同样保持 yaw lerp 权威、clip 只出腿
-  turn: {
-    E45: 'assets-raw/core-psa/TP_Core_TurnE45_LB.psa',
-    E90: 'assets-raw/core-psa/TP_Core_TurnE90_LB.psa',
-    E135: 'assets-raw/core-psa/TP_Core_TurnE135_LB.psa',
-    E180: 'assets-raw/core-psa/TP_Core_TurnE180_LB.psa',
-    W45: 'assets-raw/core-psa/TP_Core_TurnW45_LB.psa',
-    W90: 'assets-raw/core-psa/TP_Core_TurnW90_LB.psa',
-    W135: 'assets-raw/core-psa/TP_Core_TurnW135_LB.psa',
-    W180: 'assets-raw/core-psa/TP_Core_TurnW180_LB.psa',
   },
 }
 const out = {}
@@ -275,9 +253,9 @@ for (const { clip, bad, name, from, to, linear } of IK_STANCE_REBUILD) {
   }
   console.log(`IK stance rebuild: ${name} ${bad} f${from}→f${to} (${steps + 1}f) z→${plat.toFixed(4)} ${yLog}`)
 }
-// 急停支架（Spine1-3+Neck 上身后压 + 腿，0.667s）：加法层，叠在 kamae 上——
-// 单条目全骨骼 clip（SRC 循环是「集合→多 clip」语义，stopAdd 不适用故单独导出）
-out.stopAdd = clipFromFull('assets-raw/core-psa/TP_Core_StopAdd.psa')
+// 急停支架（stopAdd）/跳 peek（jump 三段）/停步转身（turn 8 向）已随 161 轮
+// 玩法收敛整层下线：运行时零消费，此处不再导出（曾由此写回 locomotion.json 的
+// 对应集已清理——勿再写回）
 // 横移 E/W 集：TP_Core 的真方向性循环（摆动腿跨向、支撑腿蹬伸各方向不同）
 out.strafe = { walkE: out.core.walkE, runE: out.core.runE, walkW: out.core.walkW, runW: out.core.runW }
 // 死亡集提到顶层（与 strafe 平级），供 Locomotion.buildLocomotion 消费
@@ -287,8 +265,6 @@ const size = fs.statSync('public/models/locomotion.json').size
 console.log(`written public/models/locomotion.json (${(size / 1024).toFixed(1)} KB)`)
 for (const [hero, clips] of Object.entries(out)) {
   for (const [k, c] of Object.entries(clips)) {
-    if (!c?.tracks) continue // stopAdd 是单 clip（挂在 hero 位上），在下面单独打印
     console.log(`${hero}.${k}: ${c.n}f ${c.duration}s tracks=${c.tracks.length} bones=[${c.tracks.map(t => t.b).join(',')}]`)
   }
 }
-console.log(`stopAdd: ${out.stopAdd.n}f ${out.stopAdd.duration}s tracks=${out.stopAdd.tracks.length}`)

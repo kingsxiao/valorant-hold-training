@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { CONFIG } from '../src/core/Config.js'
 import { AudioSys } from '../src/core/Audio.js'
-import { angleFactor, distFactor, blindDuration, skyeMaxBlind, kayoFuseAfterBounce, arcBezier, leerAffects, dizzyPlasmaBlind } from '../src/world/flashMath.js'
+import { angleFactor, distFactor, blindDuration, skyeMaxBlind, kayoFuseAfterBounce, arcBezier, leerAffects, dizzyPlasmaBlind, ballisticShot } from '../src/world/flashMath.js'
 
 // 闪光干扰数值回归：口径 = Fandom 维基 2026-09（FLASH/drive / Guiding Light /
 // Curveball 各技能页 + Deployment types 投掷物等级表 + Status Effect#Flash）
@@ -10,6 +10,8 @@ const F = CONFIG.flash
 
 describe('闪光数值：维基确认值锁死', () => {
   it('KAY/O FLASH/drive：18m/s（Class 2）、引信 1.6s、弹跳 0.8s、致盲 2.25s', () => {
+    // speed 已接入弹道解算（_spawnKayo 按 18m/s 反解直射初速）——出膛初速的
+    // 运行时行为断言在 tests/flash-system.test.js「出手速度约束」组，本行只锁口径数值
     expect(F.kayo.speed).toBe(18)
     expect(F.kayo.gravity).toBeCloseTo(2.94, 2) // 重力系数 0.3 × 9.8
     expect(F.kayo.maxFuse).toBe(1.6)
@@ -156,6 +158,8 @@ describe('Curveball 弧长参数化贝塞尔（恒速 Fixed 导弹）', () => {
 // Fandom 维基 2026-09 各技能页 + Deployment types 投掷物等级表 ----
 describe('新闪光类型：维基确认值锁死', () => {
   it('Yoru Blindside：Class 3（29m/s、重力 0.45×9.8）、显形预备 0.6s、致盲 1.5s', () => {
+    // speed 已接入弹道解算（_spawnYoru 按 29m/s 反解直射初速）——运行时初速
+    // 行为断言在 tests/flash-system.test.js「出手速度约束」组，本行只锁口径数值
     expect(F.yoru.speed).toBe(29) // 2900uu/s（Class 3）
     expect(F.yoru.gravity).toBeCloseTo(4.41, 2) // 重力系数 0.45 × 9.8
     expect(F.yoru.maxAir).toBe(2) // 未撞面消散（未确认值）
@@ -208,5 +212,35 @@ describe('Gekko Dizzy 等离子致盲时长（game files：1s 满效 + 1s 渐褪
     expect(b.potency).toBe(1)
     expect(b.fade).toBe(1)
     expect(b.total).toBe(2)
+  })
+})
+
+describe('受出手速度约束的弹道解算（ballisticShot：口径速度反解飞行时间/仰角）', () => {
+  it('直射分支：|v| = 口径速度，T 时刻按抛物线恰好落在目标点', () => {
+    const start = { x: 0, y: 1.6, z: -31.5 }
+    const target = { x: 0.5, y: 0, z: -26 } // KAY/O 拍地落点量级
+    const { vel, T } = ballisticShot(start, target, 18, 2.94)
+    expect(Math.hypot(vel.x, vel.y, vel.z)).toBeCloseTo(18, 6)
+    expect(T).toBeGreaterThan(0)
+    expect(T).toBeLessThan(0.5) // 10m 级距离的直射快球
+    expect(start.x + vel.x * T).toBeCloseTo(target.x, 6)
+    expect(start.y + vel.y * T - 0.5 * 2.94 * T * T).toBeCloseTo(target.y, 6)
+    expect(start.z + vel.z * T).toBeCloseTo(target.z, 6)
+  })
+
+  it('Yoru 量级（29m/s、g4.41）：|v|=29 且闭合到撞点', () => {
+    const start = { x: 0, y: 1.6, z: -31.5 }
+    const target = { x: 0, y: 0.05, z: -21 }
+    const { vel, T } = ballisticShot(start, target, 29, 4.41)
+    expect(Math.hypot(vel.x, vel.y, vel.z)).toBeCloseTo(29, 6)
+    expect(start.y + vel.y * T - 0.5 * 4.41 * T * T).toBeCloseTo(target.y, 6)
+    expect(start.z + vel.z * T).toBeCloseTo(target.z, 6)
+  })
+
+  it('重力为 0 退化为直线匀速；速度打不到目标 → null', () => {
+    const line = ballisticShot({ x: 0, y: 0, z: 0 }, { x: 3, y: 4, z: 0 }, 10, 0)
+    expect(Math.hypot(line.vel.x, line.vel.y, line.vel.z)).toBeCloseTo(10, 6)
+    expect(line.T).toBeCloseTo(0.5, 6) // 5m ÷ 10m/s
+    expect(ballisticShot({ x: 0, y: 0, z: 0 }, { x: 100, y: 0, z: 0 }, 1, 9.8)).toBeNull()
   })
 })

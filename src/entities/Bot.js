@@ -5,7 +5,7 @@ import { CONFIG } from '../core/Config.js'
 import { groundStep, accelFor } from '../core/GroundMotion.js'
 import { peekFacingYaw, leanInto, strafeRampW, strafeStepPose } from '../core/PeekPose.js'
 import { matchRigBones, bakeLocomotionClips, bakeDeathClips, smoothW } from '../core/GaitBake.js'
-import { locoWeights, sampleIkAnchor, pickDeathSide, pickTurnClip, CROUCH_WALK_STEP, jumpFallBlend, JUMP_FALL_AFTER, gaitStepLen } from '../core/Locomotion.js'
+import { locoWeights, sampleIkAnchor, pickDeathSide, CROUCH_WALK_STEP, gaitStepLen } from '../core/Locomotion.js'
 import { solveGunAim, pickAimTarget, gunBobPose, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK, deriveGunHoldPoints, solveGripMount } from '../core/WeaponAim.js'
 import { vary } from '../core/Rng.js'
 import { Tex, pbr } from '../world/Textures.js'
@@ -37,11 +37,6 @@ const STEP_LEN = 1.55 // 一步的位移（m）：程序化假人/烘焙近似/�
                       // 锁相基准（官方曲线集走 gaitStepLen：走 1.05/跑 1.54/横移跑
                       // 1.40，各族官方步距不同——160 轮；本值 = 跑族口径，与官方
                       // runN 实测 1.54 互证）
-const JUMP_LAUNCH = 0.15   // 起跳蹬伸时长（JumpN 前 0.15s 是预备蹲，弧线在其后）
-// 滞空换层常数（JUMP_FALL_AFTER/JUMP_FALL_FADE）在 Locomotion.js（jumpFallBlend）
-const JUMP_V0 = 7.098      // 起跳竖直初速（m/s）：本体社区逐帧推导值（r/VALORANT
-                           // "Valorant Physics, Derived"：跳高 1.2m = v0²/2g）
-const JUMP_G = 21          // 空中重力（m/s²）：同源推导值；滞空 = 2·v0/g ≈ 0.676s
 const STRAFE_STEP_LEN = 1.15 // 横移步距保持既有调校口径（pull 出场节奏 1 步/1.15m 已验收）
 const BOT_EYE_Y = 1.68 // Bot 眼位（模型总高 1.8m 的眼部；可见性判定起点。注意与
 // 玩家 CONFIG.movement.eyeHeight=1.65 是两个口径——玩家是相机高度、Bot 是模型眼骨位）
@@ -503,21 +498,7 @@ export class Bot {
           a.timeScale = 0
           this.anim.runAdd[side] = a
         }
-        this._runAddKeys = Object.keys(this.anim.runAdd) // 静态键缓存（同 _turnKeys）
-      }
-      // 停步转身踏步（8 向）：自然速率自走（选型时 reset 重播），权重由停步坡控制
-      if (official?.turn) {
-        this.anim.turn = {}
-        for (const [key, clip] of Object.entries(official.turn)) {
-          if (!clip) continue
-          const a = this.mixer.clipAction(clip)
-          a.play()
-          a.setEffectiveWeight(0)
-          this.anim.turn[key] = a
-        }
-        // 键集合静态：缓存供 128Hz 热路径遍历（Object.values/entries 每 tick
-        // 分配数组+键值对）
-        this._turnKeys = Object.keys(this.anim.turn)
+        this._runAddKeys = Object.keys(this.anim.runAdd) // 静态键缓存（128Hz 热路径零分配）
       }
       // 蹲踞待机（官方蹲姿循环，自由跑；权重坡合成下蹲/起立过渡）
       if (official?.crouchIdle) {
@@ -537,35 +518,7 @@ export class Bot {
           a.timeScale = 0
           this.anim.crouchWalk[side] = a
         }
-        this._cwKeys = Object.keys(this.anim.crouchWalk) // 静态键缓存（同 _turnKeys）
-      }
-      // 跳 peek：JumpN（起跳蹬伸→空中收腿，LoopOnce 保持）+ JumpLand（落地恢复）
-      if (official?.jump) {
-        for (const [key, clip] of Object.entries(official.jump)) {
-          if (!clip) continue
-          const a = this.mixer.clipAction(clip)
-          if (key === 'fall') {
-            // Falling 滞空循环：自然重复（不合入 LoopOnce 组）
-            a.play()
-            a.setEffectiveWeight(0)
-            this.anim.fall = a
-            continue
-          }
-          a.loop = THREE.LoopOnce
-          a.clampWhenFinished = true
-          a.play()
-          a.setEffectiveWeight(0)
-          this.anim[key === 'jumpN' ? 'jump' : 'jumpLand'] = a
-        }
-      }
-      // 急停支架（加法层叠在 kamae 上）：播完定格（clampWhenFinished）= 支架保持
-      if (official?.stopAdd) {
-        const a = this.mixer.clipAction(official.stopAdd)
-        a.loop = THREE.LoopOnce
-        a.clampWhenFinished = true
-        a.play()
-        a.setEffectiveWeight(0)
-        this.anim.stopAdd = a
+        this._cwKeys = Object.keys(this.anim.crouchWalk) // 静态键缓存（128Hz 热路径零分配）
       }
       this._animAcc = 0
       this._setAnimWeights(0)
@@ -611,7 +564,8 @@ export class Bot {
     const runTarget = A.run ? THREE.MathUtils.clamp((speed - 3.0) / 1.6, 0, 1) : 0
     // kamae↔步态的入坡 8/s（125ms 全幅）：kamae 站姿与步幅姿态差 ~200°，22/s
     // 的 45ms 全幅交换被 60Hz mixer 门量化成单帧 65°+ 的姿态突扫（读作瞬移/
-    // 抽动）；125ms 与 0→5.4 的 ~290ms 加速段匹配（第一步迈出时身体还在提速）
+    // 抽动；门为 1/60 定步 → 8/s 坡 = 每门 0.133 权重步进）；125ms 与 0→5.4
+    // 的 ~290ms 加速段匹配（第一步迈出时身体还在提速）
     this._moveW = smoothW(this._moveW ?? 0, moveTarget, dt, 8, 7)
     // 走↔跑入坡 10/s：同相位下 walkN/runN 步幅几何差 ~100°，22/s 被 60Hz 门
     // 量化成单帧 35°+ 突扫；换挡本就该渐进（移速连续爬升）
@@ -663,13 +617,18 @@ export class Bot {
   _stepAnim(speed, dt) {
     if (!this.mixer) return
     this._setAnimWeights(speed, dt)
-    // 60Hz 采样足够平滑，省一半蒙皮计算（逻辑帧 128Hz）。每次 update 后快照
-    // 腿骨骼的 clip 原值——程序化侧移覆盖以它为混合基准（未跑 update 的帧
-    // 沿用最近快照，≤16ms 滞后与整体位姿一致）
+    // 60Hz 采样门（逻辑帧 128Hz）：余数保留的累加器——每消费一步扣 1/60、
+    // 不足一步的余量滚入下一门，门时隔在 2~3 tick（15.6~23.4ms）间交替、均值
+    // 精确 60Hz，mixer 时钟与真实时间严格同步（步态 clip 播放头由 walkPhase
+    // 逐 tick 锁写、timeScale=0 不受步长影响；唯一自由跑的 idle 走 1/60 定步
+    // = 实时速率）。蒙皮计算量 = 逻辑帧的 1/2（采样门从 42.7Hz 修到真 60Hz
+    // 后较现状 +40%，本注释口径随之从「约 1/3」回到「真 1/2」）。每次 update
+    // 后快照腿骨骼的 clip 原值——程序化侧移覆盖以它为混合基准（未跑 update
+    // 的帧沿用最近快照，≤16ms 滞后与整体位姿一致）
     this._animAcc += dt
     if (this._animAcc >= 1 / 60) {
-      this.mixer.update(this._animAcc)
-      this._animAcc = 0
+      this.mixer.update(1 / 60)
+      this._animAcc -= 1 / 60
       this._snapshotClipPose()
     }
   }
@@ -698,7 +657,7 @@ export class Bot {
   // 板自然抵肩窝、枪口略越前手，本体持枪形态 = 官方双手架枪位（旧锚点公式把枪
   // 心放后手前 0.365m，握把离后手 0.58m 悬空穿帮）。朝向沿手线解瞄准——pull 对
   // 枪/站定枪口追玩家眼、cross 顺跑向携枪。holder 挂 mesh 下，局部 = mesh⁻¹·world
-  _stepGun(dt, player, stopped) {
+  _stepGun(dt, player) {
     const G = this.gun
     if (!G) return
     G.boneR.updateWorldMatrix(true, false)
@@ -725,7 +684,7 @@ export class Bot {
       _gv1.add(_gBob)
     }
     _gaim.copy(_gv1).addScaledVector(_gv2, 4) // 手线远点（默认目标）
-    if (pickAimTarget({ style: this.peek?.style, stopped, moving }) === 'player') {
+    if (pickAimTarget({ style: this.peek?.style, moving }) === 'player') {
       // 枪口全权重钉玩家眼位（167 轮起移动中同样 k=1）：瞄准目标里混手线分量
       // （旧 moving k=0.5）会把 kamae 携枪方向（偏离瞄准向 ~17°）的一半留在枪口
       // 上——13m 外实测枪口指着目标旁 ~2m（7~9°），读作「人没对准我」。扫入
@@ -916,16 +875,13 @@ export class Bot {
 
   // 官方锚源清单（_stepFootPin 每 tick 解一次，两腿共用）：全部带官方 IK 锚
   // 曲线的动作按 mixer 权重加权混合锚点——与姿态混合同源，换态（walk↔run↔
-  // 横移↔蹲↔跳↔转身）的锚随权重渐变，无换源瞬态。
-  // 覆盖：走/跑 N、横移 E/W、蹲走、蹲踞待机、跳三段（JumpN/Falling/JumpLand）、
-  // 停步转身踏步（8 向）——psa 原始腿曲线是官方 FootIK 之前的基姿态（脚悬空
-  // 0.4~1.15m），任何这些状态不钉地 = 折叠腿直接暴露（160 轮跳跃全程双脚
-  // 1.4~2.8m、急停脚穿地的根因）。
-  // ⚠ stopAdd（急停支架）不入列：其 psa 锚退化在原点恒 0（支架本就冻结双脚，
-  // 不编排新落点）——急停时的脚部 = 走跑权重淡出途中锚随相位冻结自然保持在
-  // 停止前落点。159 轮的单一 argmax + 连续性锁在侧别翻转/权重重置的 tick 会
-  // 锁死在常锚源（crouchIdle）上 → 蹲走双脚全速滑行（160 轮实测），权重混合
-  // 根除该类锁死。返回共享数组，勿持有
+  // 横移↔蹲）的锚随权重渐变，无换源瞬态。
+  // 覆盖：走/跑 N、横移 E/W、蹲走、蹲踞待机——psa 原始腿曲线是官方 FootIK 之前
+  // 的基姿态（脚悬空 0.4~1.15m），任何这些状态不钉地 = 折叠腿直接暴露（160 轮
+  // 跳跃全程双脚 1.4~2.8m、急停脚穿地的根因）。
+  // ⚠ 159 轮的单一 argmax + 连续性锁在侧别翻转/权重重置的 tick 会锁死在常锚源
+  // （crouchIdle）上 → 蹲走双脚全速滑行（160 轮实测），权重混合根除该类锁死。
+  // 返回共享数组，勿持有
   _anchorSources() {
     const A = this.anim
     if (!A) return null
@@ -958,9 +914,6 @@ export class Bot {
     const cwSide = this._cwSide ?? this._strafeSide ?? 'E'
     add(A.crouchWalk?.[cwSide])
     add(A.crouchIdle, locoK)
-    add(A.jump); add(A.fall); add(A.jumpLand)
-    const turnKeys = this._turnKeys
-    if (turnKeys) for (const k of turnKeys) add(A.turn[k])
     src.length = n
     for (let i = 0; i < n; i++) src[i] = pool[i]
     return n ? src : null
@@ -1032,10 +985,6 @@ export class Bot {
         st.anchor.set(_fpBlend.y / wSum, _fpBlend.z / wSum, -_fpBlend.x / wSum)
           .applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
         st.w = Math.min(1, st.w + dt * 8)
-      } else if ((this._braceW ?? 0) > 0.05 || (this._turnW ?? 0) > 0.05) {
-        // 无锚源但急停支架/转身外站定：官方支架本就冻结双脚（stopAdd 的 psa
-        // 锚退化在原点 = 不编排新落点）——保持最后锚位不重采样，w 不衰减，
-        // 脚停在哪里就钉到哪里；恢复移动/锚源回归后随权重自然交还
       } else {
         st.w = Math.max(0, st.w - dt * 20) // 无锚源（纯站定 kamae）：权重坡放回 clip 脚位
       }
@@ -1235,16 +1184,10 @@ export class Bot {
     if (this.mixer) { // 骨骼假人归位站姿，不带上一条的残留步态
       if (this.deathAction) this.deathAction.stop() // 先停死亡 clip，update(0) 才是干净重摆
       for (const a of Object.values(this.deathActions ?? {})) a.stop()
-      for (const a of Object.values(this.anim?.turn ?? {})) a.stop()
-      this.anim?.stopAdd?.stop()
-      this._turnKey = null; this._turnW = 0; this._braceW = 0
       this._cwSide = null // 蹲走侧别锁存归零
-      this._crouchPlanned = false; this._crouching = false; this._crouchW = 0
+      this._crouchW = 0 // 活机制蹲走波的归零项（BotManager 掷、_crouchWW 家族消费）
       this._crouchWW = 0; this._cwPhase = 0
       if (this.anim.crouchWalk) for (const a of Object.values(this.anim.crouchWalk)) a.setEffectiveWeight(0)
-      this._jump = null; this._jumpW = 0
-      if (this.anim.jump) this.anim.jump.setEffectiveWeight(0)
-      if (this.anim.jumpLand) this.anim.jumpLand.setEffectiveWeight(0)
       this.anim.walk.time = 0
       if (this.anim.run) this.anim.run.time = 0
       if (this.anim.strafe) {
@@ -1310,39 +1253,6 @@ export class Bot {
     }, dt)
     this.pos.x += this.velX * dt
     this.pos.z += this.velZ * dt
-  }
-
-  // 跳 peek：播 JumpN（蹬伸→空中收腿），弧线由 mesh.y 偏移驱动（命中区随
-  // mesh 自动跟随）；落地切 JumpLand 恢复。跳跃期间钉地/蹲/转身/支架全部让位
-  startJump() {
-    if (this._jump || this.mode !== 'peek' || !this.anim?.jump) return
-    this.anim.jump.reset()
-    this.anim.jump.play()
-    this._jump = { t: 0, landed: false }
-  }
-
-  // 跳跃相位推进（纯过程量，Bot.step 的 mixer 分支消费）：返回本 tick 的弧线
-  // 偏移（mesh.y 加成）；落地切 JumpLand，恢复完成后清 _jump（返回 null）
-  _stepJump(dt) {
-    if (!this._jump) return 0
-    this._jump.t += dt
-    const jt = this._jump.t
-    let arc = 0
-    if (jt > JUMP_LAUNCH) {
-      const tt = jt - JUMP_LAUNCH
-      arc = Math.max(0, JUMP_V0 * tt - 0.5 * JUMP_G * tt * tt)
-    }
-    if (!this._jump.landed && jt > JUMP_LAUNCH + 2 * JUMP_V0 / JUMP_G) {
-      // 落地：切 JumpLand（压缩→回站），弧线归零；落地闷响（强脚步口径）
-      this._jump.landed = true
-      if (this.anim.jumpLand) { this.anim.jumpLand.reset(); this.anim.jumpLand.play() }
-      this.onFootstep?.(5.4)
-    }
-    if (this._jump.landed && jt > JUMP_LAUNCH + 2 * JUMP_V0 / JUMP_G + 0.667) {
-      this._jump = null // 恢复完成：交回走跑混合
-      return 0
-    }
-    return arc
   }
 
   startDeath() {
@@ -1427,9 +1337,6 @@ export class Bot {
       this.gun.kick = 0
     }
   }
-
-  // 对枪获胜（玩家没打中）不再有独立的 won 模式：Bot 保持 peek 横移跑向
-  // 对面掩体撤离（BotManager._loseDuel 改写 peek 目标），到位躲进墙后 hide
 
   // 还原各材质的原始自发光（受击闪红后的恢复路径统一走这里）
   _restoreEmissive() {
@@ -1527,12 +1434,11 @@ export class Bot {
     //    canStrafe=false 退回顺跑向（侧移放前进 clip 会滑步穿帮）
     //  cross 侧面跑过 = 顺行进方向跑（旋转跑、侧身入镜）
     //  急停/站定一律转回面向目标（停步挑战）
-    const stopped = this.mode === 'peek' && this.peek?.stopUntil > this.now()
     const moving = Math.hypot(this.velX, this.velZ) > 0.4
     const targetYaw = peekFacingYaw({
       style: this.peek?.style,
       canStrafe: !this.mixer || !!this._strafeRig, // 程序化假人自带横移步态
-      velX: this.velX, moving, stopped,
+      velX: this.velX, moving,
       dx: p.pos.x - this.pos.x, dz: p.pos.z - this.pos.z,
       front: this.mixer ? 1 : -1, // GLB 视觉正面 +Z；程序化假人正面 -Z（164 轮）
     })
@@ -1543,28 +1449,17 @@ export class Bot {
     // 180° 转身也收得更快（τ 33ms），不再带半转身滑出墙
     this.mesh.rotation.y += dy * Math.min(1, dt * 30)
 
-    // 蹲姿对枪（BotManager 在急停时按 crouchChance 掷定）：蹲下压低命中区，
-    // 逼玩家下压准星——本体对枪蹲。蹲姿优先：蹲下时不出转身踏步/支架（腿部
-    // 五五混合会吃掉蹲姿的根高沉降）
+    // 蹲走拉出（BotManager 掷定，pull 变体）：命中区经骨锚跟随蹲姿（raycast 恒
+    // 取骨世界位，无缩放），低姿轮廓逼玩家下压准星
     const cwNow = !!(this.peek?.crouchWalk && this.peek?.phase === 'out' && this.anim?.crouchWalk)
-    this._crouching = !!(stopped && this._crouchPlanned && this.anim?.crouchIdle && !this._jump)
     // 起立放缓（fall 3.5/s vs 默认 7）：蹲走拉出的低姿轮廓多保持 ~0.15s，头部
     // 抬升速度减半（过渡更平滑）。入坡 8/s 同步放缓：kamae↔蹲姿的姿态差大，
     // 14/s 的 71ms 全幅交换在 60Hz mixer 门下单帧 ~60° 姿态突扫
-    this._crouchW = smoothW(this._crouchW ?? 0, (this._crouching || cwNow) ? 1 : 0, dt, 8, 3.5)
-    // 停步挑战的官方转身/支架选型（先算好，mixer 分支消费）：急停且朝向差够大
-    // → 出「转身踏步」clip（E=右转/W=左转，角度最近档）；朝向已对 → 出「急停
-    // 支架」加法层。走路/移动中不触发（stopped 才算）；跳跃中全部让位
-    let turnKey = null
-    if (stopped && this.anim?.turn && !this._crouching && !this._jump) turnKey = pickTurnClip(dy)
-    // 转身 clip 粘滞：上一发还在播（权重未淡出）就播完它——桶位随朝向收敛切换
-    // （135°→90°→45°）+ reset 重播 = turnW 中段权重下定格姿势整姿跳变（实测
-    // 单 tick 百度）；淡出后才允许换档重选
-    if (turnKey && (this._turnW ?? 0) > 0.15 && this.anim.turn?.[this._turnKey]) turnKey = this._turnKey
-    const braceTarget = stopped && this.anim?.stopAdd && !turnKey && !this._crouching && !this._jump ? 1 : 0
+    this._crouchW = smoothW(this._crouchW ?? 0, cwNow ? 1 : 0, dt, 8, 3.5)
 
     // 移动表现：程序化假人 = VALORANT 横移步态；骨骼假人播放混合动画，walkout
     // 波沿 z 前进（顺跑向 clip），横移台架沿 x
+    let upperFlinchDone = false // mixer 分支是否已前置应用踉跄脊柱覆盖（尾段刚体回退让位）
     const speed = Math.hypot(this.velX, this.velZ)
     if (this.legL && this.legR) {
       this._stepLegs(speed, dt)
@@ -1574,27 +1469,10 @@ export class Bot {
       const wT = strafeRampW({ style: this.peek?.style, speed })
       this._strafeW = smoothW(this._strafeW ?? 0, wT, dt, 10, 7)
       const w = this._strafeW
-      // 停步转身/急停支架：权重过时间常数（停步进入淡入 ~125ms、恢复移动淡出
-      // 不留残步）；turn/brace 与走跑是整姿替换（姿态差大），22/s 的 45ms 全幅
-      // 会被 60Hz mixer 门量化成单帧百度级突扫——入坡同 8/s 家族
-      const turnActive = !!(turnKey && this.anim.turn?.[turnKey])
-      this._turnW = smoothW(this._turnW ?? 0, turnActive ? 1 : 0, dt, 8, 7)
-      if (this.anim.turn) {
-        if (turnKey !== this._turnKey && turnActive) {
-          const a = this.anim.turn[turnKey]
-          a.reset() // 从头播（踏步型与转身角绑定，半程续播会错步）
-          a.play()
-        }
-        for (const key of this._turnKeys) {
-          const a = this.anim.turn[key]
-          a.setEffectiveWeight(key === turnKey ? this._turnW : 0)
-        }
-        this._turnKey = turnKey
-      }
       // 蹲走拉出（pull 变体）：专用蹲走步幅相位锁播（CROUCH_WALK_STEP=官方扫
       // 幅，跑步机近零滑步），侧别跟横移方向；蹲姿权重复用 _crouchW（idle 退
-      // 缩 + 命中区 ×0.70 同源）
-      const cwActive = !!(this.peek?.crouchWalk && this.peek?.phase === 'out' && this.anim.crouchWalk && !this._jump)
+      // 缩 + 命中区经骨锚跟随蹲姿同源）
+      const cwActive = !!(this.peek?.crouchWalk && this.peek?.phase === 'out' && this.anim.crouchWalk)
       // 蹲走入坡 8/s（125ms 全幅）：kamae↔蹲走步幅的姿态差大（深屈膝步姿 vs
       // 站姿），14/s 的 71ms 全幅斜坡把整姿差在几 tick 内扫完 = 起步抽动
       this._crouchWW = smoothW(this._crouchWW ?? 0, cwActive ? 1 : 0, dt, 8, 3.5)
@@ -1622,55 +1500,11 @@ export class Bot {
           a.setEffectiveWeight(s === cwSide ? this._crouchWW : 0)
         }
       }
-      // 跳跃：空中 JumpN 独占腿部（走/跑/idle 压零防五五混合），落地 JumpLand
-      // 恢复（权重 ~0.33s 淡出交接回走跑）；弧线偏移加在 mesh.y 上（命中区随
-      // mesh 自动跟随）
-      const __jl = this.anim.jumpLand
-      if (this._jump || (__jl && __jl.getEffectiveWeight() > 0.01)) {
-        const arc = this._stepJump(dt)
-        const active = !!this._jump
-        const landed = active ? this._jump.landed : true
-        // 滞空段姿态源：JumpN 空中段 → Falling 循环平滑 crossfade（布尔瞬切
-        // 会让两套空中姿态硬跳一帧）
-        const airT = active ? Math.max(0, this._jump.t - JUMP_LAUNCH) : 0
-        const airFall = airT > JUMP_FALL_AFTER && !!this.anim.fall
-        const fallBlend = airFall ? jumpFallBlend(airT) : 0
-        // 起跳权重走坡：预备蹲压缩读作蓄力下蹲，非硬切
-        this._jumpW = smoothW(this._jumpW ?? 0, active && !landed ? 1 : 0, dt)
-        if (this.anim.jump) this.anim.jump.setEffectiveWeight(this._jumpW * (1 - fallBlend))
-        if (this.anim.fall) this.anim.fall.setEffectiveWeight(fallBlend * this._jumpW)
-        if (__jl) {
-          // 落地前 JumpLand 权重必须为 0：腾空姿态由 JumpN/Falling 独占（曾把
-          // 权重预挂 1 = 空中姿态与错相位的 JumpLand 五五混合、官方锚曲线也被
-          // 对半拉低——顶点收腿位矮 0.4m，160 轮修复）。落地（landed）才满权，
-          // 恢复期淡出
-          if (landed) __jl.setEffectiveWeight(1)
-          else if (!active) __jl.setEffectiveWeight(Math.max(0, __jl.getEffectiveWeight() - dt * 3))
-          else __jl.setEffectiveWeight(0)
-        }
-        if (this.anim.idle) this.anim.idle.setEffectiveWeight(0)
-        this.anim.walk.setEffectiveWeight(0)
-        if (this.anim.run) this.anim.run.setEffectiveWeight(0)
-        if (this.anim.strafe) for (const s of ['E', 'W']) {
-          this.anim.strafe[s].walk.setEffectiveWeight(0)
-          this.anim.strafe[s].run.setEffectiveWeight(0)
-        }
-        this._jumpArcY = arc // 弧线在 mesh.y 定格后追加（见下），此处先存
-      } else {
-        this._jumpArcY = 0
-      }
       if (this.anim.crouchIdle) {
         // 蹲走起来时让位（×(1−cwWW)）：crouchWalk 自己就是蹲姿——crouchIdle
         // 再挂 1/3 权重会把骨盆多压 ~1cm + 待机摆动混进步频（165 轮，与
         // _setAnimWeights 的 cwK 同源）
         this.anim.crouchIdle.setEffectiveWeight(this._crouchW * (1 - this._crouchWW))
-      }
-      if (this.anim.stopAdd) {
-        this._braceW = smoothW(this._braceW ?? 0, braceTarget, dt, 8, 7)
-        const sa = this.anim.stopAdd
-        sa.setEffectiveWeight(this._braceW)
-        if (this._braceW === 0 && !braceTarget) sa.reset() // 定格→归零后回卷，下次从头播
-        else if (!sa.isRunning()) sa.play() // place() stop() 过的动作要重新起播
       }
       // 官方横移 E/W 侧别选择：模型局部横向速度 +X（右）= E（与官方锚曲线的
       // 补偿轴约定锁定——E+右移/W+左移的支撑锚世界静止，反向组合实测 2× 滑速）。
@@ -1694,8 +1528,7 @@ export class Bot {
       // 缩放 = 支撑锚后扫速率 ≈ 体速，钉地零滑步）——官方/烘焙 clip 播放头
       // （_setAnimWeights 相位锁定）与侧移姿态都由它驱动；mixer 假人统一在这里
       // 推进（不含 _stepStrafeGait：骨链不齐的老模型 rig=null 提前返回，相位也
-      // 不能停）。脚步声：跨 π = 走满一步的落脚瞬间触发（与程序化假人同口径）；
-      // 跳跃滞空中静音（本体跳 peek 空中无脚步声），落地帧补一声落地闷响
+      // 不能停）。脚步声：跨 π = 走满一步的落脚瞬间触发（与程序化假人同口径）
       const kPrev = Math.floor(this.walkPhase / Math.PI)
       this.walkPhase += speed * dt * Math.PI / (this._officialLo
         ? gaitStepLen({ runW: this._runW ?? 0, strafeW: this._strafeW ?? 0 })
@@ -1703,9 +1536,9 @@ export class Bot {
       // 加速度（钉地入锚门用）：启停摩擦 ~30 m/s²、稳态 ~0——混合期不钉脚
       this._speedAcc = (speed - this._prevSpeed) / dt
       this._prevSpeed = speed
-      // 本体音频口径：跳跃滞空/蹲走拉出均无脚步声（蹲走无声正是其战术价值；
+      // 本体音频口径：蹲走拉出无脚步声（蹲走无声正是其战术价值；
       // 2.7m/s 蹲走 < 跑步声触发阈 3.2 的语义同源）
-      const footSilent = !!this._jump || (this._crouchWW ?? 0) > 0.5
+      const footSilent = (this._crouchWW ?? 0) > 0.5
       if (!footSilent && speed > 0.5 && Math.floor(this.walkPhase / Math.PI) > kPrev) {
         this.onFootstep?.(speed)
       }
@@ -1722,21 +1555,32 @@ export class Bot {
         // 落进骨架——曾用的 locoBodyY（骨盆参考 0.90m）是在放倒管线上标定的
         // 常数，会让全身塌 24cm：膝中位屈曲 64~69°（官方站姿段 20~33°）、
         // 高抬腿蹬伸异常 = 157 轮腿部残留问题的根因。
-        // ⚠ 基座归零必须每 tick 无条件执行：跳跃弧线是「mesh.y += _jumpArcY」
-        // 的增量叠加，基座若在跳跃中被跳过，弧线逐 tick 复利 = 火箭升天
-        // （158 轮蹲走跳波 mesh.y 飙到 21m 的教训）
+        // ⚠ 基座归零每 tick 无条件执行：身体高度权威在 clip 的 Splitter 位置轨
+        // 道，任何基座残留（踉跄微沉、程序化起伏的余量）都会在轨道之上复利
         this._loY = 0
         this.mesh.position.y = 0
       }
       _v.copy(this.prevPos).lerp(this.pos, ctx.alpha ?? 1)
       this.mesh.position.x = _v.x
       this.mesh.position.z = _v.z
-      if (this._jumpArcY) this.mesh.position.y += this._jumpArcY // 跳跃弧线（命中区随 mesh）
-      // 跳跃期间照常钉地：锚源含 JumpN/Falling/JumpLand（官方空中收腿/落地
-      // 恢复的脚部约束），锚高随跳跃弧线自动抬升（160 轮前跳跃完全退锚 = 原始
-      // 折叠腿暴露，双脚全程 1.4~2.8m）
       this._stepFootPin(dt)
-      this._stepGun(dt, ctx.player, stopped)
+      // 受击踉跄/开火后坐的脊柱覆盖 + 微沉前移到挂枪解算前：旧序在 _stepGun
+      // 之后写覆盖——握把钉位按覆盖前的手骨世界位解算、渲染手位随覆盖偏移，
+      // 交火期枪-手锚定每 tick 跳变 4.5~6cm（体检仿真：爆头踉跄 0.045m、仅后
+      // 坐 0.061m，量级 = 每 tick 步进位移）。前移后枪锚吃到的就是含覆盖的本
+      // 帧手骨位，钉点与渲染手位同帧一致。两个顺序约束：①微沉插入点在
+      // _officialLo 基座归零之后（归零每 tick 无条件执行，早于它会被清掉 =
+      // 踉跄下沉消失）；②flinch/kick 衰减保持在公共尾段——_stepGun 内
+      // kickPose 消费的是衰减前值（与旧序同相位）
+      if (this.flinch > 0 || (this.gun && this.gun.kick > 0)) {
+        const k = this.flinch > 0 ? Math.sin(Math.min(1, this.flinch) * Math.PI) : 0
+        const theta = k * this.flinchAmp + kickPose(this.gun?.kick ?? 0).spine
+        if (theta > 0 && this._applyUpperFlinch(theta)) {
+          if (k > 0) this.mesh.position.y -= k * 0.025
+          upperFlinchDone = true // 覆盖成功：尾段只衰减；失败（无脊柱链老模型）尾段走刚体回退
+        }
+      }
+      this._stepGun(dt, ctx.player)
     } else if (speed > 0.3) {
       // 无动画的自定义模型兜底：至少保留位移节奏的起伏
       this.walkPhase += speed * dt * Math.PI / STEP_LEN
@@ -1746,16 +1590,19 @@ export class Bot {
     }
 
     // 受击踉跄 + 开火后坐：正弦冲击曲线 → 后仰 + 微沉（不影响朝向/命中判定）。
-    // 骨骼假人走脊柱覆盖（更贴本体：上身局部后仰，腿不动），无脊柱链的老模型/
-    // 程序化假人退回整体刚体后仰
+    // mixer 假人的脊柱覆盖（更贴本体：上身局部后仰，腿不动）已在 mixer 分支
+    // 前移到挂枪解算前（见上，upperFlinchDone）；尾段只剩相位衰减 + 无脊柱链
+    // 的老模型/程序化假人的整体刚体后仰回退
     if (this.flinch > 0 || (this.gun && this.gun.kick > 0)) {
       this.flinch = Math.max(0, this.flinch - dt * 5)
       if (this.gun) this.gun.kick = Math.max(0, this.gun.kick - dt * 7)
-      const k = this.flinch > 0 ? Math.sin(Math.min(1, this.flinch) * Math.PI) : 0
-      if (k > 0) this.mesh.position.y -= k * 0.025
-      const theta = k * this.flinchAmp + kickPose(this.gun?.kick ?? 0).spine
-      if (theta > 0 && !this._applyUpperFlinch(theta)) {
-        this.mesh.rotation.x = k * this.flinchAmp
+      if (!upperFlinchDone) {
+        const k = this.flinch > 0 ? Math.sin(Math.min(1, this.flinch) * Math.PI) : 0
+        if (k > 0) this.mesh.position.y -= k * 0.025
+        const theta = k * this.flinchAmp + kickPose(this.gun?.kick ?? 0).spine
+        if (theta > 0 && !this._applyUpperFlinch(theta)) {
+          this.mesh.rotation.x = k * this.flinchAmp
+        }
       }
     }
 
@@ -1787,7 +1634,7 @@ export class Bot {
   }
 
   // 射线 vs 命中球体。命中球中心恒取解剖骨世界位（render 即真相）：官方模型
-  // 的头/胸/盆/膝/脚球随步态、蹲姿、受击踉跄、跳跃实时贴着可见模型走——静态
+  // 的头/胸/盆/膝/脚球随步态、蹲姿、受击踉跄实时贴着可见模型走——静态
   // 高度表只对无骨骼的程序化假人生效。曾用"站姿静态位 + 蹲姿才 lerp 骨位"，
   // 但静态表按 1.8m 假人标定（头 1.63/腹 0.95/膝 0.55），官方英雄池骨骼整体
   // 偏高（实测 Head 骨 1.87 / Pelvis 1.22 / Knee 0.80）：瞄可见头部/肩胸的

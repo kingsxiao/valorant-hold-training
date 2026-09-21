@@ -3,6 +3,7 @@ import {
   PRESET_COLORS, crosshairDefaults, parseCrosshairCode, exportCrosshairCode,
   sanitizeCrosshair, isLegacyCrosshair, migrateLegacyCrosshair, crosshairColor, normalizeHex,
 } from '../src/ui/crosshairCode.js'
+import { paintCrosshair } from '../src/ui/Crosshair.js'
 import { CONFIG } from '../src/core/Config.js'
 import { spreadAt, spreadParts } from '../src/weapons/ballistics.js'
 
@@ -173,6 +174,50 @@ describe('sanitizeCrosshair 脏数据防线', () => {
     const s = sanitizeCrosshair({ colorIdx: 8, custom: 'ff4655' })
     expect(crosshairColor(s)).toBe('#FF4655')
     expect(crosshairColor(sanitizeCrosshair({ colorIdx: 5 }))).toBe('#00FFFF')
+  })
+})
+
+describe('paintCrosshair 零长线段绘制（导入代码所见即所得）', () => {
+  // 记账桩：轮廓走 ctx.rect 四连框，本体走 fillRect
+  const mkCtx = () => {
+    const rects = [], fills = []
+    return {
+      ctx: {
+        globalAlpha: 1, fillStyle: '',
+        beginPath() {}, rect: (...a) => rects.push(a), fill() {},
+        fillRect: (...a) => fills.push(a),
+      },
+      rects, fills,
+    }
+  }
+  // 社区点准心（turbosmurfs 黑描边风格）：内外线 length=0、中心点开、轮廓默认开
+  const DOT_LZ = '0;P;c;5;o;1;d;1;z;1;f;0;0t;1;0l;0;0o;1;0a;1;0f;0;1t;1;1l;0;1o;1;1a;1;1m;0;1f;0'
+
+  it('长度 0 的线段整条不参与绘制：点准心代码只剩中心点的轮廓框与本体，无线位残留黑条', () => {
+    const s = parseCrosshairCode(DOT_LZ)
+    const { ctx, rects, fills } = mkCtx()
+    paintCrosshair(ctx, s, { cx: 100, cy: 100 })
+    const z = s.dotSize, sw = s.outlineThickness
+    // 仅中心点参与：轮廓恰 4 条框（旧实现零长线两侧各残留 sw×(t+2sw) 有面积块）
+    expect(rects).toHaveLength(4)
+    // 全部落在中心点轮廓包络 [100−z/2−sw, 100+z/2+sw] 内（线位残留块在包络外）
+    const lo = 100 - z / 2 - sw - 1e-9, hi = 100 + z / 2 + sw + 1e-9
+    for (const [x, y, w, h] of rects) {
+      expect(x).toBeGreaterThanOrEqual(lo); expect(x + w).toBeLessThanOrEqual(hi)
+      expect(y).toBeGreaterThanOrEqual(lo); expect(y + h).toBeLessThanOrEqual(hi)
+    }
+    // 本体同样只剩中心点一块
+    expect(fills).toEqual([[100 - z / 2, 100 - z / 2, z, z]])
+  })
+
+  it('水平/垂直解耦：0l;0 + 0v;5 只画上下线（长度 0 的左右线连轮廓一起消失）', () => {
+    const s = parseCrosshairCode('0;P;c;5;o;1;0t;1;0l;0;0v;5;0g;1;0o;2;0a;1;1b;0')
+    const { ctx, rects, fills } = mkCtx()
+    paintCrosshair(ctx, s, { cx: 0, cy: 0 })
+    expect(rects).toHaveLength(8) // 上下两条线 × 4 框
+    expect(fills).toHaveLength(2)
+    // 两条本体块都是竖条（w = thickness、h = vlength），无线长块
+    for (const [, , w, h] of fills) expect(h).toBeGreaterThan(w)
   })
 })
 

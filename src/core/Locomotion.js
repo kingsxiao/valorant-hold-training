@@ -83,52 +83,25 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
       W: build(locoJson.crouch.walkW, 'crouch-walkW'),
     }
     : null
-  // 跳 peek（JumpN 起跳保持 + Falling 滞空循环 + JumpLand 落地恢复）：缺席不阻塞
-  const jump = locoJson?.jump
-    ? {
-      jumpN: build(locoJson.jump.jumpN, 'jump-n'),
-      jumpLand: build(locoJson.jump.jumpLand, 'jump-land'),
-      fall: locoJson.jump.fall ? build(locoJson.jump.fall, 'jump-fall') : null,
-    }
-    : null
   // 跑动上身叠加层（加法）：与 RunN 同相（0.6s），Spine/颈/头/枪锚骨的官方
   // 跑动胸口运动；缺席不阻塞
   const runAddSet = locoJson?.runAdd
   const runAdd = runAddSet
     ? Object.fromEntries(Object.entries(runAddSet).map(([k, c]) => [k, build(c, `run-add-${k}`)]))
     : null
-  // 停步转身踏步（8 向）+ 急停支架（加法层）：缺席不阻塞
-  const turnSet = locoJson?.turn
-  const turn = turnSet
-    ? Object.fromEntries(Object.entries(turnSet).map(([k, c]) => [k, build(c, `turn-${k}`)]))
-    : null
-  let stopAdd = locoJson?.stopAdd ? build(locoJson.stopAdd, 'stop-add') : null
-  if (stopAdd) {
-    // psa 导出是绝对姿态；转成相对首帧的偏移 + 加法混合，才能叠在 kamae 上
-    // （急停支架 = 上身后压，叠加而非替换：kamae 持枪手形不丢）
-    THREE.AnimationUtils.makeClipAdditive(stopAdd, 0)
-    stopAdd.blendMode = THREE.AdditiveAnimationBlendMode
-  }
   if (runAdd) for (const c of Object.values(runAdd)) {
     THREE.AnimationUtils.makeClipAdditive(c, 0)
     c.blendMode = THREE.AdditiveAnimationBlendMode
   }
-  return { walk, run, strafe, death, turn, stopAdd, runAdd, crouchIdle, crouchWalk, jump }
+  // 161 轮玩法收敛（纯移动靶：不停步/不跳）后停步转身踏步（turn 8 向）、急停
+  // 支架（stopAdd）与跳 peek（jump 三段）整层下线——不再构建，json 里的对应
+  // 集是待清理的遗留数据
+  return { walk, run, strafe, death, runAdd, crouchIdle, crouchWalk }
 }
 
 // 蹲走拉出移速口径：本体蹲走 = 50% 跑速（5.4）≈ 2.7m/s（Config 可调，试玩
 // 档位）
 export const CROUCH_WALK_SPEED = 2.7
-
-// 滞空换层混合比（纯函数，Bot 跳跃块与单测共用）：JumpN 空中段 → Falling 循
-// 环的 crossfade 权重。airT = 滞空时间（s）；FALL_AFTER 起淡入、+FADE_S 完成
-// ——布尔瞬切会让两套空中姿态硬跳一帧
-export const JUMP_FALL_AFTER = 0.35
-export const JUMP_FALL_FADE = 0.18
-export function jumpFallBlend(airT) {
-  const x = Math.min(1, Math.max(0, (airT - JUMP_FALL_AFTER) / JUMP_FALL_FADE))
-  return x * x * (3 - 2 * x) // smoothstep
-}
 
 // 蹲走锁相步幅（纯常量，Bot 与单测共用）：步幅是 clip 的几何属性，与移速
 // 无关——移速只改步频（cadence = 移速/步幅）。触地窗（z≤zMin+4mm）后扫速率
@@ -159,19 +132,6 @@ export function gaitStepLen({ runW = 0, strafeW = 0 } = {}) {
   const fwd = STEP_WALK + (STEP_RUN - STEP_WALK) * c(runW)
   const side = STEP_WALK + (STEP_STRAFE_RUN - STEP_WALK) * c(runW)
   return fwd + (side - fwd) * c(strafeW)
-}
-
-// 停步转身选型（纯函数）：deltaYaw = 朝向差（最短角，rad，正=左转）。
-// 命名约定：E=向右转（yaw 减）、W=向左转（yaw 增），角度取最近档。
-// |deltaYaw| < 0.35rad（~20°）不值得出转身踏步 → null（走急停支架）
-export function pickTurnClip(deltaYaw) {
-  const deg = Math.abs(deltaYaw) * 180 / Math.PI
-  if (deg < 20) return null
-  let best = 45
-  for (const a of [45, 90, 135, 180]) {
-    if (Math.abs(a - deg) < Math.abs(best - deg)) best = a
-  }
-  return (deltaYaw < 0 ? 'E' : 'W') + best
 }
 
 // 死亡倒向选择（纯函数）：dot = 「bot 朝向」与「bot→玩家」的前向点积。

@@ -1,10 +1,13 @@
 // Bot 动作 1:1 本轮两块新纯逻辑：
 //  WeaponAim —— 挂枪瞄准解算（-Z=枪口向）/ 瞄准目标选择 / 掉枪弹道 / 后坐曲线
 //  GaitBake.deathPose / bakeDeathClips —— 骨骼化死亡塌倒烘焙
+// 另含 Bot.prototype 级回归锁：
+//  _stepAnim 60Hz 采样门（保余数累加器）/ 受击踉跄脊柱覆盖与挂枪解算的锚定一致性
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import { solveGunAim, pickAimTarget, gunBobPose, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK, deriveGunHoldPoints, solveGripMount } from '../src/core/WeaponAim.js'
 import { deathPose, bakeDeathClips } from '../src/core/GaitBake.js'
+import { Bot } from '../src/entities/Bot.js'
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z)
 
@@ -408,5 +411,158 @@ describe('命中区骨锚跟随（raycast 逐区 _boneObj）', () => {
     const raycast = await getRaycast()
     const hit = raycast.call(stub({}), 0, 1.63, 5, 0, 0, -1, 50)
     expect(hit.zone).toBe('head')
+  })
+})
+
+describe('Bot._stepAnim 60Hz 采样门（保余数累加器）', () => {
+  it('门时隔在 2~3 tick（15.6~23.4ms）交替、均值精确 60Hz；mixer 时钟与真实时间严格同步', () => {
+    const steps = []
+    const gateTicks = []
+    const bot = Object.create(Bot.prototype)
+    bot.mixer = { update: (t) => steps.push(t) }
+    bot.anim = null // _setAnimWeights 无动作早退（_strafeRig/_rigExtra 均空 → 快照 no-op）
+    bot._animAcc = 0
+    const N = 6400 // 50s @128Hz
+    for (let i = 0; i < N; i++) {
+      const n0 = steps.length
+      Bot.prototype._stepAnim.call(bot, 0, 1 / 128)
+      if (steps.length > n0) gateTicks.push(i)
+    }
+    // 均值精确 60Hz（旧 `=0` 丢弃余数的门锁死在 3 tick 一档 = 42.7Hz）
+    expect(Math.abs(steps.length / 50 - 60)).toBeLessThan(0.1)
+    // mixer 时钟与真实时间严格同步：每门定步 1/60，总量 = 真实时长（余量有界）
+    for (const s of steps) expect(s).toBeCloseTo(1 / 60, 12)
+    const total = steps.reduce((a, b) => a + b, 0)
+    expect(Math.abs(total - 50)).toBeLessThan(1 / 60 + 1e-9)
+    // 门时隔 2~3 tick 交替（不再是固定 3 tick）
+    const gaps = new Set(gateTicks.slice(1).map((v, i) => v - gateTicks[i]))
+    expect(gaps.has(2)).toBe(true)
+    expect(gaps.has(3)).toBe(true)
+    expect(bot._animAcc).toBeLessThan(1 / 60 + 1e-9) // 余数滚入下一门，不丢不爆
+  })
+})
+
+// F1 回归锁：交火期枪钉点 vs 渲染手位的一致性。脊柱覆盖（_applyUpperFlinch）
+// 前移到 _stepGun 之前——握把钉位按含覆盖的本帧手骨世界位解算；旧序（覆盖在
+// 挂枪解算之后）枪-手锚定随覆盖跳变 4.5~6cm（体检仿真：爆头踉跄 0.045m、仅
+// 后坐 0.061m，量级 = 每 tick 步进位移 5.4/128≈0.042m）
+describe('受击踉跄/开火后坐的枪-手锚定（脊柱覆盖前移到挂枪解算前）', () => {
+  function gunBot() {
+    const mesh = new THREE.Group() // bot 根（场景直下，quaternion 即世界）
+    const mk = (name, parent, x, y, z) => {
+      const b = new THREE.Bone(); b.name = name; b.position.set(x, y, z); parent.add(b); return b
+    }
+    const hips = mk('Pelvis', mesh, 0, 0.95, 0)
+    const spine1 = mk('Spine1', hips, 0, 0.15, 0)
+    const spine2 = mk('Spine2', spine1, 0, 0.15, 0)
+    const neck = mk('Neck', spine2, 0, 0.18, 0)
+    // 武器锚骨挂脊柱链末端（脊柱覆盖直接移动其世界位 = 手位代理）
+    const boneR = mk('R_WeaponPoint', spine2, -0.05, 0.1, 0.15)
+    const boneL = mk('L_WeaponPoint', spine2, 0.1, 0.05, 0.45)
+    mesh.updateMatrixWorld(true)
+
+    const bot = Object.create(Bot.prototype)
+    bot.pos = new THREE.Vector3(-8, 0, -30)
+    bot.prevPos = bot.pos.clone()
+    bot.velX = 3
+    bot.velZ = 0
+    bot.active = true
+    bot.mode = 'peek'
+    bot.peek = { style: 'pull' }
+    bot.mesh = mesh
+    bot.blob = { position: { set() {} } }
+    bot.mats = {}
+    bot.world = { lineOfSight: () => true }
+    bot.manager = null
+    bot.now = () => 0
+    bot._prevSpeed = 3
+    bot.walkPhase = 0
+    bot.flinch = 0
+    bot.flinchAmp = 0
+    bot.hitFlash = 0
+    // 脊柱覆盖层（_rigExtra）：受击踉跄的写骨目标
+    bot._rigExtra = { spine: [spine1, spine2], neck, spineBindW: [], neckBindW: null }
+    bot._strafeRig = null
+    // mixer：一条脊柱静态姿态 clip（恒 bind）——每个采样门把脊柱写回 clip 姿态，
+    // 快照（_clipQ）保持干净（官方走跑 clip 无脊柱轨道，脊柱权威是待机/静态层）
+    const mixer = new THREE.AnimationMixer(mesh)
+    const bindQ = [0, 0, 0, 1]
+    const spineClip = new THREE.AnimationClip('spine-pose', 1, [
+      new THREE.QuaternionKeyframeTrack('Spine1.quaternion', [0, 1], bindQ.concat(bindQ)),
+      new THREE.QuaternionKeyframeTrack('Spine2.quaternion', [0, 1], bindQ.concat(bindQ)),
+      new THREE.QuaternionKeyframeTrack('Neck.quaternion', [0, 1], bindQ.concat(bindQ)),
+    ])
+    const spineAct = mixer.clipAction(spineClip)
+    spineAct.play(); spineAct.setEffectiveWeight(1)
+    const pelvisClip = new THREE.AnimationClip('loco', 1, [
+      new THREE.QuaternionKeyframeTrack('Pelvis.quaternion', [0, 1], bindQ.concat(bindQ)),
+    ])
+    const walkAct = mixer.clipAction(pelvisClip)
+    walkAct.play(); walkAct.setEffectiveWeight(1); walkAct.timeScale = 0
+    bot.mixer = mixer
+    bot.anim = { walk: walkAct }
+    // 官方枪（最小桩）：holder 挂 mesh 下，握把/护木点为 holder 系常量
+    const holder = new THREE.Group()
+    const gunObj = new THREE.Group()
+    holder.add(gunObj)
+    mesh.add(holder)
+    bot.gun = {
+      holder, gun: gunObj, boneL, boneR, armL: null,
+      hold: { grip: new THREE.Vector3(0, -0.03, 0.17), fore: new THREE.Vector3(0, 0.02, -0.22) },
+      gunBase: new THREE.Vector3(), muzzleLocal: new THREE.Vector3(0, 0, -0.3),
+      aimQ: new THREE.Quaternion(), kick: 0, init: false,
+    }
+    return { bot, boneR, spine1 }
+  }
+  const ctx = () => ({ player: { pos: new THREE.Vector3(0, 0, -20), eyeHeight: 1.65, yaw: 0, pitch: 0 }, alpha: 1 })
+  const DT = 1 / 128
+  // 枪上握把点世界位（与 _stepHandIK 的 fore 升系同款：meshQ·(holderQ·grip)+holderPos 再升世界）
+  const gripWorld = (bot) => {
+    const q = bot.mesh.quaternion.clone().multiply(bot.gun.holder.quaternion)
+    return bot.gun.hold.grip.clone().applyQuaternion(q)
+      .add(bot.gun.holder.position).applyQuaternion(bot.mesh.quaternion).add(bot.mesh.position)
+  }
+
+  it('爆头踉跄中：握把钉点贴合后手骨世界位（<1cm，远低于每 tick 步进 4.2cm），脊柱确已后仰', () => {
+    const { bot, boneR, spine1 } = gunBot()
+    Bot.prototype.step.call(bot, DT, ctx()) // 出场首帧：枪初始落位
+    expect(bot.gun.init).toBe(true)
+    Bot.prototype.flashHit.call(bot, true, 1.0) // 爆头：flinch=1、flinchAmp≈0.336
+    // 踉跄曲线 k=sin(flinch·π) 在 flinch=1 处为 0、0.5 处峰值——推进 13 tick
+    // （0.1s，flinch≈0.49≈峰值）再量测
+    for (let i = 0; i < 13; i++) Bot.prototype.step.call(bot, DT, ctx())
+    expect(bot.flinch).toBeGreaterThan(0.4)
+    expect(bot.flinch).toBeLessThan(0.6)
+    // 脊柱确已后仰（非空跑：覆盖层实际写骨）
+    boneR.updateWorldMatrix(true, false)
+    expect(spine1.quaternion.angleTo(new THREE.Quaternion())).toBeGreaterThan(0.05)
+    const hand = boneR.getWorldPosition(new THREE.Vector3())
+    expect(gripWorld(bot).distanceTo(hand)).toBeLessThan(0.01)
+  })
+
+  it('仅开火后坐（flinch=0、kick=1）同样锚定一致；kick 相位在尾段衰减', () => {
+    const { bot, boneR, spine1 } = gunBot()
+    Bot.prototype.step.call(bot, DT, ctx())
+    bot.flinch = 0
+    Bot.prototype.kickFire.call(bot)
+    for (let i = 0; i < 13; i++) Bot.prototype.step.call(bot, DT, ctx())
+    expect(bot.gun.kick).toBeGreaterThan(0) // _stepGun 消费衰减前值、尾段衰减（7/s → ≈0.29）
+    expect(bot.gun.kick).toBeLessThan(1)
+    expect(spine1.quaternion.angleTo(new THREE.Quaternion())).toBeGreaterThan(0.005) // 后坐脊柱确已微仰
+    boneR.updateWorldMatrix(true, false)
+    const hand = boneR.getWorldPosition(new THREE.Vector3())
+    expect(gripWorld(bot).distanceTo(hand)).toBeLessThan(0.01)
+  })
+
+  it('连续交火多 tick 保持锚定（衰减途中每 tick 重解枪位）', () => {
+    const { bot, boneR } = gunBot()
+    Bot.prototype.step.call(bot, DT, ctx())
+    Bot.prototype.flashHit.call(bot, false, 1.0)
+    Bot.prototype.kickFire.call(bot)
+    // 跨越踉跄峰值与衰减全程逐 tick 重解枪位
+    for (let i = 0; i < 13; i++) Bot.prototype.step.call(bot, DT, ctx())
+    boneR.updateWorldMatrix(true, false)
+    const hand = boneR.getWorldPosition(new THREE.Vector3())
+    expect(gripWorld(bot).distanceTo(hand)).toBeLessThan(0.01)
   })
 })

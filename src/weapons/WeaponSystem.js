@@ -452,13 +452,15 @@ export class WeaponSystem {
     }))
     const pi = Math.min(this.sprayIndex, pattern.length - 1)
     const pat = pattern[pi]
-    this.sprayIndex++
 
     // ADS 后坐削减（维基定性"Slight recoil reduction"，×0.85 近似）：弹道表幅度
     // 垂直/水平同乘 —— 开镜扫射上爬更缓，与首发散布收紧合成"更准"的读数
     const arm = this.adsOn && w.ads ? w.ads.recoilMult : 1
 
+    // 连射计数在散布采样之后递增：首发按 sprayIndex=0 采静止基准散布（无
+    // +0.05° 连射增量，= 表显 stand），与弹道表首项 0 同语义——首发精度所见即所得
     const spreadDeg = this.currentSpread()
+    this.sprayIndex++
     const p = this.player
     _dir.set(0, 0, -1).applyEuler(_euler.set(p.pitch, p.yaw, 0))
     // 弹道偏移（跑动垂直后坐 ×runMult，v6.11 公开改动：1.5→1.8，按移速比例介入）
@@ -484,11 +486,13 @@ export class WeaponSystem {
     // 阶跃保持模型 —— 每发上踢 = 弹道【增量】×viewPunch×0.25（全弹匣累计视角爬升
     // ≈1.0-1.5°，与弹道累计 18° 解耦），停火后偏移 750ms 内零回稳（σ=0.1px 平直）
     // —— 玩家自己下拉回中。故 punch 按增量给、punchRecover≈0（近保持）。
-    // ADS 时 ×0.45（镜稳线走，准星跟随由 HUD 平移承担）
+    // 无每发常数项：弹药无限下恒定增量会跨弹匣单调爬升至 punch 钳位
+    // （Player 0.35rad；曾有的 +0.002 常数 25 发即虚增 2.9°），与全弹匣
+    // ≈1.0-1.5° 标定矛盾。ADS 时 ×0.45（镜稳线走，准星跟随由 HUD 平移承担）
     const punchScale = this.adsOn && w.ads ? 0.45 : 1
     const dPunch = Math.max(0, pat.p * rmul * arm - this._punchCum) // 本发增量（累计差分）
     this._punchCum = pat.p * rmul * arm
-    p.addPunch((THREE.MathUtils.degToRad(dPunch) * w.recoil.viewPunch * 0.25 + 0.002) * punchScale,
+    p.addPunch(THREE.MathUtils.degToRad(dPunch) * w.recoil.viewPunch * 0.25 * punchScale,
       THREE.MathUtils.degToRad((pat.y * arm - this._punchCumY)) * w.recoil.viewPunch * 0.12 * punchScale)
     this._punchCumY = pat.y * arm
 

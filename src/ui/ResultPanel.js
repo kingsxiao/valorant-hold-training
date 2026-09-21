@@ -44,11 +44,15 @@ export class ResultPanel {
     this.trendWrap = p.querySelectorAll('.hist-wrap')[1]
     this.trend = p.querySelector('.trend')
     this.trendCap = p.querySelector('.trend-cap')
-    // 高分屏清晰度：canvas 逻辑分辨率 ×DPR（CSS width:100% 拉伸时 DPR2 屏只画一半
-    // 像素会发虚）。绘制代码全部以 canvas.width/height 为基准，等比放大无需改动
+    // 高分屏清晰度：canvas 物理分辨率 ×DPR（CSS width:100% 拉伸时 DPR2 屏只画一半
+    // 像素会发虚）。绘制走逻辑坐标系：_draw* 里 setTransform(dpr) 后按 CSS 像素
+    // 布局（W/H 用逻辑常量 680/96、680/70 = HTML 属性原值），字号即 CSS 像素——
+    // 物理坐标 + 固定 '11px' 字号经 CSS 拉回后 DPR2 屏只剩 ~5.5px 不可读
+    // （做法对齐 HUD.pushFps 的 setTransform(this._fpsDpr)）
+    const dpr = Math.min(2, devicePixelRatio || 1)
+    this._dpr = dpr
     for (const c of [this.hist, this.trend]) {
-      const d = Math.min(2, devicePixelRatio || 1)
-      c.width = c.width * d; c.height = c.height * d
+      c.width = c.width * dpr; c.height = c.height * dpr
     }
     p.querySelector('.btn-start').onclick = () => this.onRestart?.()
     p.querySelector('.btn-ghost').onclick = () => this.onSettings?.()
@@ -109,10 +113,11 @@ export class ResultPanel {
     this.overlay.classList.add('visible')
   }
 
-  // 反应时间直方图：0–1000ms 十个桶，红线标平均
+  // 反应时间直方图：0–1000ms 十个桶，红线标平均（逻辑坐标 = CSS 像素）
   _drawHist(rs, avgMs) {
     const g = this.hist.getContext('2d')
-    const W = this.hist.width, H = this.hist.height
+    g.setTransform(this._dpr, 0, 0, this._dpr, 0, 0)
+    const W = 680, H = 96 // 逻辑尺寸（= canvas HTML 属性原值；物理 backing 已 ×DPR）
     const bins = new Array(10).fill(0)
     for (const r of rs) bins[Math.min(9, Math.floor(r / 100))]++
     const max = Math.max(...bins, 1)
@@ -145,10 +150,11 @@ export class ResultPanel {
     }
   }
 
-  // 近 10 局得分趋势：柱状图，最后一局（本局）高亮红色
+  // 近 10 局得分趋势：柱状图，最后一局（本局）高亮红色（逻辑坐标 = CSS 像素）
   _drawTrend(scores) {
     const g = this.trend.getContext('2d')
-    const W = this.trend.width, H = this.trend.height
+    g.setTransform(this._dpr, 0, 0, this._dpr, 0, 0)
+    const W = 680, H = 70 // 逻辑尺寸（= canvas HTML 属性原值；物理 backing 已 ×DPR）
     const max = Math.max(...scores, 1)
     g.clearRect(0, 0, W, H)
     const bw = W / scores.length

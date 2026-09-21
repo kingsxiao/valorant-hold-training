@@ -1,14 +1,15 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { CONFIG } from '../core/Config.js'
-import { blindDuration, skyeMaxBlind, kayoFuseAfterBounce, arcBezier, leerAffects, dizzyPlasmaBlind } from './flashMath.js'
+import { blindDuration, skyeMaxBlind, kayoFuseAfterBounce, arcBezier, leerAffects, dizzyPlasmaBlind, ballisticShot } from './flashMath.js'
 import { Tex } from './Textures.js'
 
 // ============================================================================
 // 闪光干扰系统：敌方从墙后施放七类闪光/致盲道具 1:1 还原（数值见 CONFIG.flash，
 // 来源 Fandom 维基各技能页 + Deployment types 投掷物等级表）：
 //  - KAY/O FLASH/drive：Class 2 手雷（18m/s、重力 2.94），总引信 1.6s，
-//    首次弹跳改 0.8s 引信（v10.06），最大致盲 2.25s（v11.08）
+//    首次弹跳改 0.8s 引信（v10.06），最大致盲 2.25s（v11.08）。出手速度口径
+//    已接入弹道解算（ballisticShot 拍地弹跳 pop flash，见 _spawnKayo）
 //  - Skye Guiding Light：追踪鹰导弹（18m/s 无重力、最长飞 2s），最大致盲
 //    1→2.25s 随飞行 0.75s 充能（充能满有橙光+提示音），激活后 0.3s 起爆
 //    ——官方模型 ability-hawk.glb（Rocklan 包 skyeHawkSimple.blend，翼骨运行时扇动）
@@ -29,6 +30,13 @@ import { Tex } from './Textures.js'
 // ============================================================================
 const rand = (a, b) => a + Math.random() * (b - a)
 const clamp = THREE.MathUtils.clamp
+// ballisticShot 理论不可达时的直线兜底（本场 spawn 距离对口径速度恒可达，
+// 仅防御性保底：保证 vel 有限且模长 = 口径速度）
+const straightVel = (a, b, sp) => {
+  const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z
+  const d = Math.hypot(dx, dy, dz) || 1
+  return { x: dx / d * sp, y: dy / d * sp, z: dz / d * sp }
+}
 const TYPES = ['kayo', 'skye', 'phoenix', 'yoru', 'breach', 'reyna', 'gecko']
 const MODES = [...TYPES, 'mix', 'off']
 
@@ -385,22 +393,30 @@ export class FlashSystem {
     else this._spawnGecko(gap, gapCx)
   }
 
-  // KAY/O：墙后投掷，二选一弹道——越墙顶高位爆（经典过墙闪）或穿缺口低位爆。
-  // 弹道解算：固定速度 Class 2 + 1.6s 引信，反解初速使 T 时刻恰好到目标点
+  // KAY/O：墙后投掷，弹道解算受出手速度约束（Class 2 口径 18m/s）：按口径速度
+  // 与落点反解直射初速/飞行时间（flashMath.ballisticShot），替换旧的「1.6s 引信
+  // 反解初速」——旧解实际出手仅 6.6~8m/s（口径的 ~40%），speed 字段零引用。
+  // 结构改为「拍地弹跳 pop flash」：18m/s 直射砸门后地面 → 首跳触发 v10.06
+  // 引信规则（0.8s）→ 低弹跳穿过门洞，门后 ~1.05-1.15s 在玩家侧半场低位起爆
+  // （cast→bounce ~0.3s 是听觉反应窗，与真机 KAY/O 弹跳闪节奏同量级）。
+  // 旧的过墙高位爆变体在此速度下几何不成立：18m/s×1.6s 位移 ~28m ≫ 本场
+  // 进深（出手到目标 ~10m），任何不弹跳的 1.6s 引信弹道起爆点必越过玩家身后
+  // ——弹跳路线本身就是真机 KAY/O pop flash 的标准用法
   _spawnKayo(gap, gapCx) {
     const K = CONFIG.flash.kayo
-    const startX = clamp(gapCx + rand(-0.8, 0.8), gap.x0 + 0.4, gap.x1 - 0.4)
-    const start = { x: startX, y: 1.6, z: -31.5 }
-    const high = Math.random() < 0.45 // 过墙高位爆（越过 4m 墙顶在玩家侧上空）
-    const target = high
-      ? { x: startX + rand(-0.6, 0.6), y: rand(4.8, 5.6), z: rand(-22.6, -21.4) }
-      : { x: clamp(gapCx + rand(-0.9, 0.9), gap.x0 + 0.4, gap.x1 - 0.4), y: rand(1.9, 2.6), z: rand(-21.8, -20.4) }
-    const T = K.maxFuse
-    const vel = {
-      x: (target.x - start.x) / T,
-      y: (target.y - start.y) / T + 0.5 * K.gravity * T,
-      z: (target.z - start.z) / T,
+    // 横向走「车道」：出手与落点共用车道偏移 + 小幅瞄准抖动——弹跳段的横漂
+    // 只有 ~0.2m，保证低弹跳从门洞（净宽 = 缺口宽度）穿过而不拍在门墙上
+    const lane = clamp(gapCx + rand(-0.55, 0.55), gap.x0 + 0.6, gap.x1 - 0.6)
+    const start = { x: lane, y: 1.6, z: -31.5 }
+    // 地面落点：门墙后侧（墙 z∈[-24.8,-23.2]）再往里 0.8~2.4m——落点越深
+    // 弹跳越高、起爆越靠后，深浅随机即出弹节奏变化
+    const impact = {
+      x: clamp(lane + rand(-0.25, 0.25), gap.x0 + 0.5, gap.x1 - 0.5),
+      y: 0,
+      z: rand(-27.4, -25.6),
     }
+    const shot = ballisticShot(start, impact, K.speed, K.gravity)
+    const vel = shot ? shot.vel : straightVel(start, impact, K.speed)
     this.proj = {
       type: 'kayo', pos: start, prevPos: { ...start }, vel, t: 0,
       fuse: K.maxFuse, bounced: false,
@@ -462,12 +478,11 @@ export class FlashSystem {
     const target = Math.random() < 0.5
       ? { x: clamp(gapCx + rand(-1.1, 1.1), gap.x0 + 0.4, gap.x1 - 0.4), y: 0.05, z: rand(-21.6, -20.2) }
       : { x: (Math.random() < 0.5 ? gap.x0 - rand(0.3, 0.9) : gap.x1 + rand(0.3, 0.9)), y: rand(1.6, 2.6), z: -23.5 }
-    const T = 0.55
-    const vel = {
-      x: (target.x - start.x) / T,
-      y: (target.y - start.y) / T + 0.5 * Y.gravity * T,
-      z: (target.z - start.z) / T,
-    }
+    // 出手速度约束（Class 3 口径 29m/s）：按口径速度与撞点反解直射初速/飞行
+    // 时间，替换旧的「固定 0.55s 反解初速」（旧解实际出手 18.1~20.8m/s ≈ 口径
+    // 的 ~65%）。撞点不变 → 显形位置不变，撞面提前 ~0.2s、整体节奏略加快
+    const shot = ballisticShot(start, target, Y.speed, Y.gravity)
+    const vel = shot ? shot.vel : straightVel(start, target, Y.speed)
     this.proj = { type: 'yoru', pos: start, prevPos: { ...start }, vel, t: 0, bounced: false, windT: 0 }
     // 无 cast 音：敌方本就听不见飞行中的碎片
   }
@@ -513,12 +528,11 @@ export class FlashSystem {
     const startX = clamp(gapCx + rand(-0.8, 0.8), gap.x0 + 0.4, gap.x1 - 0.4)
     const start = { x: startX, y: 1.6, z: -31.5 }
     const target = { x: clamp(gapCx + rand(-1.2, 1.2), gap.x0 + 0.4, gap.x1 - 0.4), y: rand(1.6, 2.4), z: rand(-21.6, -20.4) }
-    const T = 0.6
-    const vel = {
-      x: (target.x - start.x) / T,
-      y: (target.y - start.y) / T + 0.5 * G.gravity * T,
-      z: (target.z - start.z) / T,
-    }
+    // 出手速度约束（Class 2 口径 18m/s，同 KAY/O）：按口径速度与悬停瞄准点
+    // 反解直射初速（旧「固定 0.6s 反解」实际出手 ~16.6m/s）；悬停段强阻尼
+    // （×e^-6t）会把到位后余速吃掉，悬停点仍在玩家侧目标区
+    const shot = ballisticShot(start, target, G.speed, G.gravity)
+    const vel = shot ? shot.vel : straightVel(start, target, G.speed)
     this.proj = {
       type: 'gecko', pos: start, prevPos: { ...start }, vel, t: 0,
       bounced: false, acquire: 0, fired: false, hp: G.hp, bobPhase: rand(0, 6),
@@ -869,8 +883,16 @@ export class FlashSystem {
     const dur = blindDuration(maxBlind, dist, angleDeg, los)
     let intensity = 1
     if (dur > 0) {
-      this.blindUntil = this.t + dur
-      this._blindAt = this.t
+      // 叠加口径（未验证的口径假设——Valorant 无公开叠加/刷新规则，社区共识仅
+      // 「时长不叠加」；见 README 已知边界）：取「不缩短」的保守 max——已致盲
+      // 剩余 2s 时再吃到背闪 0.18s 不会被截短；更强的新闪整体刷新到新时长
+      // （非累加）。仅在延长时重置 _blindAt（白屏 0.06s 淡入的起点）——更弱的
+      // 新闪不改截止时刻，屏效维持原状。待真机核实后如需改口径，同步改
+      // tests/flash-system.test.js 里标注「假设性」的叠加用例
+      if (this.t + dur > this.blindUntil) {
+        this.blindUntil = this.t + dur
+        this._blindAt = this.t
+      }
       this.blindTotal = dur
       intensity = 1 + Math.min(0.25, (dur / maxBlind) * 0.25) // 贴脸爆闪更炸
     }

@@ -331,8 +331,11 @@ engine.renderFrame = (alpha, dtMs) => {
   // 高度（domElement.height = CSS 高 × pixelRatio，天然跟随 autoScale 动态降采样）。
   // 传 CSS 高在 HiDPI（pr=2）上粒子只有设计尺寸一半
   fx.calibrate(innerWidth, engine.renderer.domElement.height, engine.camera.fov)
-  fx.update(dt)
-  hud.updateDamage(dt)
+  // 暂停时 dt 归零（与上方 flashes.renderSync 同款）：抛壳/头盔物理与伤害数字
+  // 上浮随游戏时钟冻结——真实 dt 会让弹壳继续飞、落地声在暂停菜单里叮
+  // （Audio.ensure 无条件 resume 刚 suspend 的 context），数字也在冻结画面里继续飘
+  fx.update(state.playing ? dt : 0)
+  hud.updateDamage(state.playing ? dt : 0)
 
   // 动态准星：移动/开火两路误差（度）→ 屏幕像素，内外线按各自开关+倍率扩张
   const parts = state.playing && weapons.weapon.slot !== 'melee' ? weapons.currentSpreadParts() : { move: 0, fire: 0 }

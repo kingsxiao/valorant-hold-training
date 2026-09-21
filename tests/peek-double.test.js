@@ -42,7 +42,9 @@ function spawnWave(queue) {
   mgr.params = { peekSide: 'left' }
   mgr.map = { gaps: [GAP], peekLineZ: -23 }
   mgr._bot = () => {
-    const b = { peek: null, slot: null, place(x, z, mode) { this.placed = { x, z, mode } } }
+    // anim.crouchWalk 在场：蹲走掷骰照常消耗随机数（F8 起无官方蹲走 clip 的
+    // 模型不掷、不消耗——本桩模型蹲走 clip 齐备）
+    const b = { peek: null, slot: null, anim: { crouchWalk: {} }, place(x, z, mode) { this.placed = { x, z, mode } } }
     bots.push(b); return b
   }
   const slot = { nextAt: -1, bot: null, lastStyles: [] } // 已排程且到期 → 立即出人

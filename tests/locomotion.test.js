@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import fs from 'node:fs'
-import { buildClip, buildLocomotion, locoWeights, sampleIkAnchor, pickDeathSide, pickTurnClip, CROUCH_WALK_STEP, CROUCH_WALK_SPEED, jumpFallBlend, JUMP_FALL_AFTER, JUMP_FALL_FADE, locoBodyY, PELVIS_REF_Y, PELVIS_CROUCH_DROP, FOOT_GROUND_Y, gaitStepLen, STEP_WALK, STEP_RUN, STEP_STRAFE_RUN } from '../src/core/Locomotion.js'
+import { buildClip, buildLocomotion, locoWeights, sampleIkAnchor, pickDeathSide, CROUCH_WALK_STEP, CROUCH_WALK_SPEED, locoBodyY, PELVIS_REF_Y, PELVIS_CROUCH_DROP, FOOT_GROUND_Y, gaitStepLen, STEP_WALK, STEP_RUN, STEP_STRAFE_RUN } from '../src/core/Locomotion.js'
 
 // 假骨架：UE 风格带 _NNNN 后缀骨名（与英雄 GLB 同构）
 function fakeHeroSkeleton(suffixes) {
@@ -237,25 +237,12 @@ describe('sampleIkAnchor 官方落地锚采样', () => {
   })
 })
 
-describe('pickDeathSide / pickTurnClip 死亡倒向与转身选型', () => {
+describe('pickDeathSide 死亡倒向', () => {
   it('玩家在正面（dot>0，弹道向后打）→ 背摔；背面/侧后 → 前扑', () => {
     expect(pickDeathSide(1)).toBe('back')
     expect(pickDeathSide(0.01)).toBe('back')
     expect(pickDeathSide(0)).toBe('front')
     expect(pickDeathSide(-0.7)).toBe('front')
-  })
-
-  it('转身选型：正角=左转 W / 负角=右转 E，角度取最近档，<20° 不出步', () => {
-    expect(pickTurnClip(0.5)).toBe('W45')    // +28.6° 左转 45 档
-    expect(pickTurnClip(-0.5)).toBe('E45')
-    expect(pickTurnClip(1.0)).toBe('W45')    // 57° 仍属 45 档
-    expect(pickTurnClip(1.8)).toBe('W90')    // 103° → 90
-    expect(pickTurnClip(-2.4)).toBe('E135')  // -137° → 135
-    expect(pickTurnClip(-3.1)).toBe('E180')  // -178° → 180
-    expect(pickTurnClip(3.1)).toBe('W180')
-    expect(pickTurnClip(0.2)).toBeNull()     // 11°：不出转身踏步（走急停支架）
-    expect(pickTurnClip(-0.34)).toBeNull()
-    expect(pickTurnClip(0.36)).toBe('W45')
   })
 })
 
@@ -318,7 +305,11 @@ describe('locoBodyY 身体高度解算（状态混合准静态参考，2026-09-1
   })
 })
 
-describe('turn 8 向集与 stopAdd 支架（TP_Core 停步挑战）', () => {
+// 161 轮玩法收敛（纯移动靶：不停步/不跳）后停步转身（turn 8 向）、急停支架
+// （stopAdd）与跳 peek（jump 三段）整层下线：官方集构建/运行时消费/用例一并
+// 删除，locomotion.json 资产（public + dist）与导出管线（psa2clips.mjs）的
+// 对应集亦已清理——重跑导出不会再把下线集写回
+describe('crouch 蹲走集（蹲走拉出变体）', () => {
   const locoJson = JSON.parse(fs.readFileSync('public/models/locomotion.json', 'utf8'))
   it('crouch 蹲走集：walkE/W 0.933s 蹲高根骨在；蹲走步幅/速度常数锁值', () => {
     expect(locoJson.crouch.walkE.duration).toBeCloseTo(0.9333, 3)
@@ -336,35 +327,18 @@ describe('turn 8 向集与 stopAdd 支架（TP_Core 停步挑战）', () => {
     expect(Math.abs(2.7 * (1 - 1.6 * 0.9333 / (2 * 0.735)))).toBeLessThan(0.1)
   })
 
-  it('jump 三段集：JumpN 3.23s / JumpLand 0.667s / Falling 滞空循环 2.567s', () => {
-    expect(locoJson.jump.jumpN.duration).toBeCloseTo(3.2333, 3)
-    expect(locoJson.jump.jumpLand.duration).toBeCloseTo(0.6667, 3)
-    expect(locoJson.jump.fall.duration).toBeCloseTo(2.5667, 3)
-    for (const c of Object.values(locoJson.jump)) {
-      expect(c.tracks.map(t => t.b)).toContain('Splitter')
-      expect(c.tracks.map(t => t.b)).toContain('L_Knee')
-    }
-  })
-
-  it('结构锁值：官方时长（转身 1s / 支架 0.667s）、根骨轨道、stopAdd 含上身支架骨', () => {
-    expect(Object.keys(locoJson.turn).sort()).toEqual(['E135','E180','E45','E90','W135','W180','W45','W90'])
-    for (const c of Object.values(locoJson.turn)) {
-      expect(c.duration).toBeCloseTo(1, 3)
-      expect(c.n).toBe(31)
-      expect(c.tracks.map(t => t.b)).toContain('Splitter')
-    }
-    expect(locoJson.stopAdd.duration).toBeCloseTo(0.6667, 3)
-    const bones = locoJson.stopAdd.tracks.map(t => t.b)
-    expect(bones).toContain('Spine1')
-    expect(bones).toContain('Neck')
-  })
-
-  it('运行时：turn 8 动作齐备、stopAdd 转加法混合（叠在 kamae 上不替换）', () => {
+  it('运行时与资产双锁：蹲走集可构建；turn/stopAdd/jump 已整层下线（构建产物与 json 资产均无）', () => {
     const root = fakeHeroSkeleton([['Pelvis', '9'], ['L_Hip', '9'], ['L_Knee', '9'], ['L_Foot', '9'], ['L_Toe', '9'], ['R_Hip', '9'], ['R_Knee', '9'], ['R_Foot', '9'], ['R_Toe', '9'], ['Splitter', '9'], ['Spine1', '9'], ['Neck', '9']])
     const built = buildLocomotion(locoJson, 'jett', root)
-    expect(Object.keys(built.turn).sort()).toEqual(['E135','E180','E45','E90','W135','W180','W45','W90'])
-    expect(built.turn.E90.duration).toBeCloseTo(1, 3)
-    expect(built.stopAdd.blendMode).toBe(THREE.AdditiveAnimationBlendMode)
+    expect(built.crouchWalk.E).toBeTruthy()
+    expect(built.turn).toBeUndefined()
+    expect(built.stopAdd).toBeUndefined()
+    expect(built.jump).toBeUndefined()
+    // 资产侧：遗留集已从 locomotion.json 删除（曾为待清理数据，~195KB）
+    expect(locoJson.turn).toBeUndefined()
+    expect(locoJson.stopAdd).toBeUndefined()
+    expect(locoJson.jump).toBeUndefined()
+    expect(Object.keys(locoJson)).toEqual(['core', 'death', 'runAdd', 'crouch', 'strafe'])
   })
 })
 
@@ -418,36 +392,5 @@ describe('gaitStepLen 官方步距相位锁（160 轮：各族天然速度不同
     expect(Math.abs(stepOf(core.runE, 1) - STEP_STRAFE_RUN)).toBeLessThan(0.12)
     expect(Math.abs(stepOf(core.runW, 1) - STEP_STRAFE_RUN)).toBeLessThan(0.12)
     expect(Math.abs(stepOf(core.walkN, 0) - STEP_WALK)).toBeLessThan(0.12)
-  })
-
-  it('整身 clip 的官方锚导出：turn 锚是真实踏步曲线、stopAdd 锚退化在原点（不入锚源）', () => {
-    const j = JSON.parse(fs.readFileSync('public/models/locomotion.json', 'utf8'))
-    const t = j.turn.E90.ik
-    expect(t.L.length).toBeGreaterThanOrEqual(j.turn.E90.n * 3)
-    // 转身锚 z 在踝高带（0.12~0.21）且中段有位移（真实踏步）
-    const zs = t.L.filter((_, i) => i % 3 === 2)
-    expect(Math.max(...zs)).toBeLessThan(0.21)
-    expect(Math.min(...zs)).toBeGreaterThan(0.11)
-    const xs = t.L.filter((_, i) => i % 3 === 0)
-    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(0.1)
-    // stopAdd 的 IK 目标恒在原点附近（支架冻结双脚，锚不可用 → 锚源不含 stopAdd）
-    const sa = j.stopAdd.ik.L
-    expect(Math.hypot(...sa.slice(0, 3))).toBeLessThan(0.01)
-  })
-})
-
-describe('jumpFallBlend 滞空换层混合比', () => {
-  it('FALL_AFTER 起淡入、+FADE 完成（smoothstep），域外钳制', () => {
-    expect(jumpFallBlend(0)).toBe(0)
-    expect(jumpFallBlend(JUMP_FALL_AFTER)).toBe(0)
-    const mid = jumpFallBlend(JUMP_FALL_AFTER + JUMP_FALL_FADE / 2)
-    expect(mid).toBeGreaterThan(0.45)
-    expect(mid).toBeLessThan(0.55)
-    expect(jumpFallBlend(JUMP_FALL_AFTER + JUMP_FALL_FADE)).toBe(1)
-    expect(jumpFallBlend(JUMP_FALL_AFTER + 10)).toBe(1)
-  })
-  it('常数口径：淡入起点 0.35s（蹬伸 0.15 + 0.2 空中）、淡入窗 0.18s', () => {
-    expect(JUMP_FALL_AFTER).toBeCloseTo(0.35, 3)
-    expect(JUMP_FALL_FADE).toBeCloseTo(0.18, 3)
   })
 })

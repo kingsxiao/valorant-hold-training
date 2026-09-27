@@ -9,22 +9,30 @@ import { Tex } from './Textures.js'
 // 来源 Fandom 维基各技能页 + Deployment types 投掷物等级表）：
 //  - KAY/O FLASH/drive：Class 2 手雷（18m/s、重力 2.94），总引信 1.6s，
 //    首次弹跳改 0.8s 引信（v10.06），最大致盲 2.25s（v11.08）。出手速度口径
-//    已接入弹道解算（ballisticShot 拍地弹跳 pop flash，见 _spawnKayo）
+//    已接入弹道解算（ballisticShot，见 _spawnKayo）——主投三变体（拍地弹跳 /
+//    深落点长引信 / 全引信空爆）+ 副投下手短抛（Class 0.7，6.3m/s、总引信 1s，
+//    v3.06/v11.08 口径见 CONFIG.flash.kayo.alt）
 //  - Skye Guiding Light：追踪鹰导弹（18m/s 无重力、最长飞 2s），最大致盲
-//    1→2.25s 随飞行 0.75s 充能（充能满有橙光+提示音），激活后 0.3s 起爆
-//    ——官方模型 ability-hawk.glb（Rocklan 包 skyeHawkSimple.blend，翼骨运行时扇动）
+//    1→2.25s 随飞行 0.75s 充能（充能满有橙光+提示音），激活后原地定格、
+//    0.3s 起爆预备后在激活点起爆
+//    ——官方模型 ability-hawk.glb（Rocklan 包 skyeHawkSimple.blend，翼骨运行时扇动；
+//    充能/预备发光经 glowMats 重定向作用于官方材质 + 容器点光，见 _mountOfficial）
 //  - Phoenix Curveball：Fixed 曲线导弹（无重力、左/右曲），cast→起爆 0.6s，
 //    最大致盲 1.5s；撞墙即熄灭
 //  - Yoru Blindside：Class 3 碎片（29m/s、重力 4.41），飞行不可见也无声
 //    （v11.10）——撞面才显形 + 0.6s 预备；最大致盲 1.5s（v11.08）
-//  - Breach Flashpoint：Placement 穿墙放置在墙前面，0.5s 预备；最大致盲 2.25s
+//  - Breach Flashpoint：Placement 穿墙放置——charge 以 24m/s（v12.00）从本体
+//    位置直线飞向放置点、穿墙到达，到位即停 + 0.5s 预备；最大致盲 2.25s
 //  - Reyna Leer：近视系——导弹穿地形到 10m 部署距，0.4s 睁眼后施加近视 1.6s
-//    （持续判定"瞳孔在视野内"，6m 视界）；60HP 可击毁
-//  - Gekko Dizzy：官方模型 ability-dizzy.glb——Class 2 投掷，0.65s 激活后减速
-//    悬停，活跃 1s 内对 45m 视线目标 0.35s 锁定喷等离子：全屏 2s=1s 满效+
-//    1s 渐褪（转身不可避）；20HP 可击毁
+//    （持续判定"瞳孔在视野内"）；世界空间 6m 视界（场景雾收束）+ 全屏品红雾罩 +
+//    转开 0.3s 线性褪去；LOS 内未受近视时有屏幕预警 VFX；60HP 可击毁
+//    （v11.08 口径）
+//  - Gekko Dizzy：官方模型 ability-dizzy.glb——Class 2 投掷（100m/s，v7.12
+//    弹速口径），急停悬停，活跃 1s 内对 45m 视线目标 0.35s 锁定喷等离子：
+//    弹体飞行、命中溅射（2.5m）后全屏 2s=1s 满效+1s 渐褪（边缘可见圈随渐褪
+//    从边缘向内扩张，转身不可避）；20HP 可击毁
 // 白闪判定：视线(LOS) + 朝向角 + 距离（模型见 flashMath.js），到期后白屏
-// 1 秒渐褪（整屏纯白，本体口径）；近视/等离子走独立屏效（reyna 紫雾近视 +
+// 1 秒渐褪（整屏冷白——极淡冷蓝 #e9f2ff，本体口径）；近视/等离子走独立屏效（reyna 品红近视 +
 // Deafened 闷音、gecko 绿紫史莱姆糊屏）。
 // 投掷起点在墙后（模拟看不见的敌人），轨迹按"敌方 pop flash"设计
 // ============================================================================
@@ -100,9 +108,9 @@ function buildSkyeHawk() {
   const wingL = makeWing(1), wingR = makeWing(-1)
   for (const m of [body, head, beak, tail]) { m.castShadow = true; g.add(m) }
   g.add(wingL, wingR)
-  const light = new THREE.PointLight(0x46ffb0, 0.8, 5, 2)
-  g.add(light)
-  return { group: g, wingL, wingR, glowMat, light }
+  // 点光不挂程序化模型内部：鹰/Dizzy 套容器壳后官方 GLB 会整组替换程序化根，
+  // 点光挂在容器上（wrap() 创建）才能在官方模型下继续照亮周围
+  return { group: g, wingL, wingR, glowMat }
 }
 
 // 火男弧线球：炽热火球——高自发光核心 + 加法混合光晕精灵 + 橙色点光
@@ -157,8 +165,9 @@ function buildBreachCharge() {
   return { group: g, glowMat, light }
 }
 
-// Reyna 凝视之眼：紫晶眼球——虹膜球 + 深色瞳孔（+Z 朝向玩家）+ 魂雾光晕；
-// 60HP 可击毁，命中判定以"瞳孔"（眼心）为准
+// Reyna 凝视之眼：闭合眼茧（上下两片深紫眼睑膜包住眼球）+ 内部紫晶眼球
+// （虹膜球 + 深色瞳孔，+Z 朝向）+ 魂雾光晕；到位后眼睑膜如花瓣张开（W14），
+// 虹膜由暗渐亮。60HP 可击毁，命中判定以"瞳孔"（眼心）为准
 function buildReynaEye() {
   const g = new THREE.Group()
   const irisMat = new THREE.MeshStandardMaterial({
@@ -173,12 +182,35 @@ function buildReynaEye() {
   }))
   aura.scale.set(0.9, 0.9, 1)
   const light = new THREE.PointLight(0xb44dff, 1.0, 6, 2)
-  g.add(iris, pupil, aura, light)
-  return { group: g, irisMat, aura, light }
+  // 眼茧：上下两片半球壳（赤道铰链，绕 X 轴开合）——飞行段闭合态深紫球茧，
+  // 到位后 0.4s 内如花瓣绽开并消散（renderSync 驱动 bloom 曲线）
+  const budMat = new THREE.MeshStandardMaterial({
+    color: 0x1c0630, emissive: 0x2c0a48, emissiveIntensity: 0.55, roughness: 0.5, metalness: 0.1,
+    transparent: true, opacity: 1, side: THREE.DoubleSide,
+  })
+  const budTop = new THREE.Mesh(new THREE.SphereGeometry(0.19, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2), budMat)
+  const budBottom = new THREE.Mesh(new THREE.SphereGeometry(0.19, 18, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), budMat)
+  // 缝光：赤道接缝的细亮环——飞行后期虹膜光从闭合缝里渗出（"中心透出亮紫
+  // 虹膜光"），张开时快速熄灭
+  const seam = new THREE.Mesh(
+    new THREE.TorusGeometry(0.188, 0.009, 8, 32),
+    new THREE.MeshBasicMaterial({ color: 0xd06cff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
+  )
+  seam.rotation.x = Math.PI / 2
+  // 透光点：茧面正前方的亮紫光斑（加法精灵）——闭合态虹膜光的"漏光"读法
+  const glowSpot = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: Tex.spark(), color: 0xc44dff, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }))
+  glowSpot.position.z = 0.21
+  glowSpot.scale.set(0.3, 0.3, 1)
+  g.add(iris, pupil, aura, light, budTop, budBottom, seam, glowSpot)
+  return { group: g, irisMat, aura, light, budTop, budBottom, budMat, seam, glowSpot }
 }
 
 // Gekko Dizzy 程序化回退（官方模型 ability-dizzy.glb 加载失败时兜底）：
-// 圆身小怪兽——薰衣草圆球身 + 两只大眼 + 短尾，悬停摆尾；20HP 可击毁
+// 圆身小怪兽——薰衣草圆球身 + 两只大眼 + 短尾，悬停摆尾；20HP 可击毁。
+// （官方 GLB 骨链无翼骨且无烘焙动画——扇翅翼面在容器层外挂，见 buildDizzyWings）
 function buildDizzyProc() {
   const g = new THREE.Group()
   const bodyMat = new THREE.MeshStandardMaterial({
@@ -204,10 +236,37 @@ function buildDizzyProc() {
   })
   const crest = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.1, 8), glowMat)
   crest.position.set(0, 0.2, 0.02)
-  const light = new THREE.PointLight(0xc98aff, 0.9, 5, 2)
   for (const m of [body, tail]) m.castShadow = true
-  g.add(body, makeEye(1), makeEye(-1), tail, crest, light)
-  return { group: g, body, glowMat, light }
+  g.add(body, makeEye(1), makeEye(-1), tail, crest)
+  return { group: g, body, glowMat }
+}
+
+// Dizzy 扇翅翼面（W16）：Dizzy 是有翼小兽（Fandom Dizzy 页/官方立绘）——官方
+// GLB 无翼骨（骨链仅 Head/Spine/Tail 系）也无烘焙动画，程序化翼面挂容器层，
+// 官方模型与程序化回退两条路径共用。蝙蝠膜式翼轮廓（双贝塞尔后缘凹弧），
+// 半透明紫膜双面材质；肩轴在躯干后侧，扇动 = 绕前轴（Z）上下扑（renderSync）
+function buildDizzyWings() {
+  const shape = new THREE.Shape()
+  shape.moveTo(0, 0.03)
+  shape.quadraticCurveTo(0.15, 0.13, 0.32, 0.05)  // 前缘：翼根到翼尖
+  shape.quadraticCurveTo(0.29, -0.04, 0.22, -0.05) // 后缘凹弧（指间膜）1
+  shape.quadraticCurveTo(0.20, -0.015, 0.13, -0.055) // 凹弧 2
+  shape.quadraticCurveTo(0.11, -0.012, 0.045, -0.05) // 凹弧 3（近根）
+  shape.quadraticCurveTo(0.025, -0.012, 0, -0.032) // 翼根
+  const geo = new THREE.ShapeGeometry(shape, 6)
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x7c58c8, emissive: 0x4630a0, emissiveIntensity: 0.45,
+    transparent: true, opacity: 0.85, side: THREE.DoubleSide, roughness: 0.5,
+  })
+  const mkWing = (side) => {
+    const pivot = new THREE.Group()
+    pivot.position.set(side * 0.11, 0.08, -0.04)
+    const mesh = new THREE.Mesh(geo, mat)
+    if (side < 0) mesh.scale.x = -1 // 左翼镜像
+    pivot.add(mesh)
+    return pivot
+  }
+  return { R: mkWing(1), L: mkWing(-1), mat }
 }
 
 // 模块级临时对象：128Hz 步进 + 每渲染帧动画，避免分配
@@ -215,6 +274,9 @@ const _va = new THREE.Vector3()
 const _vb = new THREE.Vector3()
 const _axis = new THREE.Vector3()
 const _q = new THREE.Quaternion()
+// 近视雾色插值暂存（renderSync 每帧用）
+const _fogColor = new THREE.Color()
+const _nsFogColor = new THREE.Color()
 // _eye()/_forward() 的复用返回对象（128Hz 热路径零分配；调用点即取即用）
 const _eyeOut = { x: 0, y: 0, z: 0 }
 const _fwdOut = { x: 0, y: 0, z: 0 }
@@ -236,8 +298,14 @@ export class FlashSystem {
     this._pulse = 0            // KAY/O 引信脉冲相位（频率随预告进度加速）
     this._wispSide = 1         // 火男卷曲火丝的左右交替
     this._blindAt = 0          // 最近一次致盲开始时刻（白屏快速淡入用）
-    this._nearsightUntil = -1  // Reyna 近视命中截止时刻（转开即停刷新，0.3s 内褪去）
+    this._nearsightUntil = -1  // Reyna 近视视界占用截止时刻（看清瞳孔期间逐步续借）
+    this._nsO = 0              // 近视屏效当前透明度（线性拉满/线性褪去，renderSync 驱动）
+    this._warnO = 0            // Leer LOS 预警透明度（眼球视线内但未受近视时 >0）
     this._plasma = null        // Dizzy 等离子：{ at, potencyUntil, until }（转身不可避）
+    this._plasmaShot = null    // 飞行中的等离子弹体：{ fx,fy,fz, x,y,z, t, dur }（W11）
+    this._boltTrailAt = 0      // 等离子弹体拖尾节拍
+    this._globule = null       // Dizzy 休眠 Globule 残躯：{ x,y,z, vy, rest, until }（W15）
+    this._globuleMesh = null   // Globule 网格（懒建复用）
 
     // 七种模型常驻场景、按需显隐
     this._models = {
@@ -249,14 +317,30 @@ export class FlashSystem {
       reyna: buildReynaEye(),
       gecko: buildDizzyProc(),
     }
-    // skye/gecko 套容器壳：程序化近似与官方 GLB 互斥显示（group=容器）
-    const wrap = (m) => {
+    // skye/gecko 套容器壳：程序化近似与官方 GLB 互斥显示（group=容器）。
+    // 点光挂容器（官方 GLB 就位后程序化根被摘除，容器常驻场景图——充能/预备期
+    // 的照明在两条模型路径下都作用于实际渲染的画面）；glowMats 记录充能调色的
+    // 材质目标与原色/原强度（_despawn 复位、_mountOfficial 重定向到官方材质）
+    const wrap = (m, lightHex, lightIntensity, lightDist) => {
       const c = new THREE.Group()
       c.add(m.group)
-      return { ...m, group: c, proc: m.group }
+      const light = new THREE.PointLight(lightHex, lightIntensity, lightDist, 2)
+      c.add(light)
+      return {
+        ...m, group: c, proc: m.group, light,
+        lightBase: { color: lightHex, intensity: lightIntensity },
+        glowMats: m.glowMat
+          ? [{ mat: m.glowMat, baseEmissive: m.glowMat.emissive.getHex(), baseIntensity: m.glowMat.emissiveIntensity }]
+          : [],
+      }
     }
-    this._models.skye = wrap(this._models.skye)
-    this._models.gecko = wrap(this._models.gecko)
+    this._models.skye = wrap(this._models.skye, 0x46ffb0, 0.8, 5)
+    this._models.gecko = wrap(this._models.gecko, 0xc98aff, 0.9, 5)
+    // Dizzy 扇翅翼面（W16）：官方 GLB 骨链无翼骨（本轮实解析证实）且无烘焙动画
+    // ——翼面挂容器层，官方模型与程序化回退两条路径共用（renderSync 驱动扇动）
+    const dizzyWings = buildDizzyWings()
+    this._models.gecko.group.add(dizzyWings.R, dizzyWings.L)
+    this._models.gecko.wings = dizzyWings
     for (const m of Object.values(this._models)) { m.group.visible = false; scene.add(m.group) }
 
     // 官方模型（Rocklan 包 .blend→GLB，MRS 补丁见 scripts/ability-glb-patch.mjs）：
@@ -271,50 +355,80 @@ export class FlashSystem {
     this.overlayEl = document.createElement('div')
     this.overlayEl.className = 'flash-blind'
     hudRoot.insertBefore(this.overlayEl, hudRoot.firstChild)
-    // 近视（Reyna）/等离子（Dizzy）屏效叠在白屏之上：游戏内两者都不是白闪
+    // 近视（Reyna）/等离子（Dizzy）屏效叠在白屏之上：游戏内两者都不是白闪。
+    // leer-warn：眼球视线内但尚未被近视时的屏幕边缘预警（W10）
     this.nearsightEl = document.createElement('div')
     this.nearsightEl.className = 'nearsight-blind'
     hudRoot.insertBefore(this.nearsightEl, this.overlayEl.nextSibling)
     this.plasmaEl = document.createElement('div')
     this.plasmaEl.className = 'plasma-blind'
     hudRoot.insertBefore(this.plasmaEl, this.nearsightEl.nextSibling)
+    this.warnEl = document.createElement('div')
+    this.warnEl.className = 'leer-warn'
+    hudRoot.insertBefore(this.warnEl, this.plasmaEl.nextSibling)
+
+    // 世界空间近视的场景雾句柄：引擎已建 Fog（colors.fog, 60→170 远景霭）——
+    // 近视满效时把它收束到视界半径、颜色压向暗品红，褪去后复位（renderSync）。
+    // 测试场景无雾时补一个等价默认，行为与引擎场景一致
+    this._fog = scene.fog ?? (scene.fog = new THREE.Fog(CONFIG.colors.fog, 60, 170))
+    this._fogRest = { near: this._fog.near, far: this._fog.far, color: this._fog.color.getHex() }
   }
 
-  // 官方 GLB 挂载：成功后隐藏程序化根、记住骨骼（鹰翼/尾骨运行时扇动）。
+  // 官方 GLB 挂载：成功后隐藏程序化根、记住骨骼（鹰翼/尾骨运行时扇动），
+  // 并把充能/预备期的发光目标从程序化 glowMat 重定向到官方材质（W2：旧实现
+  // 在 GLB 就位后仍写已卸载的死对象——玩家看不到满充能橙光与起爆渐亮）。
   // 文件缺失/损坏静默跳过——程序化近似兜底，绝不阻塞启动
   _loadOfficial(file, entry, { scale = 1 } = {}) {
     this._loader.load(
       new URL(`models/${file}`, document.baseURI).href,
-      (gltf) => {
-        const root = gltf.scene
-        root.rotation.y = -Math.PI / 2
-        root.scale.setScalar(scale)
-        root.visible = true
-        const bones = {}
-        root.traverse((o) => {
-          if (o.isBone) {
-            o.userData.restQuat = o.quaternion.clone() // 静息姿态：扇翅叠加其上
-            bones[o.name] = o
-          }
-        })
-        entry.group.add(root)
-        entry.official = root
-        entry.bones = bones
-        // 官方模型就位：程序化近似不再是兜底而是死重——从场景图摘除并释放
-        // GPU 资源（仅隐藏虽不渲染，128Hz 的矩阵更新仍会遍历它）
-        if (entry.proc) {
-          entry.group.remove(entry.proc)
-          entry.proc.traverse(o => {
-            o.geometry?.dispose?.()
-            const ms = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])
-            for (const m of ms) m.dispose?.()
-          })
-          entry.proc = null
-        }
-      },
+      (gltf) => { this._mountOfficial(entry, gltf.scene, scale) },
       undefined,
       () => { /* 缺文件：程序化兜底 */ },
     )
+  }
+
+  // 官方 root 挂载（_loadOfficial 的成功回调主体；独立成方法供测试直接驱动）。
+  // 坐标/缩放对齐、骨骼静息姿态记录、程序化根摘除释放、发光目标重定向
+  _mountOfficial(entry, root, scale = 1) {
+    root.rotation.y = -Math.PI / 2
+    root.scale.setScalar(scale)
+    root.visible = true
+    const bones = {}
+    root.traverse((o) => {
+      if (o.isBone) {
+        o.userData.restQuat = o.quaternion.clone() // 静息姿态：扇翅叠加其上
+        bones[o.name] = o
+      }
+    })
+    entry.group.add(root)
+    entry.official = root
+    entry.bones = bones
+    // 发光目标重定向：官方材质中凡带 emissive 的纳入调色组（记录原色/原强度，
+    // _despawn 复位）——充能转橙（skye）与 arm 渐亮从此作用于实际渲染的官方
+    // 模型。同一材质可能被多个网格共享，Set 去重防强度双写
+    const seen = new Set()
+    const glowMats = []
+    root.traverse((o) => {
+      const ms = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])
+      for (const mat of ms) {
+        if (mat.emissive && !seen.has(mat)) {
+          seen.add(mat)
+          glowMats.push({ mat, baseEmissive: mat.emissive.getHex(), baseIntensity: mat.emissiveIntensity ?? 1 })
+        }
+      }
+    })
+    entry.glowMats = glowMats
+    // 官方模型就位：程序化近似不再是兜底而是死重——从场景图摘除并释放
+    // GPU 资源（仅隐藏虽不渲染，128Hz 的矩阵更新仍会遍历它）
+    if (entry.proc) {
+      entry.group.remove(entry.proc)
+      entry.proc.traverse(o => {
+        o.geometry?.dispose?.()
+        const ms = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])
+        for (const m of ms) m.dispose?.()
+      })
+      entry.proc = null
+    }
   }
 
   get _listener() { return this.player } // 音频听者：{ pos, yaw } 实时读
@@ -343,6 +457,10 @@ export class FlashSystem {
     this.blindUntil = -1
     this._nearsightUntil = -1
     this._plasma = null
+    this._plasmaShot = null
+    if (this._plasmaBolt) this._plasmaBolt.visible = false
+    if (this._globuleMesh) this._globuleMesh.group.visible = false
+    this._globule = null
     this.audio.setDeafened?.(0)
     this.startAfter = countdownSec
     this.nextAt = this.mode === 'off' ? Infinity : countdownSec + rand(CONFIG.flash.firstMin, CONFIG.flash.firstMax)
@@ -354,6 +472,10 @@ export class FlashSystem {
     this.blindUntil = -1
     this._nearsightUntil = -1
     this._plasma = null
+    this._plasmaShot = null
+    if (this._plasmaBolt) this._plasmaBolt.visible = false
+    if (this._globuleMesh) this._globuleMesh.group.visible = false
+    this._globule = null
     this.audio.setDeafened?.(0)
   }
 
@@ -367,6 +489,8 @@ export class FlashSystem {
   step(dt) {
     this.t += dt
     if (this.proj) this._stepProj(dt)
+    if (this._plasmaShot) this._stepPlasmaShot(dt) // 等离子弹体独立于 Dizzy 存续（喷射后本体可到期消散）
+    if (this._globule) this._stepGlobule(dt) // Globule 残躯独立存续（不占用 proj 槽位）
     if (this.mode === 'off') return // 关闭模式不出弹（nextAt=Infinity 之外的第二道闸）
     if (!this.proj && this.t >= this.startAfter && this.t >= this.nextAt) {
       this._spawn()
@@ -393,33 +517,86 @@ export class FlashSystem {
     else this._spawnGecko(gap, gapCx)
   }
 
-  // KAY/O：墙后投掷，弹道解算受出手速度约束（Class 2 口径 18m/s）：按口径速度
-  // 与落点反解直射初速/飞行时间（flashMath.ballisticShot），替换旧的「1.6s 引信
-  // 反解初速」——旧解实际出手仅 6.6~8m/s（口径的 ~40%），speed 字段零引用。
-  // 结构改为「拍地弹跳 pop flash」：18m/s 直射砸门后地面 → 首跳触发 v10.06
-  // 引信规则（0.8s）→ 低弹跳穿过门洞，门后 ~1.05-1.15s 在玩家侧半场低位起爆
-  // （cast→bounce ~0.3s 是听觉反应窗，与真机 KAY/O 弹跳闪节奏同量级）。
-  // 旧的过墙高位爆变体在此速度下几何不成立：18m/s×1.6s 位移 ~28m ≫ 本场
-  // 进深（出手到目标 ~10m），任何不弹跳的 1.6s 引信弹道起爆点必越过玩家身后
-  // ——弹跳路线本身就是真机 KAY/O pop flash 的标准用法
+  // KAY/O：墙后投掷，弹道解算受出手速度约束（主投 Class 2 口径 18m/s，副投
+  // Class 0.7 口径 6.3m/s）：按口径速度与落点反解直射初速/飞行时间
+  // （flashMath.ballisticShot）。主投三变体随机混合（节奏多样性，见 CONFIG 注释），
+  // Math.random 消费顺序（tests/flash-system.test.js 按此 mock）：
+  //   1) 副投 roll（< K.altChance）→ 2) lane 偏移 → 3) 变体 roll（<0.5 拍地弹跳 /
+  //   <0.8 深落点长引信 / 其余全引信空爆）→ 4) 变体各自参数
   _spawnKayo(gap, gapCx) {
     const K = CONFIG.flash.kayo
-    // 横向走「车道」：出手与落点共用车道偏移 + 小幅瞄准抖动——弹跳段的横漂
-    // 只有 ~0.2m，保证低弹跳从门洞（净宽 = 缺口宽度）穿过而不拍在门墙上
+    if (Math.random() < K.altChance) { this._spawnKayoAlt(gap, gapCx); return }
+    // 横向走「车道」：出手与落点共用车道偏移 + 小幅瞄准抖动——低弹跳从门洞
+    // （净宽 = 缺口宽度）穿过而不拍在门墙上
     const lane = clamp(gapCx + rand(-0.55, 0.55), gap.x0 + 0.6, gap.x1 - 0.6)
     const start = { x: lane, y: 1.6, z: -31.5 }
-    // 地面落点：门墙后侧（墙 z∈[-24.8,-23.2]）再往里 0.8~2.4m——落点越深
-    // 弹跳越高、起爆越靠后，深浅随机即出弹节奏变化
-    const impact = {
-      x: clamp(lane + rand(-0.25, 0.25), gap.x0 + 0.5, gap.x1 - 0.5),
-      y: 0,
-      z: rand(-27.4, -25.6),
+    const variant = Math.random()
+    // ① 拍地弹跳 pop flash：门墙后侧（墙 z∈[-24.8,-23.2]）往里 0.8~2.4m 砸地
+    // → 首跳触发 v10.06 引信规则（min(剩余, 0.8s)）→ 低弹跳穿门洞，~1.05-1.25s
+    // 玩家侧半场低位起爆（cast→bounce ~0.3s 是听觉反应窗）
+    let impact
+    if (variant < 0.5) {
+      impact = {
+        x: clamp(lane + rand(-0.25, 0.25), gap.x0 + 0.5, gap.x1 - 0.5),
+        y: 0,
+        z: rand(-27.4, -25.6),
+      }
+    } else if (variant < 0.8) {
+      // ② 深落点长引信：平射快球穿门洞、玩家侧 ~0.7s 才首跳——剩余引信
+      // 0.85~0.9s > 0.8 被 v10.06 规则钳住（不延长剩余），总节奏 ~1.5s，
+      // 是本图进深内最接近 1.6s 长引信的可达变体
+      impact = {
+        x: clamp(lane + rand(-0.3, 0.3), gap.x0 + 0.5, gap.x1 - 0.5),
+        y: 0,
+        z: rand(-19.5, -16.5),
+      }
+    } else {
+      // ③ 全引信空爆：从走廊底（走廊 z -36..-24，取 -35 距后墙内面 0.6m 的
+      // 合法站位）贴门楣（缺口顶 3.4m）平抛——1.6s 全程不落地、空中起爆
+      // （~3.4m 高、越过架枪位，真实"全程飞行不弹跳"节奏；威胁域见 CONFIG 注释）
+      const vy = rand(3.2, 3.75) // 门楣裕度：过墙时 y≈3.0-3.3 < 3.4
+      const start3 = { x: lane, y: 1.6, z: -35 }
+      this.proj = {
+        type: 'kayo', pos: start3, prevPos: { ...start3 },
+        vel: { x: rand(-0.12, 0.12), y: vy, z: Math.sqrt(K.speed * K.speed - vy * vy) }, // +Z 朝门墙
+        t: 0, fuse: K.maxFuse, bounced: false,
+        telegraph: K.telegraph, maxBlind: K.maxBlind,
+      }
+      this.audio.flashCast('kayo', start3, this._listener)
+      return
     }
     const shot = ballisticShot(start, impact, K.speed, K.gravity)
     const vel = shot ? shot.vel : straightVel(start, impact, K.speed)
     this.proj = {
       type: 'kayo', pos: start, prevPos: { ...start }, vel, t: 0,
       fuse: K.maxFuse, bounced: false,
+      telegraph: K.telegraph, maxBlind: K.maxBlind,
+    }
+    this.audio.flashCast('kayo', start, this._listener)
+  }
+
+  // 副投（ALT FIRE 下手短抛，Class 0.7 口径 6.3m/s、总引信 1s）：敌人贴门短抛
+  // ——从墙后门洞线低位出手，6.3m/s 小弧线抛过门洞在玩家侧贴门落地，首跳后
+  // 以剩余引信（0.5s 级 < 0.8 不再被钳）快速起爆——"快速短抛"节奏分支，
+  // 时序上比主投弹跳闪快整整一拍
+  _spawnKayoAlt(gap, gapCx) {
+    const K = CONFIG.flash.kayo
+    const A = K.alt
+    const lane = clamp(gapCx + rand(-0.5, 0.5), gap.x0 + 0.6, gap.x1 - 0.6)
+    // 出手点：门洞线正后（墙后背面 z=-24.8 再退 0.4m）、下手高度 1.5m
+    const start = { x: lane, y: 1.5, z: -25.2 }
+    // 落点：门墙玩家侧贴门 0.6~1.3m（短抛本义：闪在门口就地爆）
+    const impact = {
+      x: clamp(lane + rand(-0.2, 0.2), gap.x0 + 0.4, gap.x1 - 0.4),
+      y: 0,
+      z: rand(-22.5, -21.9),
+    }
+    const shot = ballisticShot(start, impact, A.speed, K.gravity)
+    const vel = shot ? shot.vel : straightVel(start, impact, A.speed)
+    this.proj = {
+      type: 'kayo', pos: start, prevPos: { ...start }, vel, t: 0,
+      fuse: A.fuse, bounced: false, alt: true,
+      telegraph: A.telegraph, maxBlind: A.maxBlind,
     }
     this.audio.flashCast('kayo', start, this._listener)
   }
@@ -487,14 +664,27 @@ export class FlashSystem {
     // 无 cast 音：敌方本就听不见飞行中的碎片
   }
 
-  // Breach：Placement 穿墙放置——charge 直接出现在玩家侧的墙前面（穿墙到达，
-  // 不飞弹道），0.5s 预备后爆 2.25s（预备期红橙脉冲是唯一的转身提示）
+  // Breach：Placement 穿墙放置——开火后 charge 从 Breach 本体位置（门后走廊、
+  // 放置点正后方）以 2400uu/s=24m/s（v12.00）直线飞向放置点、穿墙到达另一侧，
+  // 到位即停进入 0.5s 预备（v1.07）后爆 2.25s。飞行段 ~dist/24s 是出手→挂墙的
+  // 时延：光体在轨迹穿过门洞可见空间时可被瞥见，预备期红橙脉冲是贴墙后的
+  // 唯一转身提示
   _spawnBreach(gap, gapCx) {
+    const B = CONFIG.flash.breach
     const side = Math.random() < 0.5 ? 1 : -1
     const x = clamp(side > 0 ? gap.x1 + rand(0.3, 1.0) : gap.x0 - rand(0.3, 1.0), -16.8, 16.8)
-    const pos = { x, y: rand(1.7, 2.7), z: -23.53 } // 墙前面（厚 0.8、中心 -24）+ 盘半厚
-    this.proj = { type: 'breach', pos, prevPos: { ...pos }, t: 0 }
-    this.audio.flashCast('breach', pos, this._listener)
+    // 放置点：墙玩家侧面（墙 z∈[-24.8,-23.2]，玩家面 -23.2）+ 盘半厚出脸 0.07
+    const place = { x, y: rand(1.7, 2.7), z: -23.13 }
+    // 本体位置：放置点正后（同 x）、走廊内胸口高度——charge 直线飞向放置点
+    const start = { x, y: Math.min(1.5, place.y - 0.3), z: -30.5 }
+    const dx = place.x - start.x, dy = place.y - start.y, dz = place.z - start.z
+    const d = Math.hypot(dx, dy, dz)
+    this.proj = {
+      type: 'breach', pos: start, prevPos: { ...start }, place,
+      vel: { x: dx / d * B.speed, y: dy / d * B.speed, z: dz / d * B.speed },
+      t: 0, flyT: d / B.speed, phase: 'fly', armT: 0,
+    }
+    this.audio.flashCast('breach', start, this._listener)
   }
 
   // Reyna：近视眼——Missile 从墙后直线穿地形（不撞墙！）到 10m 部署距，
@@ -515,27 +705,37 @@ export class FlashSystem {
     this.proj = {
       type: 'reyna', pos: { ...start }, prevPos: { ...start },
       from: start, to, t: 0, phase: 'fly', armT: 0, eyeT: 0, hp: R.hp,
+      // 施法方向（部署向量的单位向量）：到位后悬停朝向沿它固定（W14）——
+      // 官方 Leer 不持续追踪个体玩家，瞳孔朝施法时锁定的方向
+      faceDir: (() => {
+        const dx = to.x - start.x, dy = to.y - start.y, dz = to.z - start.z
+        const d = Math.hypot(dx, dy, dz) || 1
+        return { x: dx / d, y: dy / d, z: dz / d }
+      })(),
       voice: this.audio.leerHum?.(this._listener) ?? null,
     }
     this.proj.voice?.setPos(start.x, start.y, start.z)
     this.audio.flashCast('reyna', start, this._listener)
   }
 
-  // Gekko：Dizzy Class 2 投掷（同 KAY/O 物理）——半空悬停点 低弹道抛过墙，
-  // 0.65s 激活预备后减速悬停，活跃 1s 内锁定视线内玩家喷等离子
+  // Gekko：Dizzy Class 2 投掷——弹速 v7.12 口径 ~100m/s（近似换算，见 CONFIG）：
+  // 高速蹿出 ~0.1s 级直达悬停点急停（"send Dizzy soaring forward"），0.65s
+  // 激活预备后进入活跃窗，锁定视线内玩家喷等离子
   _spawnGecko(gap, gapCx) {
     const G = CONFIG.flash.gecko
     const startX = clamp(gapCx + rand(-0.8, 0.8), gap.x0 + 0.4, gap.x1 - 0.4)
     const start = { x: startX, y: 1.6, z: -31.5 }
     const target = { x: clamp(gapCx + rand(-1.2, 1.2), gap.x0 + 0.4, gap.x1 - 0.4), y: rand(1.6, 2.4), z: rand(-21.6, -20.4) }
-    // 出手速度约束（Class 2 口径 18m/s，同 KAY/O）：按口径速度与悬停瞄准点
-    // 反解直射初速（旧「固定 0.6s 反解」实际出手 ~16.6m/s）；悬停段强阻尼
-    // （×e^-6t）会把到位后余速吃掉，悬停点仍在玩家侧目标区
+    // 出手速度约束（口径 ~100m/s）：按口径速度与悬停瞄准点反解直射初速——
+    // 到位时间 ~0.1s 级（本图 ~10.5m 投距 ≈0.105s），到位即急停悬停（snap 到
+    // 瞄准点、速度清零），残留阻尼不再承担"吃掉余速"的职责
     const shot = ballisticShot(start, target, G.speed, G.gravity)
     const vel = shot ? shot.vel : straightVel(start, target, G.speed)
+    const d = Math.hypot(target.x - start.x, target.y - start.y, target.z - start.z)
     this.proj = {
       type: 'gecko', pos: start, prevPos: { ...start }, vel, t: 0,
-      bounced: false, acquire: 0, fired: false, hp: G.hp, bobPhase: rand(0, 6),
+      hover: { ...target }, flyT: shot ? shot.T : d / G.speed,
+      acquire: 0, fired: false, hp: G.hp, bobPhase: rand(0, 6),
       voice: this.audio.dizzyFlight?.(this._listener) ?? null,
     }
     this.proj.voice?.setPos(start.x, start.y, start.z)
@@ -579,18 +779,21 @@ export class FlashSystem {
         // 就能听出"罐子在滚远/滚停"，不用看也知道手雷落在哪
         p.bounceN = (p.bounceN ?? 0) + 1
         this.audio.flashBounce(p.pos, this._listener, p.bounceN)
-        // v10.06：首次弹跳后改为 0.8s 引信（不延长剩余时间）+ 专属爬升嗡鸣
+        // v10.06：首次弹跳后改为 0.8s 引信（不延长剩余时间）+ 专属爬升嗡鸣。
+        // bounceLeft 记下嗡鸣时长——renderSync 的警灯脉冲与它同拍同长（W13：
+        // 专属视觉贯穿整个弹跳 windup，而非只在末 0.3s telegraph 出现）
         if (!p.bounced) {
           p.bounced = true
           p.fuse = p.t + kayoFuseAfterBounce(p.fuse - p.t)
-          this.audio.flashHum(p.fuse - p.t, p.pos, this._listener)
+          p.bounceLeft = p.fuse - p.t
+          this.audio.flashHum(p.bounceLeft, p.pos, this._listener)
         }
       } else {
         p.pos.x += p.vel.x * dt; p.pos.y += p.vel.y * dt; p.pos.z += p.vel.z * dt
       }
     }
     p.t += dt
-    if (p.t >= p.fuse) this._pop(p, K.maxBlind)
+    if (p.t >= p.fuse) this._pop(p, p.maxBlind ?? K.maxBlind)
   }
 
   _stepSkye(p, dt) {
@@ -600,9 +803,10 @@ export class FlashSystem {
     p.flapPhase += dt * (p.voice?.flapHz ?? 8.5)
     if (p.phase === 'arm') {
       p.armT += dt
-      const k = Math.exp(-5 * dt)
-      p.vel.x *= k; p.vel.y *= k; p.vel.z *= k
-      p.pos.x += p.vel.x * dt; p.pos.y += p.vel.y * dt; p.pos.z += p.vel.z * dt
+      // 官方激活（发射后再按 FIRE）：鹰原地定格悬停，0.3s activation windup
+      // （v3.06）后在激活点原地起爆——判定与表现都以定格点为基准
+      // （W8：旧实现速度指数衰减继续位移，满速时 0.3s 漂移 ~2.8m，起爆点
+      // 比玩家看到的激活点远 1-3m；arm 期也无撞面可言——不位移即不穿墙）
       if (p.armT >= S.activationWindup) this._pop(p, skyeMaxBlind(p.flight))
       return
     }
@@ -647,12 +851,13 @@ export class FlashSystem {
       : null
     if (hit && hit.t <= segLen + 0.05) { this._fizzle(p, hit); return }
     p.pos.x += segX; p.pos.y += segY; p.pos.z += segZ
-    // 充能完成（橙光 + 提示音，维基记载）
+    // 充能完成（橙光 + 提示音，维基记载）——调色作用于 glowMats（官方模型 =
+    // 官方材质，程序化 = glowMat）与容器点光，玩家实际看到的模型整体转橙
     if (!p.charged && p.flight >= S.chargeTime) {
       p.charged = true
       const m = this._models.skye
       m.light.color.setHex(0xffa040)
-      m.glowMat.emissive.setHex(0xffb060)
+      for (const g of m.glowMats) g.mat.emissive.setHex(0xffb060)
       this.audio.flashCharge(p.pos, this._listener)
     }
     // 激活条件（任一）：
@@ -662,6 +867,10 @@ export class FlashSystem {
     if ((p.charged && dEye <= S.popDist) || p.flight >= S.maxFlight) {
       p.phase = 'arm'
       p.armT = 0
+      // 定格：记住激活瞬间的航向（姿态保持），速度清零——原地悬停等起爆
+      const vl = Math.hypot(p.vel.x, p.vel.y, p.vel.z) || 1
+      p.armDir = { x: p.vel.x / vl, y: p.vel.y / vl, z: p.vel.z / vl }
+      p.vel.x = p.vel.y = p.vel.z = 0
       this.audio.flashArm(p.pos, this._listener)
     }
   }
@@ -725,10 +934,21 @@ export class FlashSystem {
     }
   }
 
-  // Breach：贴墙静止，0.5s 预备倒数（视觉脉冲在 renderSync）
+  // Breach：fly（24m/s 直线飞向放置点，穿墙不检碰撞——Placement 语义）→
+  // set（到位即停，贴墙 0.5s 预备倒数；视觉脉冲在 renderSync）
   _stepBreach(p, dt) {
     p.t += dt
-    if (p.t >= CONFIG.flash.breach.windup) this._pop(p, CONFIG.flash.breach.maxBlind)
+    if (p.phase === 'fly') {
+      p.pos.x += p.vel.x * dt; p.pos.y += p.vel.y * dt; p.pos.z += p.vel.z * dt
+      if (p.t >= p.flyT) {
+        p.pos.x = p.place.x; p.pos.y = p.place.y; p.pos.z = p.place.z // 到位即停（snap 防步长过冲）
+        p.phase = 'set'
+        p.armT = 0
+      }
+      return
+    }
+    p.armT += dt
+    if (p.armT >= CONFIG.flash.breach.windup) this._pop(p, CONFIG.flash.breach.maxBlind)
   }
 
   // Reyna：三段——fly（0.55s 匀速穿墙）→ arrive（0.4s 睁眼）→ active（1.6s 施加窗：
@@ -759,38 +979,47 @@ export class FlashSystem {
       angleDeg = Math.acos(clamp((fw.x * dxE + fw.y * dyE + fw.z * dzE) / dist, -1, 1)) * 180 / Math.PI
     }
     const los = this.world.lineOfSight(eye.x, eye.y, eye.z, p.pos.x, p.pos.y, p.pos.z)
-    if (leerAffects(angleDeg, los)) this._nearsightUntil = this.t + 0.3 // 命中：刷新视界占用
+    // 命中：逐步续借视界占用（+1.5 步，覆盖步进/渲染的相位差）——"看清瞳孔即
+    // 持续命中"；转开后下一步即停止续借，屏效按 fadeTime=0.3s 线性褪去
+    // （reyna-6：实现与自述口径一致，不再有 0.3s 的滞后残留窗）
+    if (leerAffects(angleDeg, los)) this._nearsightUntil = this.t + dt * 1.5
+    // LOS 预警（维基 Leer：warning VFX appear on their screen if they are in the
+    // eye's line of sight, even if they are not affected）——眼开期内只看 LOS，
+    // 与玩家朝向无关（眼盯着人，人背对也算"在视线内"）；renderSync 读此标记
+    p.warn = los
     if (p.eyeT >= R.nearsight) { this._expire(p) } // 自然消散：无爆闪、不催 peek
   }
 
-  // Gekko：抛掷段 Class 2 物理（0.65s 激活预备后强阻尼减速 → 半空悬停）；
-  // 活跃 1s 窗：视线内 45m 目标锁定 0.35s → 喷等离子（转身不可避），失准回退
+  // Gekko：抛掷段 Class 2 物理（口径 ~100m/s，到位 ~0.1s 级）——高速蹿出后
+  // 急停悬停（到位 snap 到瞄准点、速度清零）；0.65s 激活预备后进入活跃 1s 窗：
+  // 视线内 45m 目标锁定 0.35s → 喷等离子弹体（转身不可避），失准回退
   _stepGecko(p, dt) {
     const G = CONFIG.flash.gecko
     p.t += dt
-    if (!p.slowed && p.t >= G.activationWindup) p.slowed = true
     if (!p.slowed) {
-      // 抛掷段：重力 + 撞面即停（半空目标一般撞不到，撞到也算到位）
+      // 抛掷段：重力 + 撞面即停（撞到也算到位）；到飞抵时刻急停悬停
       p.vel.y -= G.gravity * dt
       const speed = Math.hypot(p.vel.x, p.vel.y, p.vel.z)
+      let landed = false
       if (speed > 1e-4) {
         const dirX = p.vel.x / speed, dirY = p.vel.y / speed, dirZ = p.vel.z / speed
         const dist = speed * dt
         const hit = this.world.raycast(p.pos.x, p.pos.y, p.pos.z, dirX, dirY, dirZ, dist + 0.04)
         if (hit && hit.t <= dist + 0.04) {
           p.pos.x = hit.x + hit.nx * 0.1; p.pos.y = hit.y + hit.ny * 0.1; p.pos.z = hit.z + hit.nz * 0.1
-          p.slowed = true; p.vel.x = p.vel.y = p.vel.z = 0
+          landed = true
         } else {
           p.pos.x += p.vel.x * dt; p.pos.y += p.vel.y * dt; p.pos.z += p.vel.z * dt
         }
       }
-    } else {
-      // 悬停段：速度阻尼到 0 + 低频浮动（renderSync 叠加正弦，逻辑位不动）
-      const k = Math.exp(-6 * dt)
-      p.vel.x *= k; p.vel.y *= k; p.vel.z *= k
-      p.pos.x += p.vel.x * dt; p.pos.y += p.vel.y * dt; p.pos.z += p.vel.z * dt
-      if (p.pos.y < 0.55) p.pos.y = 0.55
+      if (landed || p.t >= p.flyT) {
+        // 急停悬停：snap 到瞄准点（100m/s 下每步 0.78m，snap 防过冲）、速度清零
+        p.pos.x = p.hover.x; p.pos.y = Math.max(p.hover.y, 0.55); p.pos.z = p.hover.z
+        p.vel.x = p.vel.y = p.vel.z = 0
+        p.slowed = true
+      }
     }
+    // 悬停段逻辑位不动：低频浮动是 renderSync 的渲染偏移（sin 叠加）
     const activeT = p.t - G.activationWindup
     if (activeT < 0) return
     if (activeT >= G.active) { this._expireGecko(p); return } // 活跃窗耗尽先判（喷过的也要收摊）
@@ -807,39 +1036,148 @@ export class FlashSystem {
     }
   }
 
-  // 等离子命中：溅射 2.5m 内必中（玩家眼即溅点）——全屏 2s = 1s 满效 + 1s 渐褪，
-  // 转身不可避（维基：cannot avoid by turning away），只要求喷溅瞬间 LOS
+  // 等离子发射：Dizzy 喷出绿色等离子弹体飞向玩家（官方 'unleashes plasma
+  // blasts'，v6.05 补丁专项改进『等离子在飞行途中』的听辨性）——命中瞬间才
+  // 结算糊屏。弹体全程追踪玩家眼位（糊屏转身不可避的既有口径：命中只要求
+  // 喷出瞬间 LOS），飞行时长 = 距离/plasmaSpeed
   _firePlasma(p) {
     p.fired = true
     const eye = this._eye()
+    const dx = eye.x - p.pos.x, dy = eye.y - p.pos.y, dz = eye.z - p.pos.z
+    const d = Math.hypot(dx, dy, dz) || 1
+    this._plasmaShot = {
+      fx: p.pos.x, fy: p.pos.y, fz: p.pos.z,
+      x: p.pos.x, y: p.pos.y, z: p.pos.z,
+      t: 0, dur: Math.max(0.05, d / CONFIG.flash.gecko.plasmaSpeed),
+    }
+    if (!this._plasmaBolt) this._makePlasmaBolt()
+  }
+
+  // 等离子弹体步进：直线飞向实时眼位（追踪），t≥dur 命中——溅射糊屏结算 +
+  // 2.5m 溅射视觉 + 命中音（命中瞬间才发生，弹体飞行期屏幕干净）
+  _stepPlasmaShot(dt) {
+    const s = this._plasmaShot
+    s.t += dt
+    const eye = this._eye()
+    const k = Math.min(1, s.t / s.dur)
+    s.x = s.fx + (eye.x - s.fx) * k
+    s.y = s.fy + (eye.y - s.fy) * k
+    s.z = s.fz + (eye.z - s.fz) * k
+    if (k < 1) return
+    // 命中：全屏 2s = 1s 满效 + 1s 渐褪（维基 cannot avoid by turning away）
     const total = dizzyPlasmaBlind()
     this._plasma = { at: this.t, potencyUntil: this.t + total.potency, until: this.t + total.total }
-    // 等离子束 + 溅射糊屏的落点视觉（绿紫史莱姆双色——本体 goop 是绿紫外星黏液）
-    const dx = eye.x - p.pos.x, dy = eye.y - p.pos.y, dz = eye.z - p.pos.z
-    for (let i = 0; i < 22; i++) {
-      const f = i / 22
+    // 命中溅射视觉：2.5m 溅射半径（game files Plasma explosion radius）——
+    // 绿紫史莱姆双色（本体 goop 是绿紫外星黏液）：球面散布火花向外崩 + 大团
+    // 软泡在眼位涨开（size 为世界直径，~2m 泡读作 2.5m 溅射区）
+    const R = CONFIG.flash.gecko.splash
+    for (let i = 0; i < 18; i++) {
+      _va.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize()
+      const r = R * (0.35 + Math.random() * 0.65)
       const green = i % 2 === 0
-      this.fx.sparks.emit(p.pos.x + dx * f, p.pos.y + dy * f, p.pos.z + dz * f,
-        (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 0.8,
+      this.fx.sparks.emit(eye.x + _va.x * r, eye.y + _va.y * r, eye.z + _va.z * r,
+        _va.x * 2.4, _va.y * 2.4 + 0.4, _va.z * 2.4,
         {
           life: 0.3 + Math.random() * 0.25, size: 0.05,
           r: green ? 0.5 : 0.72, g: green ? 0.95 : 0.42, b: green ? 0.55 : 1,
           alpha: 0.95, drag: 2,
         })
     }
-    this.fx.sparks.emit(eye.x, eye.y, eye.z, 0, 0.3, 0,
-      { life: 0.5, size: 0.3, sizeEnd: 0.9, r: 0.55, g: 0.9, b: 0.6, alpha: 0.5, drag: 1 })
+    for (let i = 0; i < 6; i++) {
+      this.fx.puffs.emit(eye.x + (Math.random() - 0.5) * 0.6, eye.y + (Math.random() - 0.5) * 0.5, eye.z + (Math.random() - 0.5) * 0.6,
+        0, 0.3, 0, { life: 0.45 + Math.random() * 0.2, size: 0.5, sizeEnd: 1.6, r: 0.42, g: 0.85, b: 0.52, alpha: 0.4, drag: 1.2 })
+    }
     this.audio.plasmaSplat?.({ x: eye.x, y: eye.y, z: eye.z }, this._listener)
+    this._plasmaShot = null
     this.onPopped?.(true) // 敌方成功施放 → 催促 peek（与白闪 pop 同语义）
   }
 
-  // Dizzy 活跃窗耗尽：坠落成休眠泡泡再消散（装饰性，无伤害）
+  // 等离子弹体（懒建复用）：绿亮核心 + 加法光晕精灵 + 绿点光——来袭弹读感
+  _makePlasmaBolt() {
+    const g = new THREE.Group()
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 10, 8),
+      new THREE.MeshBasicMaterial({ color: 0x9dffb0 }),
+    )
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: Tex.spark(), color: 0x6ceca0, transparent: true, opacity: 0.85,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }))
+    halo.scale.set(0.5, 0.5, 1)
+    const light = new THREE.PointLight(0x6cff9d, 1.2, 4, 2)
+    g.add(core, halo, light)
+    g.visible = false
+    this.scene.add(g)
+    this._plasmaBolt = g
+  }
+
+  // Dizzy 活跃窗耗尽：坠落地面化为休眠 Globule 泡泡残躯（W15，v12.03 存世
+  // 20s），到期迸散成 droplets——装饰性残躯，不占用 this.proj（下一颗闪光
+  // 不被阻塞）；回收/续用机制不实现（单人场景）
   _expireGecko(p) {
     this.fx.sparks.emit(p.pos.x, p.pos.y - 0.1, p.pos.z, 0, -1.2, 0,
       { life: 0.4, size: 0.08, sizeEnd: 0.04, r: 0.6, g: 0.5, b: 1, alpha: 0.8, drag: 0.4 })
     this.audio.globuleDrop?.(p.pos, this._listener)
+    this._spawnGlobule(p.pos)
     this._despawn()
     this.onPopped?.(false)
+  }
+
+  // 休眠 Globule 残躯（懒建复用）：半透明绿紫泡泡 + 内核微光 + 弱点光；
+  // 独立于 this.proj 存续
+  _spawnGlobule(pos) {
+    if (!this._globuleMesh) {
+      const g = new THREE.Group()
+      const shell = new THREE.Mesh(
+        new THREE.SphereGeometry(0.16, 16, 12),
+        new THREE.MeshStandardMaterial({
+          color: 0x9adca8, emissive: 0x3a8a55, emissiveIntensity: 0.35,
+          transparent: true, opacity: 0.55, roughness: 0.15,
+        }),
+      )
+      shell.scale.y = 0.92
+      const core = new THREE.Mesh(
+        new THREE.SphereGeometry(0.06, 10, 8),
+        new THREE.MeshStandardMaterial({ color: 0x2a5a3a, emissive: 0x66d98a, emissiveIntensity: 1.1, roughness: 0.3 }),
+      )
+      const light = new THREE.PointLight(0x6cd98f, 0.5, 3, 2)
+      g.add(shell, core, light)
+      g.visible = false
+      this.scene.add(g)
+      this._globuleMesh = { group: g, shell, core, light }
+    }
+    this._globule = { x: pos.x, y: pos.y, z: pos.z, vy: 0.6, rest: false, until: this.t + CONFIG.flash.gecko.globuleLife }
+  }
+
+  // Globule 步进：坠落（地图重力）→ 触地一次弱弹跳 → 静置；到期迸散成 droplets
+  _stepGlobule(dt) {
+    const s = this._globule
+    if (!s.rest) {
+      s.vy -= CONFIG.movement.gravity * dt
+      s.y += s.vy * dt
+      if (s.y <= 0.14) {
+        s.y = 0.14
+        s.vy = Math.abs(s.vy) > 2.2 ? -s.vy * 0.22 : 0 // 一次弱弹跳后静止
+        if (s.vy === 0) {
+          s.rest = true
+          for (let i = 0; i < 5; i++) {
+            this.fx.sparks.emit(s.x, s.y + 0.05, s.z, (Math.random() - 0.5) * 1.2, 0.6 + Math.random() * 0.8, (Math.random() - 0.5) * 1.2,
+              { life: 0.3, size: 0.035, sizeEnd: 0.012, r: 0.55, g: 0.9, b: 0.6, alpha: 0.85, drag: 2 })
+          }
+        }
+      }
+    }
+    if (this.t >= s.until) {
+      // 到期迸散：droplets 飞溅 + 轻烟，残躯消失（20s 休眠期结束）
+      for (let i = 0; i < 8; i++) {
+        _va.set(Math.random() - 0.5, Math.random() * 0.7, Math.random() - 0.5).normalize().multiplyScalar(1 + Math.random() * 2)
+        this.fx.sparks.emit(s.x, s.y, s.z, _va.x, _va.y, _va.z,
+          { life: 0.3 + Math.random() * 0.2, size: 0.04, sizeEnd: 0.012, r: 0.5, g: 0.88, b: 0.58, alpha: 0.9, drag: 2.2 })
+      }
+      this.fx.puffs.emit(s.x, s.y, s.z, 0, 0.3, 0, { life: 0.4, size: 0.1, sizeEnd: 0.3, r: 0.5, g: 0.72, b: 0.55, alpha: 0.3, drag: 1.4 })
+      this._globule = null
+      this._globuleMesh.group.visible = false
+    }
   }
 
   // Reyna 眼自然消散：紫雾散尽（无白闪——近视眼到期不产生闪光）
@@ -985,17 +1323,24 @@ export class FlashSystem {
     if (p?.voice) p.voice.stop()
     this.proj = null
     for (const m of Object.values(this._models)) m.group.visible = false
-    // 斯凯鹰的充能染色复位（下次生成时重置为绿色）
-    const skye = this._models.skye
-    skye.light.color.setHex(0x46ffb0)
-    skye.glowMat.emissive.setHex(0x46ffb0)
+    // skye/gecko 的充能染色复位：glowMats（官方或程序化材质组）恢复原 emissive
+    // 色与原强度，容器点光恢复基准色/强度——下次生成从绿色/紫态起步
+    for (const key of ['skye', 'gecko']) {
+      const m = this._models[key]
+      for (const g of m.glowMats) {
+        g.mat.emissive.setHex(g.baseEmissive)
+        g.mat.emissiveIntensity = g.baseIntensity
+      }
+      m.light.color.setHex(m.lightBase.color)
+      m.light.intensity = m.lightBase.intensity
+    }
   }
 
   // ---- 渲染帧：白屏/近视/等离子透明度 / 网格插值 / 模型动画 / 拖尾 / 移动声源 ----
   renderSync(alpha, dt = 0.016) {
     // 白屏：起爆后 0.06s 快速拉满（游戏同款的瞬时白），致盲期内不透明，
-    // 到期后 1 秒线性渐褪（维基确认值）。纯白平铺——本体被闪即整屏纯白，
-    // 无渐变边缘、无残像色（能看见一点边缘是退役的旧观感）
+    // 到期后 1 秒线性渐褪（维基确认值）。冷白平铺——官方 "opaque, colored
+    // screen"，真机观感白/淡蓝：极淡冷蓝 #e9f2ff（W17），无渐变边缘、无残像色
     let o = 0
     if (this.blindUntil >= 0) {
       const k = (this.t - this.blindUntil) / CONFIG.flash.fadeTime
@@ -1005,22 +1350,93 @@ export class FlashSystem {
     }
     this.overlayEl.style.opacity = o.toFixed(3)
 
-    // 近视（Reyna）：命中期不透明、转开 0.3s 内褪去；等离子（Dizzy）：1s 满效
-    // + 1s 渐褪（转身不可避）。两者都不是白闪，走独立屏效
+    // 近视（Reyna）：世界空间 6m 视界 + 全屏品红雾罩两层实现——
+    // ① 世界空间：场景雾收束（W3 重建：旧的整屏 CSS blur 与 Nearsight 感知
+    //    相反——贴脸 2m 被糊、15m 外反而清晰。雾按片元深度逐像素生效，6m 内
+    //    清晰、6m 外暗品红不透明覆盖，褪去时随 _nsO 线性退回）；
+    // ② 全屏品红调色：CSS 雾罩（style.css .nearsight-blind）+ 本透明度。
+    // 曲线口径（reyna-6 并入）：命中 0.12s 线性拉满、转开 fadeTime=0.3s 线性
+    // 褪去——实现与自述一致（旧的 4/s 指数缓动 0.3s 时仍剩 0.289，差 2.5 倍）
     this._nsO = this._nsO ?? 0
     const nsTarget = this._nearsightUntil > this.t ? 1 : 0
-    this._nsO += (nsTarget - this._nsO) * Math.min(1, (nsTarget ? 9 : 4) * dt)
+    const R = CONFIG.flash.reyna
+    this._nsO = clamp(this._nsO + (nsTarget ? 1 : -1) * dt / (nsTarget ? R.onsetTime : R.fadeTime), 0, 1)
     this.nearsightEl.style.opacity = this._nsO.toFixed(3)
+    if (this._nsO > 0.0005) {
+      this._fog.near = THREE.MathUtils.lerp(this._fogRest.near, R.visionRadius * 0.75, this._nsO)
+      this._fog.far = THREE.MathUtils.lerp(this._fogRest.far, R.visionRadius, this._nsO)
+      _fogColor.setHex(this._fogRest.color).lerp(_nsFogColor.setHex(R.nearFogColor), this._nsO)
+      this._fog.color.copy(_fogColor)
+      this._fogDirty = true
+    } else if (this._fogDirty) {
+      this._fog.near = this._fogRest.near
+      this._fog.far = this._fogRest.far
+      this._fog.color.setHex(this._fogRest.color)
+      this._fogDirty = false
+    }
     // Deafened（维基 Status Effect：Nearsight 者同时被聋）：与近视屏效同一条
     // 透明度曲线驱动主链闷化——视野收束与听觉闷化同步起/褪
     this.audio.setDeafened?.(this._nsO)
+    // Leer LOS 预警（W10）：眼球开眼期玩家在其视线内（p.warn，与玩家朝向无关）
+    // 且尚未被近视 → 屏幕边缘品红呼吸预警；已被近视后预警无意义（整个屏幕
+    // 都是"警报"），随 (1-_nsO) 压隐
+    const wp = this.proj
+    const warnOn = wp?.type === 'reyna' && wp.phase === 'active' && wp.warn && this._nearsightUntil <= this.t
+    this._warnO += ((warnOn ? 1 : 0) - this._warnO) * Math.min(1, 7 * dt)
+    if (this._warnO < 0.0005) this._warnO = 0
+    this.warnEl.style.opacity = (this._warnO * (1 - this._nsO)).toFixed(3)
+    // 等离子（Dizzy）：1s 满效 + 1s 渐褪（转身不可避）。渐褪 = 边缘可见圈从
+    // 边缘向内持续扩张（W12：--plasma-hole 收小）+ 后段整体变薄——不再整屏
+    // 同步变淡
     let po = 0
+    let hole = CONFIG.flash.gecko.plasmaEdgeStart
     if (this._plasma) {
-      if (this.t < this._plasma.potencyUntil) po = 1
-      else if (this.t < this._plasma.until) po = 1 - (this.t - this._plasma.potencyUntil) / (this._plasma.until - this._plasma.potencyUntil)
-      else this._plasma = null
+      const G = CONFIG.flash.gecko
+      const fadeK = (this.t - this._plasma.potencyUntil) / (this._plasma.until - this._plasma.potencyUntil)
+      if (fadeK <= 0) po = 1 // 满效期：浆块盖住绝大部分视野，仅边缘露一圈
+      else if (fadeK < 1) {
+        hole = G.plasmaEdgeStart * (1 - Math.pow(fadeK, G.plasmaEdgeCurve))
+        po = fadeK <= G.plasmaAlphaHold ? 1 : 1 - (fadeK - G.plasmaAlphaHold) / (1 - G.plasmaAlphaHold)
+      } else this._plasma = null
     }
     this.plasmaEl.style.opacity = po.toFixed(3)
+    this.plasmaEl.style.setProperty('--plasma-hole', hole.toFixed(3))
+
+    // 等离子弹体飞行表现（W11）：绿亮弹体 + 拖尾细缕；命中后隐藏
+    if (this._plasmaBolt) {
+      this._plasmaBolt.visible = !!this._plasmaShot
+      if (this._plasmaShot) {
+        const s = this._plasmaShot
+        const pulse = 1 + Math.sin(this.t * 40) * 0.18
+        this._plasmaBolt.position.set(s.x, s.y, s.z)
+        this._plasmaBolt.scale.setScalar(pulse)
+        this._boltTrailAt += dt
+        if (this._boltTrailAt > 0.024) {
+          this._boltTrailAt = 0
+          this.fx.sparks.emit(s.x, s.y, s.z, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4,
+            { life: 0.22, size: 0.04, sizeEnd: 0.01, r: 0.5, g: 0.95, b: 0.55, alpha: 0.9, drag: 2.4 })
+        }
+      }
+    }
+
+    // Globule 残躯表现（W15）：静置期慢呼吸（1.6Hz 径向脉动 + 轻微压扁呼吸）
+    // + 内核微光脉动；下坠段轻微拉伸（速度感）
+    if (this._globuleMesh) {
+      const s = this._globule
+      this._globuleMesh.group.visible = !!s
+      if (s) {
+        const g = this._globuleMesh
+        g.group.position.set(s.x, s.y, s.z)
+        if (s.rest) {
+          const breathe = Math.sin(this._animT * Math.PI * 2 * 1.6)
+          g.group.scale.set(1 + breathe * 0.04, 0.92 - breathe * 0.05, 1 + breathe * 0.04)
+          g.core.material.emissiveIntensity = 1.1 + breathe * 0.3
+          g.light.intensity = 0.5 + breathe * 0.12
+        } else {
+          g.group.scale.set(0.94, 1.08, 0.94) // 下坠拉伸
+        }
+      }
+    }
 
     // Breach 起爆光柱：0.32s 上冲拉伸 → 熄灭（独立于投掷物存续）
     if (this._beam?.mesh.visible) {
@@ -1045,16 +1461,21 @@ export class FlashSystem {
     this._animT += dt
 
     // 各自的起爆预告（telegraph）进度 0..1：KAY/O 最后 0.3s 发亮（维基 telegraph
-    // 0.3s）、斯凯预备期 0.3s、火男全程渐亮（与渐强音效同拍）、Yoru/Breach 预备期
-    // 全程亮起、Reyna 睁眼进度、Dizzy 激活充能
+    // 0.3s，副投/主投各自 p.telegraph）、斯凯预备期 0.3s、火男全程渐亮（与渐强
+    // 音效同拍）、Yoru/Breach 预备期全程亮起、Reyna 睁眼进度、Dizzy 激活充能
+    //（分母 = activationWindup - glowLead：0.2s 起亮提前量不计入分母，发光峰值
+    // 恰在 0.65s 悬停/锁定起点收满——W9）
     let tele = 0
-    if (p.type === 'kayo') tele = clamp(1 - (p.fuse - p.t) / CONFIG.flash.kayo.telegraph, 0, 1)
+    if (p.type === 'kayo') tele = clamp(1 - (p.fuse - p.t) / (p.telegraph ?? CONFIG.flash.kayo.telegraph), 0, 1)
     else if (p.type === 'skye' && p.phase === 'arm') tele = clamp(p.armT / CONFIG.flash.skye.activationWindup, 0, 1)
     else if (p.type === 'phoenix') tele = clamp(p.t / CONFIG.flash.phoenix.windup, 0, 1)
     else if (p.type === 'yoru') tele = p.bounced ? clamp(p.windT / CONFIG.flash.yoru.windup, 0, 1) : 0
-    else if (p.type === 'breach') tele = clamp(p.t / CONFIG.flash.breach.windup, 0, 1)
+    else if (p.type === 'breach') tele = p.phase === 'set' ? clamp(p.armT / CONFIG.flash.breach.windup, 0, 1) : 0
     else if (p.type === 'reyna') tele = p.phase === 'arrive' ? clamp(p.armT / CONFIG.flash.reyna.arrivalWindup, 0, 1) : p.phase === 'active' ? 1 : 0
-    else if (p.type === 'gecko') tele = clamp((p.t - 0.2) / CONFIG.flash.gecko.activationWindup, 0, 1)
+    else if (p.type === 'gecko') {
+      const G = CONFIG.flash.gecko
+      tele = clamp((p.t - G.glowLead) / (G.activationWindup - G.glowLead), 0, 1)
+    }
 
     if (p.type === 'kayo') {
       // 翻滚随速度：出手快转，落地静止后收势（速度越低转越慢直至停住）
@@ -1062,11 +1483,22 @@ export class FlashSystem {
       const k = Math.min(1, spd / 6)
       m.group.rotation.y += (1.2 + 8 * k) * dt
       m.group.rotation.x += (0.6 + 4 * k) * dt
-      // 引信脉冲发光：越接近起爆，脉冲越快越亮（v10.06 弹跳预告的视觉节奏）
-      this._pulse += dt * (3 + 22 * tele)
-      m.glowMat.emissiveIntensity = 1.6 + tele * 2.4 * (0.6 + 0.4 * Math.sin(this._pulse * Math.PI * 2))
+      // 琥珀警灯脉冲（v10.06 专属视觉全程化，W13）：弹跳后的 0.8s windup 内
+      // 警灯即随 windup 进度脉冲（幅度/频率线性爬升，与 0.8s 爬升嗡鸣同拍同长）
+      // ——警灯是玩家计时转身的视觉锚点，不能只在末 0.3s telegraph 才出现；
+      // 未弹跳的飞行段（含空爆变体）仍走末 0.3s telegraph
+      const windK = p.bounced && p.bounceLeft > 0
+        ? clamp(1 - (p.fuse - p.t) / p.bounceLeft, 0, 1)
+        : tele
+      this._pulse += dt * (3 + 22 * windK)
+      m.glowMat.emissiveIntensity = 1.6 + windK * 2.4 * (0.6 + 0.4 * Math.sin(this._pulse * Math.PI * 2))
     } else if (p.type === 'skye') {
-      m.group.lookAt(p.pos.x + p.vel.x, p.pos.y + p.vel.y, p.pos.z + p.vel.z) // +Z（喙向）对准航向
+      // +Z（喙向）对准航向；arm 定格期速度已清零，朝向保持激活瞬间航向
+      if (p.phase === 'arm' && p.armDir) {
+        m.group.lookAt(ix + p.armDir.x, iy + p.armDir.y, iz + p.armDir.z)
+      } else {
+        m.group.lookAt(p.pos.x + p.vel.x, p.pos.y + p.vel.y, p.pos.z + p.vel.z)
+      }
       m.group.rotateZ(p.bank) // 转弯侧倾：压坡入弯
       // 振翅与音频同拍：相位在逻辑步推进（与音频 LFO 同时起振、同时冻结），
       // 振幅缓变（活物感）；预备期翅膀上扬大展、扑动收停
@@ -1084,7 +1516,9 @@ export class FlashSystem {
         m.wingL.rotation.z = base + flap
         m.wingR.rotation.z = -base - flap
       }
-      m.glowMat.emissiveIntensity = 1.4 + tele * 4.4
+      // 充能/预备渐亮：作用于 glowMats（官方模型 = 官方材质组，程序化 = glowMat）
+      // + 容器点光——两条模型路径下"起爆渐亮预告"都在实际渲染的画面上（W2）
+      for (const g of m.glowMats) g.mat.emissiveIntensity = g.baseIntensity + tele * 4.4
       m.light.intensity = 0.8 + tele * 2.2
     } else if (p.type === 'yoru') {
       // 显形后原地自旋 + 内芯亮起（0.6s 预备的视觉倒数）
@@ -1094,16 +1528,45 @@ export class FlashSystem {
       m.light.intensity = tele * 2.6
       m.shell.material.opacity = 0.5 + tele * 0.5
     } else if (p.type === 'breach') {
-      // 贴墙脉冲：随预备进度加速的呼吸灯（唯一的转身提示——v1.06 音画预告口径）
-      this._pulse += dt * (4 + 18 * tele)
-      m.glowMat.emissiveIntensity = 0.8 + tele * 3 * (0.55 + 0.45 * Math.sin(this._pulse * Math.PI * 2))
-      m.light.intensity = 0.5 + tele * 2.2
+      if (p.phase === 'fly') {
+        // 飞行段：光体保持航向（盘面法线 +Z = 飞行方向）+ 轻微滚转，引擎级
+        // 微光让它在穿过门洞可见空间时能被瞥见（到位后进入预备脉冲）
+        m.group.rotation.z += dt * 3
+        m.glowMat.emissiveIntensity = 1.6 + Math.sin(this._pulse * Math.PI * 2) * 0.5
+        this._pulse += dt * 6
+        m.light.intensity = 1.1
+      } else {
+        // 贴墙脉冲：随预备进度加速的呼吸灯（唯一的转身提示——v1.06 音画预告口径）
+        this._pulse += dt * (4 + 18 * tele)
+        m.glowMat.emissiveIntensity = 0.8 + tele * 3 * (0.55 + 0.45 * Math.sin(this._pulse * Math.PI * 2))
+        m.light.intensity = 0.5 + tele * 2.2
+      }
     } else if (p.type === 'reyna') {
-      // 眼球盯人：+Z 瞳孔朝玩家 + 悬停浮动；睁眼期（tele）虹膜由暗转亮
-      m.group.lookAt(this.player.pos.x, iy, this.player.pos.z)
+      // 眼茧开合（W14）：飞行段闭合态深紫球茧（缝光渗出 + 正前透光点读作
+      // "中心透出亮紫虹膜光"）；到位 0.4s 眼睑膜如花瓣张开（easeOutBack 轻过冲）
+      // 并随之消散；朝向全程沿施法方向固定（faceDir），不追踪个体玩家
+      const R = CONFIG.flash.reyna
+      m.group.lookAt(ix + p.faceDir.x, iy + p.faceDir.y, iz + p.faceDir.z)
       m.group.position.y = iy + Math.sin(this._animT * 2.2) * 0.05
-      const open = p.phase === 'fly' ? 0.4 : 0.6 + tele * 0.55
+      const open = p.phase === 'fly' ? 0.7 : 0.7 + tele * 0.45
       m.group.scale.setScalar(open)
+      // 绽开曲线：easeOutBack（t=1 处恰好收在 1，中段轻过冲 ~1.1 读作"花瓣
+      // 弹开"）；active 恒 1
+      const bt = p.phase === 'arrive' ? clamp(p.armT / R.arrivalWindup, 0, 1) : p.phase === 'active' ? 1 : 0
+      const bloom = bt >= 1 ? 1 : 1 + 2.7 * Math.pow(bt - 1, 3) + 1.7 * Math.pow(bt - 1, 2)
+      // 眼睑膜：张开角 ±1.9rad（上片后仰、下片前俯）+ 微缩 + 消散；全开即隐
+      const lidAng = Math.max(0, bloom) * 1.9
+      m.budTop.rotation.x = -lidAng
+      m.budBottom.rotation.x = lidAng
+      m.budMat.opacity = Math.max(0, 1 - bloom)
+      const lidsGone = bloom > 0.985
+      m.budTop.visible = !lidsGone
+      m.budBottom.visible = !lidsGone
+      // 缝光：飞行段随旅程渐亮（虹膜光从闭合缝渗出），张开瞬间快速熄灭
+      const seamK = p.phase === 'fly' ? clamp(p.t / R.travel, 0, 1) : Math.max(0, 1 - bloom * 2.5)
+      m.seam.material.opacity = seamK * (0.55 + Math.sin(this._animT * 7) * 0.2)
+      m.glowSpot.material.opacity = seamK * (0.5 + Math.sin(this._animT * 5.3) * 0.18)
+      // 虹膜由暗渐亮（tele：arrive 0.4s 睁眼进度 → active 全亮）+ 微脉动
       m.irisMat.emissiveIntensity = 0.8 + tele * 2 + Math.sin(this._animT * 6) * 0.25
       m.light.intensity = 0.6 + tele * 1.8
       m.aura.material.opacity = 0.35 + tele * 0.35
@@ -1116,22 +1579,43 @@ export class FlashSystem {
       m.mat.emissiveIntensity = 2 + tele * 4.5
       m.light.intensity = 1.1 + tele * 2.5
     } else if (p.type === 'gecko') {
-      // Dizzy：悬停浮动 + 身体俯仰朝向玩家；官方模型摆尾/点头，程序化回退压身
+      // Dizzy：悬停浮动；飞行段身体俯仰朝航向（姿态初始化，~0.1s 高速蹿出的
+      // 读感），悬停段转身面对玩家；官方模型摆尾/点头，程序化回退压身
       m.group.position.y = iy + Math.sin(this._animT * 3.1 + p.bobPhase) * 0.06
-      m.group.lookAt(this.player.pos.x, m.group.position.y, this.player.pos.z)
+      if (!p.slowed) {
+        m.group.lookAt(ix + p.vel.x, iy + p.vel.y, iz + p.vel.z)
+      } else {
+        m.group.lookAt(this.player.pos.x, m.group.position.y, this.player.pos.z)
+      }
       const wag = Math.sin(this._animT * 7) * (0.25 + tele * 0.35)
+      // 扇翅（W16）：悬停 idle 主特征动画——6.5Hz 上下扑 + 幅度/膜面微光随充能
+      // 渐增；飞行段高频小幅扑动（13Hz）并后掠收翼。相位取渲染时钟（与浮动/
+      // 摆尾同源，无音频绑定）；翼面挂容器层，官方/程序化两路径共用
+      if (m.wings) {
+        const flapHz = p.slowed ? 6.5 : 13
+        const flapAmp = p.slowed ? 0.55 + tele * 0.15 : 0.3
+        const flap = Math.sin(this._animT * Math.PI * 2 * flapHz) * flapAmp
+        const fold = (p.slowed ? 0.18 : 0.45) + Math.abs(flap) * 0.1 // 飞行段后掠更多
+        m.wings.R.rotation.z = flap // 绕前轴上下扑（右翼 +θ 抬、左翼镜像）
+        m.wings.L.rotation.z = -flap
+        m.wings.R.rotation.y = fold // 绕立轴后掠收展
+        m.wings.L.rotation.y = -fold
+        m.wings.mat.emissiveIntensity = 0.45 + tele * 0.5
+      }
       if (m.official && m.bones?.Tail_01) {
         this._boneFlap(m.bones.Tail_01, wag, 'y')
         if (m.bones.Head) this._boneFlap(m.bones.Head, Math.sin(this._animT * 3.1 + p.bobPhase) * 0.14, 'x')
         m.group.scale.setScalar(1 + tele * 0.12)
       } else {
         m.body.scale.y = 0.92 - tele * 0.1 + Math.sin(this._animT * 6) * 0.02
-        m.glowMat.emissiveIntensity = 1.2 + tele * 3
       }
+      // 充能渐亮：glowMats 统一驱动（官方材质组 / 程序化 glowMat）+ 容器点光
+      for (const g of m.glowMats) g.mat.emissiveIntensity = g.baseIntensity + tele * 3
       m.light.intensity = 0.9 + tele * 2
     }
 
-    // 拖尾：鹰绿光尾迹（充能满转橙+上飘余烬）/ 火球双层火焰+卷曲火丝 /
+    // 拖尾：鹰绿光尾迹（充能满转橙+上飘余烬，arm 定格期收停——原地悬停的鹰
+    // 不再拖着飞行尾迹，粒子在身后堆云是错误读法）/ 火球双层火焰+卷曲火丝 /
     // 眼与 Dizzy 的紫雾细缕；KAY/O 无尾迹（游戏同款）、Yoru 飞行不可见、
     // Breach 贴墙静止（游戏同款均无）
     this._trailAt += dt
@@ -1139,14 +1623,16 @@ export class FlashSystem {
       this._trailAt = 0
       const fx = this.fx
       if (p.type === 'skye') {
-        const core = p.charged ? { r: 1, g: 0.66, b: 0.3 } : { r: 0.3, g: 1, b: 0.66 }
-        fx.sparks.emit(ix, iy, iz, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4,
-          { life: 0.45, size: 0.05, sizeEnd: 0.012, ...core, alpha: 0.9, drag: 2.2 })
-        if (Math.random() < 0.3) fx.sparks.emit(ix, iy, iz, (Math.random() - 0.5) * 0.5, 0.1 + Math.random() * 0.3, (Math.random() - 0.5) * 0.5,
-          { life: 0.5, size: 0.032, r: 1, g: 0.85, b: 0.45, alpha: 0.9, drag: 2 })
-        if (p.charged && Math.random() < 0.55) fx.sparks.emit(ix + (Math.random() - 0.5) * 0.2, iy, iz + (Math.random() - 0.5) * 0.2,
-          (Math.random() - 0.5) * 0.3, 0.5 + Math.random() * 0.6, (Math.random() - 0.5) * 0.3,
-          { life: 0.5, size: 0.028, r: 1, g: 0.5, b: 0.18, drag: 1.2 })
+        if (p.phase !== 'arm') {
+          const core = p.charged ? { r: 1, g: 0.66, b: 0.3 } : { r: 0.3, g: 1, b: 0.66 }
+          fx.sparks.emit(ix, iy, iz, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4,
+            { life: 0.45, size: 0.05, sizeEnd: 0.012, ...core, alpha: 0.9, drag: 2.2 })
+          if (Math.random() < 0.3) fx.sparks.emit(ix, iy, iz, (Math.random() - 0.5) * 0.5, 0.1 + Math.random() * 0.3, (Math.random() - 0.5) * 0.5,
+            { life: 0.5, size: 0.032, r: 1, g: 0.85, b: 0.45, alpha: 0.9, drag: 2 })
+          if (p.charged && Math.random() < 0.55) fx.sparks.emit(ix + (Math.random() - 0.5) * 0.2, iy, iz + (Math.random() - 0.5) * 0.2,
+            (Math.random() - 0.5) * 0.3, 0.5 + Math.random() * 0.6, (Math.random() - 0.5) * 0.3,
+            { life: 0.5, size: 0.028, r: 1, g: 0.5, b: 0.18, drag: 1.2 })
+        }
       } else if (p.type === 'reyna') {
         if (Math.random() < 0.6) fx.sparks.emit(ix + (Math.random() - 0.5) * 0.2, iy - 0.1, iz + (Math.random() - 0.5) * 0.2,
           (Math.random() - 0.5) * 0.2, -0.3 - Math.random() * 0.3, (Math.random() - 0.5) * 0.2,

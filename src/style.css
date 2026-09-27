@@ -75,33 +75,63 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
   /* 静态暗角：视线聚焦画面中心，纯 CSS 零成本；很淡，不压暗准星区域 */
   background: radial-gradient(ellipse at center, transparent 58%, rgba(4, 8, 14, 0.32) 100%); }
 
-/* 闪光致盲白屏：FlashSystem 插在 #hud 首位——准星/弹药等 HUD 按层序叠于其上
-   （与游戏内"被闪时 HUD 仍可见"一致）。纯白平铺：本体被闪即整屏纯白无渐变
-   边缘、无残像色；透明度每帧直写（0.06s 快速拉满 → 到期 1s 线性渐褪），
-   不用 CSS 过渡 */
+/* 闪光致盲屏：FlashSystem 插在 #hud 首位——准星/弹药等 HUD 按层序叠于其上
+   （与游戏内"被闪时 HUD 仍可见"一致）。官方为 "opaque, colored screen"
+   （Fandom Status Effect 仅定性），真机观感呈白/淡蓝调——取极淡冷蓝 #e9f2ff
+   替代纯白（W17），无渐变边缘、无残像色；透明度每帧直写（0.06s 快速拉满 →
+   到期 1s 线性渐褪），不用 CSS 过渡 */
 .flash-blind {
   position: absolute; inset: 0;
-  background: #fff;
+  background: #e9f2ff;
   opacity: 0;
   will-change: opacity;
 }
 
-/* Reyna Leer 近视：中央（6m 视界）留一点清晰，四周坠入紫黑虚焦——backdrop-filter
-   真糊掉场景，径向渐变让中心渐变透出；非白闪，透明度独立于白屏 */
+/* Reyna Leer 近视：两层实现——世界空间的"6m 内清晰 / 6m 外暗品红不透明覆盖"
+   由场景雾收束承担（FlashSystem.renderSync 把 scene.fog near/far 收到
+   4.5/6m、颜色压向 nearFogColor，按片元深度逐像素生效——Nearsight 的感知
+   是"远处看不见、贴身可见"，不是均匀糊屏）；本层只负责全屏品红-紫雾罩
+   调色 + 近视力损伤（轻模糊/降饱和），透明度由 JS 线性驱动（0.12s 拉满 /
+   转开 0.3s 线性褪去） */
 .nearsight-blind {
   position: absolute; inset: 0;
-  backdrop-filter: blur(9px) saturate(0.35) brightness(0.5);
-  -webkit-backdrop-filter: blur(9px) saturate(0.35) brightness(0.5);
+  backdrop-filter: blur(5px) saturate(0.55) brightness(0.78);
+  -webkit-backdrop-filter: blur(5px) saturate(0.55) brightness(0.78);
   background:
-    radial-gradient(ellipse 58% 62% at center, rgba(38, 8, 58, 0) 0%, rgba(38, 8, 58, 0.28) 55%, rgba(24, 4, 40, 0.88) 100%),
-    linear-gradient(rgba(30, 6, 48, 0.22), rgba(30, 6, 48, 0.22));
+    radial-gradient(ellipse 60% 64% at center, rgba(104, 10, 116, 0) 0%, rgba(88, 8, 100, 0.3) 56%, rgba(46, 4, 56, 0.72) 100%),
+    linear-gradient(rgba(96, 10, 108, 0.24), rgba(96, 10, 108, 0.24));
   opacity: 0;
   will-change: opacity;
 }
 
-/* Gekko Dizzy 等离子糊屏：绿紫史莱姆浆块糊满全屏、边缘留一圈可见（本体 goop
-   为绿紫色外星黏液，非纯紫；wiki "covers the screen but leaves some
-   visibility around the edges"） */
+/* Reyna Leer LOS 预警：玩家在眼球视线内但尚未被近视时的屏幕边缘预警
+   （wiki Leer："warning VFX appear on their screen if they are in the eye's
+   line of sight, even if they are not affected"；v6.07 移除世界内指示器后
+   预警仅存于屏幕）——品红呼吸边框，主透明度由 FlashSystem 直写 */
+.leer-warn {
+  position: absolute; inset: 0;
+  opacity: 0;
+  will-change: opacity;
+}
+.leer-warn::before {
+  content: ""; position: absolute; inset: 0;
+  box-shadow: inset 0 0 120px 26px rgba(196, 44, 180, 0.4), inset 0 0 36px 6px rgba(255, 92, 220, 0.26);
+}
+.leer-warn::after {
+  content: ""; position: absolute; inset: 0;
+  box-shadow: inset 0 0 64px 10px rgba(255, 96, 226, 0.5);
+  animation: leerWarnPulse 0.9s ease-in-out infinite;
+}
+@keyframes leerWarnPulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.9; }
+}
+
+/* Gekko Dizzy 等离子糊屏：绿紫史莱姆浆块盖住绝大部分视野、屏幕边缘留一圈
+   可见（wiki "covers the screen but leaves some visibility around the edges"）。
+   --plasma-hole = 中央浆块半径（占屏比例）：满效 0.82（仅边缘露一圈）；渐褪期
+   JS 每帧收小此值——可见范围从边缘向内持续扩大，后段浆块再整体变薄
+   （mask 随挖孔收缩，非整屏同步变淡） */
 .plasma-blind {
   position: absolute; inset: 0;
   backdrop-filter: blur(7px) saturate(0.6) brightness(0.72);
@@ -112,6 +142,9 @@ body { font-family: var(--font-body); color: var(--text); user-select: none; }
     radial-gradient(ellipse 38% 30% at 66% 72%, rgba(160, 108, 244, 0.82) 0%, rgba(160, 108, 244, 0) 100%),
     radial-gradient(ellipse 32% 36% at 30% 76%, rgba(120, 228, 160, 0.8) 0%, rgba(120, 228, 160, 0) 100%),
     radial-gradient(ellipse 50% 46% at 50% 48%, rgba(58, 158, 108, 0.62) 0%, rgba(58, 158, 108, 0) 100%);
+  --plasma-hole: 0.82;
+  -webkit-mask-image: radial-gradient(ellipse 58% 62% at center, #000 calc(var(--plasma-hole) * 78%), transparent calc(var(--plasma-hole) * 78% + 24%));
+  mask-image: radial-gradient(ellipse 58% 62% at center, #000 calc(var(--plasma-hole) * 78%), transparent calc(var(--plasma-hole) * 78% + 24%));
   opacity: 0;
   will-change: opacity;
 }

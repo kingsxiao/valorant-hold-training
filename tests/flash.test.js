@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { CONFIG } from '../src/core/Config.js'
 import { AudioSys } from '../src/core/Audio.js'
 import { angleFactor, distFactor, blindDuration, skyeMaxBlind, kayoFuseAfterBounce, arcBezier, leerAffects, dizzyPlasmaBlind, ballisticShot } from '../src/world/flashMath.js'
@@ -18,6 +19,19 @@ describe('闪光数值：维基确认值锁死', () => {
     expect(F.kayo.bounceFuse).toBe(0.8)
     expect(F.kayo.telegraph).toBe(0.3)
     expect(F.kayo.maxBlind).toBe(2.25)
+  })
+
+  it('KAY/O 副投（ALT FIRE 下手短抛）：Class 0.7——6.3m/s、总引信 1s、telegraph 0.3s（v3.06）、致盲 2.25s（v11.08）', () => {
+    // 弹速 630uu/s ≈ 6.3m/s（100uu=1m 惯例，同主投换算口径）；telegraph
+    // v3.06 副投 1s→0.3s；最大致盲 v11.08 副投 1.5→2.25s（与主投同值）
+    expect(F.kayo.alt.speed).toBe(6.3)
+    expect(F.kayo.alt.fuse).toBe(1)
+    expect(F.kayo.alt.telegraph).toBe(0.3)
+    expect(F.kayo.alt.maxBlind).toBe(2.25)
+    // 重力沿用主投 Class 2 口径（Class 0.7 重力系数无公开表——近似口径注记）
+    expect(F.kayo.gravity).toBeCloseTo(2.94, 2)
+    // 训练场混合比例（非官方值，锁回归）：副投与主投变体交替出现
+    expect(F.kayo.altChance).toBe(0.4)
   })
 
   it('Skye Guiding Light：18m/s、最长飞 2s、1→2.25s 随 0.75s 充能、激活 0.3s', () => {
@@ -167,29 +181,42 @@ describe('新闪光类型：维基确认值锁死', () => {
     expect(F.yoru.maxBlind).toBe(1.5) // v11.08
   })
 
-  it('Breach Flashpoint：穿墙放置预备 0.5s（v1.07）、致盲 2.25s（v11.08）', () => {
+  it('Breach Flashpoint：charge 24m/s（v12.00，2400uu/s）、预备 0.5s（v1.07）、致盲 2.25s（v11.08）', () => {
+    expect(F.breach.speed).toBe(24) // 2400uu/s（v12.00），开火→挂墙存在 ~dist/24s 飞行时延
     expect(F.breach.windup).toBe(0.5)
     expect(F.breach.maxBlind).toBe(2.25)
   })
 
-  it('Reyna Leer：10m 部署距、到位 0.4s 预备（v5.07）、近视 1.6s、100HP 可击毁、近视附带 Deafened', () => {
+  it('Reyna Leer：10m 部署距、到位 0.4s 预备（v5.07）、近视 1.6s、60HP 可击毁（v11.08）、6m 视界、转开 0.3s 褪去、近视附带 Deafened', () => {
     expect(F.reyna.deployDist).toBe(10)
     expect(F.reyna.travel).toBe(0.55) // 未确认值（维基 0.55s@10m）
     expect(F.reyna.arrivalWindup).toBe(0.4)
     expect(F.reyna.nearsight).toBe(1.6)
-    expect(F.reyna.visionRadius).toBe(6)
-    expect(F.reyna.hp).toBe(100) // 维基：眼 100HP（Reddit 考据）
+    expect(F.reyna.visionRadius).toBe(6) // game files 视界半径——世界空间雾收束的运行时输入
+    expect(F.reyna.hp).toBe(60) // v11.00 100→80、v11.08 80→60（Fandom Leer 数值表；Vandal 40 身伤两枪）
+    expect(F.reyna.fadeTime).toBe(0.3) // 转开视线线性褪去时长（表现参数，与实现自述一致）
+    expect(F.reyna.onsetTime).toBe(0.12) // 命中线性拉满时长（表现参数）
     expect(typeof AudioSys.prototype.setDeafened).toBe('function') // Nearsight = deafened（维基 Status Effect）
   })
 
-  it('Gekko Dizzy：Class 2 物理、激活 0.65s、锁定 0.35s（v7.12）、活跃 1s（v9.08）、等离子 1+1s', () => {
-    expect(F.gecko.speed).toBe(18) // Class 2 同 KAY/O
+  it('Gekko Dizzy：弹速 ~100m/s（v7.12）、激活 0.65s、锁定 0.35s（v7.12）、活跃 1s（v9.08）、等离子 1+1s + 2.5m 溅射', () => {
+    // v7.12 弹速 7000→10000 游戏单位/s；按 100uu=1m 惯例 ≈100m/s（官方未公布
+    // m/s 换算，近似口径——README 已知边界）。飞行段 ~0.1s 级后急停悬停
+    expect(F.gecko.speed).toBe(100)
     expect(F.gecko.gravity).toBeCloseTo(2.94, 2)
     expect(F.gecko.activationWindup).toBe(0.65) // 未确认值
     expect(F.gecko.acquireWindup).toBe(0.35) // v7.12
     expect(F.gecko.active).toBe(1) // v9.08
     expect(F.gecko.detect).toBe(45)
-    expect(F.gecko.splash).toBe(2.5)
+    expect(F.gecko.splash).toBe(2.5) // game files Plasma explosion radius——命中溅射视觉半径的运行时输入
+    expect(F.gecko.plasmaSpeed).toBe(40) // 等离子弹体飞行速度（未确认值：~0.2s 级可读来袭）
+    expect(F.gecko.glowLead).toBe(0.2) // 充能起亮提前量（表现参数）：tele 分母 = 0.65-0.2
+    // 糊屏边缘可见圈曲线（表现参数，官方无资料）：满效浆块半径 0.82、
+    // 渐褪按 1-k^1.15 收缩、alpha 前 55% 保持不透明
+    expect(F.gecko.plasmaEdgeStart).toBe(0.82)
+    expect(F.gecko.plasmaEdgeCurve).toBe(1.15)
+    expect(F.gecko.plasmaAlphaHold).toBe(0.55)
+    expect(F.gecko.globuleLife).toBe(20) // v12.03 休眠 Globule 残躯存世（Fandom Passive_Effects）
     expect(F.gecko.blindPotency).toBe(1)
     expect(F.gecko.blindFade).toBe(1)
     expect(F.gecko.hp).toBe(20)
@@ -242,5 +269,16 @@ describe('受出手速度约束的弹道解算（ballisticShot：口径速度反
     expect(Math.hypot(line.vel.x, line.vel.y, line.vel.z)).toBeCloseTo(10, 6)
     expect(line.T).toBeCloseTo(0.5, 6) // 5m ÷ 10m/s
     expect(ballisticShot({ x: 0, y: 0, z: 0 }, { x: 100, y: 0, z: 0 }, 1, 9.8)).toBeNull()
+  })
+})
+
+describe('致盲屏冷蓝色调（W17：官方 "opaque, colored screen"，真机观感白/淡蓝）', () => {
+  it('.flash-blind 为极淡冷蓝 #e9f2ff，非纯 #fff；透明度时序断言不涉颜色', () => {
+    const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+    const at = css.indexOf('.flash-blind')
+    expect(at).toBeGreaterThan(0)
+    const block = css.slice(at, css.indexOf('}', at))
+    expect(block).toContain('#e9f2ff')
+    expect(block).not.toMatch(/background:\s*#fff\b/)
   })
 })

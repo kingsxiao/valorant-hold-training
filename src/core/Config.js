@@ -216,12 +216,27 @@ export const CONFIG = {
     backFactor: 0.08,      // 完全背对时长系数（"轻微短暂致盲"）
     angleExp: 2,           // 视野外随角度的衰减幂次
     fadeTime: 1,           // 致盲到期后白屏渐褪 1s（维基确认值）
-    // KAY/O FLASH/drive：Class 2 投掷物（1800uu/s=18m/s、重力系数 0.3×9.8=2.94），
-    // 总引信 1.6s；v10.06 起首次弹跳后改为 0.8s 引信（不延长剩余时间）；最大致盲 2.25s（v11.08 起双手同值）。
-    // speed 已接入 ballisticShot 弹道解算；spawn 结构为拍地弹跳 pop flash（门后砸地
-    // →首跳 0.8s 引信→穿门洞玩家侧低位起爆 ~1.05-1.15s）；过墙高位爆变体因
-    // 18m/s×1.6s≈28m ≫ 场地进深几何不成立已删去
-    kayo: { speed: 18, gravity: 2.94, maxFuse: 1.6, bounceFuse: 0.8, telegraph: 0.3, maxBlind: 2.25, restitution: 0.32 },
+    // KAY/O FLASH/drive 主投：Class 2 投掷物（1800uu/s=18m/s、重力系数 0.3×9.8=2.94），
+    // 总引信 1.6s；v10.06 起首次弹跳后改为 0.8s 引信（不延长剩余时间，min(剩余,0.8)）；
+    // 最大致盲 2.25s（v11.08 起双手同值）。speed 接入 ballisticShot 弹道解算。
+    // 主投三变体（本图 12m 进深内官方物理可行的节奏集，随机混合）：
+    //   ① 拍地弹跳 pop flash——门后砸地→首跳 0.8s 引信→穿门洞玩家侧低位起爆 ~1.05-1.25s；
+    //   ② 深落点长引信——平射快球穿门洞、玩家侧 ~0.7s 才首跳（剩余 0.9s>0.8 被
+    //      v10.06 规则钳到 0.8）→ ~1.5s 深位起爆（最接近 1.6s 长引信的节奏）；
+    //   ③ 全引信空爆——走廊底（z≈-35）贴门楣平抛，1.6s 全程不落地、空中起爆
+    //      （~3.4m 高、越过架枪位）。注：18m/s×1.6s≈28.8m 弹道程长是硬约束——
+    //      本图从门后任何合法站位出发，不弹跳的 1.6s 起爆点几何上只能落在
+    //      玩家身后 ~7m 或 ~30m 高空，无法威胁门前架点位（README 已知边界）；
+    //      ③ 保留的是"全程不弹跳 + 空中爆"的真实节奏，威胁性让位给①②
+    // 副投（ALT FIRE 下手短抛，alt 段）：Class 0.7 投掷物——弹速 630uu/s≈6.3m/s、
+    // 总引信 1s、telegraph 0.3s（v3.06 副投 1s→0.3s）、最大致盲 2.25s（v11.08
+    // 副投 1.5→2.25s）。Class 0.7 重力系数无公开表：沿用主投 0.3×9.8 口径。
+    // altChance 为训练场混合比例（非官方值）：副投短抛与主投变体交替出现
+    kayo: {
+      speed: 18, gravity: 2.94, maxFuse: 1.6, bounceFuse: 0.8, telegraph: 0.3, maxBlind: 2.25, restitution: 0.32,
+      alt: { speed: 6.3, fuse: 1, telegraph: 0.3, maxBlind: 2.25 },
+      altChance: 0.4,
+    },
     // Skye Guiding Light：导弹 18m/s 无重力、最长飞行 2s（v7.04）、到时自动起爆（v8.01）；
     // 最大致盲 1→2.25s 随飞行 0.75s 充能（v5.07，v10.00 修复生效）；手动激活后 0.3s 起爆（v3.06）。
     // 敌方操控近似：瞄点实时跟在玩家视线前方 2.2m，急转自然减速 → 到位后绕人盘旋
@@ -236,20 +251,43 @@ export const CONFIG = {
     // 标准闪光衰减曲线 = 现有 blindDuration 模型）。speed 按口径速度反解（29m/s）
     // 接入 ballisticShot 直射解（非按飞行时长反解初速）
     yoru: { speed: 29, gravity: 4.41, maxAir: 2, windup: 0.6, maxBlind: 1.5, restitution: 0.42 },
-    // Breach Flashpoint：Placement 穿墙放置（部署距 35m / 穿墙深 10m，本图墙厚自动满足），
-    // 到位后 0.5s 预备（v1.07）；最大致盲 2.25s（v11.08）
-    breach: { windup: 0.5, maxBlind: 2.25 },
+    // Breach Flashpoint：Placement 穿墙放置——开火后 charge 从 Breach 本体位置以
+    // 2400uu/s=24m/s（v12.00）直线飞向放置点、穿墙到达另一侧，到位即停进入
+    // 0.5s 预备（v1.07）；最大致盲 2.25s（v11.08）
+    breach: { speed: 24, windup: 0.5, maxBlind: 2.25 },
     // Reyna Leer：近视（非白闪）——Missile 穿地形到固定 10m 部署距（0.55s，未确认值），
-    // 到位 0.4s 预备（v5.07）后施加近视 1.6s（看清瞳孔即持续命中，6m 视界，
-    // game files）；100HP 可击毁（维基）。近视附带 Deafened：音频被闷（维基
-    // Status Effect：Nearsight 者同时 deafened——脚步/枪声全糊，只能贴脸听）
-    reyna: { deployDist: 10, travel: 0.55, arrivalWindup: 0.4, nearsight: 1.6, visionRadius: 6, hp: 100, radius: 0.32 },
-    // Gekko Dizzy：Class 2 投掷（同 KAY/O 18m/s、g2.94，speed 按口径速度反解（18m/s）
-    // 接入 ballisticShot 直射解——非按飞行时长反解）——0.65s 激活预备（未确认值）
-    // 后减速悬停，活跃 1s（v9.08）内对 45m 视线内目标 0.35s 锁定（v7.12）喷等离子：
-    // 溅射 2.5m，全屏遮蔽 2s = 1s 满效 + 1s 渐褪（game files；转身不可避——
-    // 只判 LOS 不判朝向）；20HP 可击毁
-    gecko: { speed: 18, gravity: 2.94, activationWindup: 0.65, acquireWindup: 0.35, active: 1, detect: 45, splash: 2.5, blindPotency: 1, blindFade: 1, hp: 20, radius: 0.34 },
+    // 到位 0.4s 预备（v5.07）后施加近视 1.6s（看清瞳孔即持续命中）；60HP 可击毁
+    // （v11.00 100→80、v11.08 80→60，Fandom Leer 数值表——Vandal 40 身体伤害两枪）。
+    // 近视世界空间口径（game files 视界半径）：visionRadius=6m 内清晰、6m 外暗品红
+    // 不透明覆盖（场景雾收束实现，nearFogColor 为雾收束满效色）；转开视线
+    // fadeTime=0.3s 线性褪去、onsetTime=0.12s 线性拉满（表现参数，非官方值）。
+    // 近视附带 Deafened：音频被闷（维基 Status Effect：Nearsight 者同时
+    // deafened——脚步/枪声全糊，只能贴脸听）
+    reyna: {
+      deployDist: 10, travel: 0.55, arrivalWindup: 0.4, nearsight: 1.6, visionRadius: 6,
+      hp: 60, radius: 0.32, fadeTime: 0.3, onsetTime: 0.12, nearFogColor: 0x3c0a46,
+    },
+    // Gekko Dizzy：Class 2 投掷——弹速 v7.12 起 7000→10000 游戏单位/s，按 100uu=1m
+    // 惯例 ≈100m/s（官方未公布 m/s 换算，近似口径注记；README 已知边界）——
+    // "send Dizzy soaring forward"：高速蹿出 ~0.1s 级后急停悬停，重力仍按 Class 2
+    // 0.3×9.8。0.65s 激活预备（未确认值）后进入活跃窗：活跃 1s（v9.08）内对 45m
+    // 视线内目标 0.35s 锁定（v7.12）喷等离子——等离子弹体以 plasmaSpeed 飞向玩家、
+    // 命中瞬间才溅射糊屏（弹速未确认值，取 ~0.2s 级可读来袭）；溅射半径 2.5m
+    // （game files Plasma explosion radius），全屏遮蔽 2s = 1s 满效 + 1s 渐褪
+    // （转身不可避——只判 LOS 不判朝向）；20HP 可击毁。
+    // glowLead：充能发光相对激活点的起亮提前量（表现参数）——tele 分母 =
+    // activationWindup - glowLead，发光峰值恰在 0.65s 悬停/锁定起点收满。
+    // plasmaEdgeStart/plasmaEdgeCurve/plasmaAlphaHold：糊屏边缘可见圈曲线（表现
+    // 参数，官方无资料）——满效时中央浆块半径占屏 plasmaEdgeStart，渐褪期按
+    // edgeStart·(1-k^curve) 从边缘向内收缩，alpha 在前 alphaHold 段保持不透明
+    gecko: {
+      speed: 100, gravity: 2.94, activationWindup: 0.65, acquireWindup: 0.35, active: 1,
+      detect: 45, splash: 2.5, plasmaSpeed: 40, glowLead: 0.2,
+      plasmaEdgeStart: 0.82, plasmaEdgeCurve: 1.15, plasmaAlphaHold: 0.55,
+      globuleLife: 20, // 活跃窗耗尽后休眠 Globule 残躯存世（v12.03 起，Fandom Passive_Effects）；
+                       // 回收/续用机制（1.5s INTERACT、20s restock）超出单人对枪场景不实现
+      blindPotency: 1, blindFade: 1, hp: 20, radius: 0.34,
+    },
   },
 
   graphics: {

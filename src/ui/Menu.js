@@ -111,6 +111,7 @@ export class Menu {
       delayMax: CONFIG.training.peekDelayMaxMs,
       speedMult: 1.0,
       crouchWalkSpeed: 2.7,
+      botDistance: CONFIG.training.botDistance, // Bot 距离（m）：出生架枪位到出场横移线的绝对距离，9-18 可调
       volume: 0.7,
       showFps: true,
       shadows: CONFIG.graphics.shadows,
@@ -141,6 +142,7 @@ export class Menu {
       sens: [0.05, 1.5], roundSeconds: [0, 180], delayMin: [200, 2000],
       delayMax: [500, 5000], speedMult: [0.4, 1.3],
       crouchWalkSpeed: [1.4, 2.7],
+      botDistance: [9, 18], // Bot 距离（m）：越界回 DEF（防手改 localStorage 贴/穿走廊墙）
       volume: [0, 1], resScale: [0.5, 2],
     }
     const DEF = {
@@ -148,6 +150,7 @@ export class Menu {
       delayMin: CONFIG.training.peekDelayMinMs, delayMax: CONFIG.training.peekDelayMaxMs,
       speedMult: 1, volume: 0.7, resScale: 1,
       crouchWalkSpeed: 2.7,
+      botDistance: CONFIG.training.botDistance, // 非有限数回退 CONFIG 单一事实源（同 delayMin 款式）
     }
     for (const [k, [min, max]] of Object.entries(NUM)) {
       const v = Number(c[k])
@@ -232,6 +235,7 @@ export class Menu {
         <div class="slider-row"><label>Bot 出现最大延迟</label><input type="range" data-key="delayMax" min="500" max="5000" step="100"><span class="val"></span></div>
         <div class="slider-row"><label>Bot 横移速度</label><input type="range" data-key="speedMult" min="0.4" max="1.3" step="0.05"><span class="val"></span></div>
         <div class="slider-row"><label>蹲走拉出速度</label><input type="range" data-key="crouchWalkSpeed" min="1.4" max="2.7" step="0.1"><span class="val"></span></div>
+        <div class="slider-row"><label>Bot 距离</label><input type="range" data-key="botDistance" min="9" max="18" step="0.5"><span class="val"></span></div>
         <div class="slider-row"><label>音量</label><input type="range" data-key="volume" min="0" max="1" step="0.05"><span class="val"></span></div>
       </div>
       <div class="opt-grid" data-group="gapSide"></div>
@@ -486,6 +490,7 @@ export class Menu {
         delayMax: v => v + 'ms',
         speedMult: v => Math.round(v * 100) + '%',
         crouchWalkSpeed: v => v.toFixed(1) + 'm/s',
+        botDistance: v => v + ' m',
         volume: v => Math.round(v * 100) + '%',
         resScale: v => Math.round(v * 100) + '%',
       }[key] ?? (v => v)

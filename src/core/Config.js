@@ -190,6 +190,13 @@ export const CONFIG = {
     peekDelayMinMs: 400,    // 架枪模式：Bot 出现前的随机等待下限（两段式掷法见 BotManager）
     peekDelayMaxMs: 1400,   // 上限：单次最长也就 ~1.4s，不干等
     peekSide: 'left',       // Bot 出场侧：left / right 固定一侧练同向预瞄，random 保留两侧随机
+    // Bot 距离（m）：玩家出生架枪位到 Bot 出场横移线的绝对距离（z = spawn.z − 值，
+    // 走廊内钳 [−35.2,−25.2]）——绝对米数自解释，不用倍率（旧 13m 是 peekLineZ −30
+    // 与 spawn −17 的推导值，无具名常量，倍率语义会随任一常量被改而漂移）。
+    // 旧固定 13m 用户嫌近 → 默认 16（+3m/+23%：目标角尺寸更小、更难打准）；
+    // 可行域 9-18 由走廊几何决定（近端=门墙远面 −24.8 后 1.2m 起，远端 z=−35 距通道
+    // 后墙内面 −35.6 前 0.6m）；≤18m 不触发任何武器 falloff（Phantom 20m / 其余 30m 起）
+    botDistance: 16,
     weaponSkin: 'default',  // Vandal 皮肤：default / aristocrat（官方商城 Aristocrat 收藏集，镀金）
     crouchWalkChance: 0.2,  // pull 波掷定蹲走拉出的概率（官方蹲走循环，命中区经骨锚跟随蹲姿）
     crouchWalkSpeed: 2.7,   // 蹲走拉出移速（m/s）：本体口径 = 50% 跑速；播放松条可调

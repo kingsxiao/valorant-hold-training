@@ -217,6 +217,9 @@ menu.applyAll = () => {
   bots.params.delayMax = Math.max(cfg.delayMin, cfg.delayMax)
   bots.params.speedMult = cfg.speedMult
   bots.params.crouchWalkSpeed = cfg.crouchWalkSpeed
+  // Bot 距离（m）：出生架枪位到出场横移线的距离（place 时换算 z）。
+  // 只影响之后排程的波次——本波在场的不瞬移，跑完当前横移线
+  bots.params.botDistance = cfg.botDistance
   bots.params.roundSeconds = cfg.roundSeconds
   bots.params.rampUp = !!cfg.rampUp
   // Bot 出场侧：left/right 固定一侧（同向预瞄训练）/ random 两侧随机（读局）。

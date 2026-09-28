@@ -261,3 +261,9 @@ describe('蹲走拉出 crouchWalkChance', () => {
     expect(CONFIG.training.crouchWalkChance).toBe(0.2)
   })
 })
+
+describe('Bot 距离 botDistance', () => {
+  it('默认 16 m（旧固定 13 m 用户嫌近 → +3m；9-18 可调，≤18m 不触发任何武器 falloff）', () => {
+    expect(CONFIG.training.botDistance).toBe(16)
+  })
+})

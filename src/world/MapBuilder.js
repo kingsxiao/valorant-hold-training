@@ -6,13 +6,16 @@ import { Tex, pbr } from './Textures.js'
 //   主厅 x∈[-16,16], z∈[6,-46]；四面 6m 围墙（灰泥墙身 + 石砌墙基 + 檐口）
 //   - A 点（玩家区 z>-24）：站点院落——下包区标线 + 地面 A 字 + 错位箱阵掩体
 //   - A 门（z=-24 横墙，厚 1.6m）：唯一缺口（左/右由设置选），铆钉钢门套 + 门楣
-//     压顶 + 警示条纹 + 壁灯——"一扇门"而不是"墙上的洞"；Bot 在墙后 z=-30 横向拉出
+//     压顶 + 警示条纹 + 壁灯——"一扇门"而不是"墙上的洞"；Bot 在墙后横移拉出
+//     （横移线深度 = 菜单「Bot 距离」botDistance，见 entities/BotManager.js _peekZ）
 //   - Main 通道（z -36..-24）：门后纵深——壁柱节奏 + 站点定位牌 + 按 side 摆放的
 //     通道箱（严格避开 Bot 行走带），透过门看到有掩体的真实空间
 //   - 远景屋顶天际线（z<-40，玩家不可达）：陶瓦/灰泥体块 + 檐口，走近门口时
 //     从 4m 横墙上方渐次露出"城镇"轮廓
 // 训练不变量（锁死，任何视觉重构不得触碰）：gaps[0] 坐标、横墙 z=-24、
-// peekLineZ=-30、spawn（缺口正前方）、rebuild(side) 左右镜像
+// bot 横移线 z = spawn.z − CONFIG.training.botDistance（菜单 9-18 实时可调；
+// 走廊硬域钳 [−35.2,−25.2]，消费方 BotManager._peekZ）、spawn（缺口正前方）、
+// rebuild(side) 左右镜像
 export class MapBuilder {
   // side: 'left' 缺口 x∈[-9,-6] / 'right' 缺口 x∈[3,7]（左右位置镜像等距，视线调校一致）
   constructor(world, scene, side = 'left') {
@@ -142,8 +145,8 @@ export class MapBuilder {
     // 门洞上方封顶砌体（y3.4..4.0 满墙厚）：门楣钢梁只凸在门脸，梁后到墙顶
     // 必须是实墙——否则门顶留 0.6m 镂空缝，透视一穿帮（首轮像素采样抓到）
     box(geos.wall, gapCx, 3.4, -24, gapW, 0.6, 1.6)
-    // 门套侧框（凸出玩家侧面 0.35：缺口净宽 x0..x1 不变——Bot 在 z=-30 横移，
-    // 门套在其行走带之外；净空几何与旧版完全一致）
+    // 门套侧框（凸出玩家侧面 0.35：缺口净宽 x0..x1 不变——Bot 在墙后横移（深度随
+    // 「Bot 距离」选项，9-18m 全程在此行走带之外）；净空几何与旧版完全一致）
     box(geos.doorMetal, gap.x0 - 0.225, 0, doorFace + 0.175, 0.45, 3.4, 0.35)
     box(geos.doorMetal, gap.x1 + 0.225, 0, doorFace + 0.175, 0.45, 3.4, 0.35)
     // 门楣横梁（压顶：缺口上方 y3.4..3.9 的钢梁，门洞净高 3.4m）
@@ -156,8 +159,8 @@ export class MapBuilder {
       box(geos.lamp, sx, 2.4, doorFace + 0.14, 0.12, 0.24, 0.04, false)
     }
     this.gaps = [gap]
-    // Bot 横移线（墙后 6m 处——训练不变量）
-    this.peekLineZ = -30
+    // Bot 横移线深度不再由地图提供（旧 peekLineZ=-30 已删）：z = spawn.z −
+    // CONFIG.training.botDistance，由 BotManager._peekZ 换算并钳走廊硬域
 
     // ===== 2. Main 通道（z -36..-24）：门后纵深 =====
     box(geos.wall, -16.5, 0, -30, 1, 4, 13) // 两侧封口

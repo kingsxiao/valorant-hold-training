@@ -11,6 +11,16 @@ export const MODE_INFO = { label: '架枪对枪' }
 
 const rand = (a, b) => a + Math.random() * (b - a)
 
+// Bot 出场横移线的走廊硬域（「Bot 距离」选项的运行时钳位，几何出处 MapBuilder）：
+//   门墙远面 −24.8（MapBuilder.js:138-141 门墙 box z=-24、厚 1.6 → z∈[-24.8,-23.2]）
+//   通道后墙内面 −35.6（MapBuilder.js:173 后墙 box z=-36、厚 0.8）→ 各留 0.4m 模型
+//   余量取 [−35.2, −25.2]。越界会贴/穿墙或被 4m 后墙挡断 LOS → firstVisibleAt 恒 -1
+//   （反应/漏杀统计门槛见 finishWave 内 duelsLost 计数）——菜单滑杆已限 9-18，
+//   此处硬钳兜底 params 被其它代码路径污染的极端情况（双层钳位缺一不可）
+const DOOR_WALL_FAR_Z = -24.8
+const PEEK_Z_MIN = -35.2
+const PEEK_Z_MAX = -25.2
+
 // 池调度纯逻辑：池未满 → null（新建，每只 Bot 构造时随机抽一名英雄，cap 只
 // 覆盖全英雄池）；池满 → 优先从休眠 Bot 中随机挑一只复用（出场英雄波次轮换）；
 // 休眠全无但有尸体（本体击杀表现：尸体整局留存）→ 回收最老的一具顶替出场，
@@ -25,7 +35,9 @@ export function pickIdleBot(idle, corpses = [], poolSize, cap, random = Math.ran
 
 // 双拉第二人波次规格：整条横移线路沿行进方向平移 off（起点/折返/终点/jiggle
 // 折返点一起搬），速度与风格全同 → 两人在场上锁步跟随、路径平行永不交叉穿模。
-// 展开成新对象（不共享引用）：pull 的 phase/exitX 会被各自波次原地改写
+// 展开成新对象（不共享引用）：pull 的 phase/exitX 会被各自波次原地改写。
+// 注意：cross 双拉的终点在 _stepSlot 回贴主 Bot 终点——纯平移会把终点推进
+// 可见楔形（藏点外扩同源约束，见 _hideOff），本函数只做机械平移、不带几何知识
 export function shiftPeek(pk, off) {
   const s = { ...pk, startX: pk.startX + off }
   if (pk.style === 'cross') s.endX = pk.endX + off
@@ -47,6 +59,7 @@ export class BotManager {
       delayMax: CONFIG.training.peekDelayMaxMs,
       speedMult: 1.0,
       crouchWalkSpeed: CONFIG.training.crouchWalkSpeed, // 蹲走拉出移速：单一事实源在 CONFIG（菜单 applyAll 会覆盖，初始局也取同源值防漂移）
+      botDistance: CONFIG.training.botDistance, // Bot 距离（m）：单一事实源在 CONFIG（菜单 applyAll 会覆盖，同源初值防漂移）
       roundSeconds: CONFIG.training.roundSeconds,
       rampUp: false, // 渐进难度：随击杀数缩短延迟/提升横移速度
       peekSide: CONFIG.training.peekSide, // Bot 出场侧：left/right 固定一侧，random 两侧随机
@@ -155,6 +168,26 @@ export class BotManager {
     ] }
   }
 
+  // Bot 出场横移线 z：spawn.z − botDistance（菜单 9-18 实时可调的绝对米数），
+  // 再钳走廊硬域（双层钳位的运行时层——防 params 被其它代码路径污染后越界贴墙）
+  _peekZ() {
+    const d = this.params.botDistance ?? CONFIG.training.botDistance
+    return Math.min(PEEK_Z_MAX, Math.max(PEEK_Z_MIN, this.map.spawn.z - d))
+  }
+
+  // 藏点最小外扩（米）：Bot 出生/消失位置必须落在「可见楔形」之外并留 0.5m 余量
+  // ——玩家透过缺口看到的楔形在深度 D（spawn.z − 横移线 z）处的横向投影半宽 =
+  // hw·D/toWall（toWall = spawn.z − 门墙远面 = 7.8），藏点在楔形内会 firstVisibleAt
+  // 在藏点触发（样本污染）、pull「拉出」失去语义。13m 下左右口均 ≤2.2（旧固定
+  // 常量原值保留），距离拉远才外扩（16m 右宽口 2.603 / 18m 3.115）。0.5m 余量是
+  // 设计选择，勿随手改小
+  _hideOff(gap, z) {
+    const hw = (gap.x1 - gap.x0) / 2
+    const D = this.map.spawn.z - z
+    const toWall = this.map.spawn.z - DOOR_WALL_FAR_Z
+    return Math.max(2.2, hw * (D - toWall) / toWall + 0.5)
+  }
+
   _stepHold(dt) {
     if (this.now() < this.countdownUntil) return // 倒计时内不出人
     const h = this.hold ??= this._initHold()
@@ -185,6 +218,8 @@ export class BotManager {
     if (!activeBot && nowMs >= slot.nextAt) {
       const gap = this.map.gaps[0]
       const b = this._bot()
+      const z = this._peekZ()   // 出场横移线 z：随「Bot 距离」选项（本波排程时定格）
+      const hide = this._hideOff(gap, z) // 藏点最小外扩：可见楔形外 0.5m（随距离联动）
       // 出场侧可设置：固定左/右练同向预瞄，random 保留两侧随机的读局训练
       const fromLeft = this.params.peekSide === 'random'
         ? Math.random() > 0.5
@@ -200,15 +235,17 @@ export class BotManager {
         : Math.random() < CONFIG.training.crossChance
       let startX
       if (cross) {
-        startX = fromLeft ? gap.x0 - 2.2 : gap.x1 + 2.2
-        const endX = fromLeft ? gap.x1 + 2.2 : gap.x0 - 2.2
+        // 贯穿两端都取藏点外扩（楔形外 0.5m）：距离拉远后固定 2.2 会把起/终点
+        // 留在楔形内（16m 右宽口缺口 −0.400）——「消失位置在墙后」不保
+        startX = fromLeft ? gap.x0 - hide : gap.x1 + hide
+        const endX = fromLeft ? gap.x1 + hide : gap.x0 - hide
         b.peek = { style: 'cross', startX, endX, dir: Math.sign(endX - startX) }
       } else {
         // 正面横向走出（pull）：从墙后藏点起步，面向玩家持枪横移拉出——胸口
         // 正对玩家（peekFacingYaw pull = 面向玩家），不停顿：拉到折返点即缩回
         const dir = fromLeft ? 1 : -1                       // 朝缺口内的拉出方向
         const edge = fromLeft ? gap.x0 : gap.x1             // 从这一侧的墙后拉出
-        startX = edge - dir * rand(1.8, 2.4)                // 藏在墙后一点（留出加速距离）
+        startX = edge - dir * Math.max(rand(1.8, 2.4), hide) // 藏在墙后一点（留出加速距离；楔形外扩为下限）
         const turnX = (gap.x0 + gap.x1) / 2 - dir * rand(0, 0.9) // 折返点：窗口内、略偏拉出侧
         // 一部分拉出波是"露头即缩"jiggle-peek：拉到中段（已可见）立即折返，逼玩家守准星
         const jiggleAt = Math.random() < CONFIG.training.pullJiggleChance
@@ -221,7 +258,7 @@ export class BotManager {
           // 命中区经骨锚跟随蹲姿
           crouchWalk: !jiggleAt && !!b.anim?.crouchWalk && Math.random() < CONFIG.training.crouchWalkChance }
       }
-      b.place(startX, this.map.peekLineZ, 'peek')
+      b.place(startX, z, 'peek')
       b.slot = slot
       slot.bot = b
       slot.nextAt = 0
@@ -234,7 +271,13 @@ export class BotManager {
       if (partner && !partner.bot?.active && Math.random() < CONFIG.training.doublePeekChance) {
         const b2 = this._bot()
         b2.peek = shiftPeek(b.peek, -b.peek.dir * CONFIG.training.doublePeekLane)
-        b2.place(b2.peek.startX, this.map.peekLineZ, 'peek')
+        // cross 双拉终点回贴主 Bot 终点：可见楔形不变量要求波次两端都在楔形外，
+        // 沿行进方向平移 −0.9 会把副 Bot 终点推进楔形（16m 下余量 −0.400：hide 时
+        // 「离墙 0.4m 凭空消失」；13m 现状右口也已 −0.033 贴边）。副与主同 dir 同
+        // 风格，终点共享、副多走 0.9m（≈0.17s）后在楔形外消失——移动中可见是
+        // cross 贯穿语义本身。pull 副位整条线沿 −dir 更深入藏侧，天然楔形外，不改
+        if (cross) b2.peek.endX = b.peek.endX
+        b2.place(b2.peek.startX, z, 'peek')
         b2.slot = partner
         partner.bot = b2
       }

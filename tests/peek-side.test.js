@@ -7,15 +7,20 @@ import { BotManager } from '../src/entities/BotManager.js'
 const GAP = { x0: -9, x1: -6 }
 
 // 跑一次"已到期的波次排程"拿出场 Bot：stub Math.random 控制风格抽签
-// （< crossChance=0.5 → cross 跑过；否则 pull 拉出）与 random 侧抽签
+// （< crossChance=0.5 → cross 跑过；否则 pull 拉出）与 random 侧抽签。
+// botDistance: 13 = 旧固定口径（hide=max(2.2, 1.5)=2.2）：cross 与旧固定 2.2 完全
+// 等价；pull 偏移窗 [1.8,2.2) 段会被 floor 抬到 2.2（分布变化，bot-distance.test.js
+// (d) 有锁）——本文件既有断言用 rand=0.99→2.394 落在窗上段不受影响，原样成立
+// = 旧口径回归保护；横移线 z 换算见 bot-distance.test.js
 function spawnOnce(peekSide, randVal) {
   const bot = { peek: null, slot: null, place(x, z, mode) { this.placed = { x, z, mode } } }
-  const mgr = {
-    now: () => 0,
-    params: { peekSide },
-    map: { gaps: [GAP], peekLineZ: -23 },
-    _bot: () => bot,
-  }
+  // 必须走原型链（peek-delay.test.js 同款纪律）：_stepSlot 现调 this._peekZ()/
+  // this._hideOff()（横移线 z 换算/藏点外扩是原型方法），字面量对象链上找不到
+  const mgr = Object.create(BotManager.prototype)
+  mgr.now = () => 0
+  mgr.params = { peekSide, botDistance: 13 }
+  mgr.map = { gaps: [GAP], spawn: { z: -17 } }
+  mgr._bot = () => bot
   const slot = { nextAt: -1, bot: null } // 已排程且到期 → 立即出人
   const orig = Math.random
   Math.random = () => randVal

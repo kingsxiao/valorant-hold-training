@@ -39,8 +39,8 @@ function spawnWave(queue) {
   const bots = []
   const mgr = Object.create(BotManager.prototype)
   mgr.now = () => 0
-  mgr.params = { peekSide: 'left' }
-  mgr.map = { gaps: [GAP], peekLineZ: -23 }
+  mgr.params = { peekSide: 'left', botDistance: 13 }
+  mgr.map = { gaps: [GAP], spawn: { z: -17 } }
   mgr._bot = () => {
     // anim.crouchWalk 在场：蹲走掷骰照常消耗随机数（F8 起无官方蹲走 clip 的
     // 模型不掷、不消耗——本桩模型蹲走 clip 齐备）
@@ -61,7 +61,7 @@ function spawnWave(queue) {
 }
 
 describe('BotManager 双拉波', () => {
-  it('cross 掷中双拉：第二人同帧出场，线路后退一个身位（startX = x0-2.2-LANE）', () => {
+  it('cross 掷中双拉：第二人同帧出场，起点后退一个身位、终点回贴主 Bot（楔形不变量）', () => {
     const { bots, partner } = spawnWave([0, 0]) // 风格 0→cross / 双拉 0<0.18 → 掷中
     expect(bots.length).toBe(2)
     const [, b2] = bots
@@ -70,7 +70,9 @@ describe('BotManager 双拉波', () => {
     expect(b2.peek.style).toBe('cross')
     expect(b2.peek.dir).toBe(1)
     expect(b2.peek.startX).toBeCloseTo(GAP.x0 - 2.2 - LANE, 6)
-    expect(b2.peek.endX).toBeCloseTo(GAP.x1 + 2.2 - LANE, 6)
+    // 终点共享主 Bot 终点（不随 −LANE 平移）：纯平移会把副端点推进可见楔形
+    // （_hideOff 同源约束）——「消失位置在墙后」的回归锁
+    expect(b2.peek.endX).toBeCloseTo(GAP.x1 + 2.2, 6)
     expect(b2.placed.x).toBeCloseTo(GAP.x0 - 2.2 - LANE, 6) // place 用平移后的起点
   })
 

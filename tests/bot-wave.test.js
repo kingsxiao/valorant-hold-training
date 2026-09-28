@@ -31,7 +31,7 @@ function mgrStub() {
   const mgr = Object.create(BotManager.prototype)
   mgr.now = () => 0
   mgr.params = { peekSide: 'left', speedMult: 1.0, rampUp: false, delayMin: 400, delayMax: 1400 }
-  mgr.map = { gaps: [GAP], peekLineZ: -30 }
+  mgr.map = { gaps: [GAP], spawn: { z: -17 } }
   mgr.stats = BotManager.prototype._freshStats.call(mgr)
   mgr._bot = () => waveBot()
   return mgr
@@ -168,8 +168,8 @@ describe('BotManager pull 掷定几何不变量', () => {
     const b = { peek: null, slot: null, place() {} } // 无 anim：蹲走掷骰短路
     const mgr = Object.create(BotManager.prototype)
     mgr.now = () => 0
-    mgr.params = { peekSide }
-    mgr.map = { gaps: [GAP], peekLineZ: -30 }
+    mgr.params = { peekSide, botDistance: 13 }
+    mgr.map = { gaps: [GAP], spawn: { z: -17 } }
     mgr._bot = () => b
     const slot = { nextAt: -1, bot: null, lastStyles: [] }
     mgr.hold = { slots: [slot, { nextAt: Infinity, bot: null, partner: true }] }

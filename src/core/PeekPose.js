@@ -35,42 +35,49 @@ export function strafeRampW({ style, speed, minSpeed = 0.25, rampSpeed = 1.15 })
   return Math.min(1, Math.max(0, (speed - minSpeed) / (rampSpeed - minSpeed)))
 }
 
-// 程序化侧移步态的姿态量 —— 官方口径（assets-raw/sova-psa Q_Bow_RunE/WalkE 实测）：
-// 横移循环 = 腿链交叉朝向后跑「前进跑循环」——左右腿反相（一屈一伸交替）。
-// 膝曲线用官方 WalkE/RunE 双锚点按速度插值：走速以下全程 WalkE 深膝（起步拉出
-// 不再被 k=speed/5.4 缩成浅膝碎步——官方走速横移本身就是 88.7° 峰值的大幅深膝），
-// 走→跑速之间线性过渡，5.4 及以上 = 既有 RunE 验收口径不变：
-//   WalkE 膝 基础 28.1°/峰值 88.7°（摆动幅 60.6°）→ base 0.49 / swing 1.06 rad
-//   RunE  膝 基础 11.5°/峰值 ~106°            → base 0.20 / swing = GAIT.run.knee
-// 髋摆同插值（走 ~42° 全幅 → 跑 0.82rad）；躯干/盆骨不扭（正对瞄准方向），盆骨
-// 侧倾随步态。相位由里程推进（每步 π，调用侧保证横移步距口径，见 Bot.STRAFE_STEP_LEN）
-// ⚠ 腿链 yaw 为反向交叉（D11，官方 Q_Bow_RunE 腿链实测 L∈[−118°,−57°]/
-//   R∈[+44°,+103°]，幅值 ~±90°——双腿各自绕 Y 反号交叉，非旧版双腿同向
-//   ±(45~58°)）；abductL/abductR 保持官方幅值口径（正负号随官方 RunE 髋 Z
-//   分量，消费端 Bot._applyLegPose 的 Z 轴镜像取反不在本函数——与 PeekPose
-//   单测锁值解耦）
-const STRAFE_WALKE = { thigh: 0.70, base: 0.49, swing: 1.06 }
+// 程序化侧移步态的姿态量 —— 官方口径（TP_Core RunE/W 真方向性循环实测，
+// python3 assets-raw/psa_analyze.py assets-raw/core-psa/TP_Core_Run{E,W}_LB.psa）：
+// 横移无交叉步——前腿沿运动方向跨、后腿蹬伸，大腿前后剪方向性不对称：
+//   RunE（局部左移）大腿 L ∈ [−71°, +4.3°]  → 幅 0.657rad、后蹬偏置 −0.582
+//   RunW（局部右移）大腿 L ∈ [+5.5°, +55.8°] → 幅 0.439rad、前跨偏置 +0.535
+// 髋外展同向不对称：RunE [−27.6°, +20°] / RunW [−9.1°, +37.2°] → 幅 0.41 +
+// 方向偏置 ±0.155（两侧实测均值）。R 腿 = L 的反相镜像（循环节奏不变）。
+// ⚠ 旧版「对称正弦 thigh 0.70~0.82 + 反向交叉 yaw」（sova-psa Q_Bow_RunE 旧口径）
+//   无方向性前后剪，横移跑姿读作原地开合（审计缺陷 #6）；yaw 脚尖朝向机制
+//   保留（新数据提取未含腿链 yaw 区间）。膝曲线官方 WalkE/RunE 双锚点按速度
+//   插值保留：走速以下全程 WalkE 深膝（起步拉出不再浅膝碎步——官方走速横移
+//   本身就是 88.7° 峰值大幅深膝）：
+//   WalkE 膝 基础 28.1°/峰值 88.7° → base 0.49 / swing 1.06 rad
+//   RunE  膝 基础 11.5°/峰值 ~106° → base 0.20 / swing = GAIT.run.knee
+// 相位由里程推进（每步 π，调用侧保证横移步距口径，见 Bot.STRAFE_STEP_LEN）；
+// abduct 消费端 Bot._applyLegPose 的 Z 轴镜像取反不在本函数——与单测锁值解耦
+const STRAFE_WALKE = { base: 0.49, swing: 1.06 }
 export function strafeStepPose({ speed, phase, lateralVel, moveSpeed = 5.4 }) {
   const t = Math.min(1, Math.max(0, (speed - 3.39) / (moveSpeed - 3.39)))
-  const thigh = STRAFE_WALKE.thigh + (GAIT.run.thigh - STRAFE_WALKE.thigh) * t
   const base = STRAFE_WALKE.base + (0.20 - STRAFE_WALKE.base) * t
   const swing = STRAFE_WALKE.swing + (GAIT.run.knee - STRAFE_WALKE.swing) * t
   const sgn = -Math.sign(lateralVel || 1) // 模型右 +X：向右移交叉朝向整体换侧
-  const leg = (p) => ({
-    thigh: thigh * Math.sin(p),
+  const dir = -sgn // 运动方向（+1 = 局部右移 = W 族）
+  // 方向性前后剪（L 腿实测、R 反相镜像）：幅 0.548±0.109 随向、偏置 ∓0.56——
+  // 前腿沿运动方向跨（W 的 L 前跨 +0.535、E 的 L 后蹬 −0.582）
+  const thighAmp = 0.548 + (sgn > 0 ? 0.109 : -0.109)
+  const thighBias = -sgn * 0.56
+  const leg = (p, b) => ({
+    thigh: thighAmp * Math.sin(p) + b,
     knee: base + swing * Math.max(0, -Math.sin(p - 0.5)),
   })
-  const L = leg(phase)
-  const R = leg(phase + Math.PI)
+  const L = leg(phase, thighBias)
+  const R = leg(phase + Math.PI, -thighBias)
   const yawOsc = Math.cos(phase) * 0.12
+  const ab = Math.cos(phase) * 0.41 * (0.75 + 0.25 * t)
   return {
     s: Math.cos(phase),
     yawL: sgn * 0.90 + yawOsc,
     yawR: -sgn * 0.90 + yawOsc,
     thighL: L.thigh, thighR: R.thigh,
     kneeL: L.knee, kneeR: R.knee,
-    abductL: Math.cos(phase) * -0.12 * (0.75 + 0.25 * t),
-    abductR: Math.cos(phase) * 0.12 * (0.75 + 0.25 * t),
+    abductL: -ab + dir * 0.155,
+    abductR: ab + dir * 0.155,
     bob: (1 - Math.abs(Math.cos(phase))) * (0.01 + speed * 0.0036),
     lean: leanInto(lateralVel),
   }

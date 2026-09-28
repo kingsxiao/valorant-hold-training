@@ -17,9 +17,18 @@ await page.waitForTimeout(1000)
 
 const out = await page.evaluate(async () => {
   const g = window.__game
+  // 英雄偏好（审计 #4）：池随机英雄的骨段长/锚-髋几何逐英雄一致（四英雄同骨架，
+  // 离线 FK 实测 reach 全等 1.0621），英雄级方差次要。⚠ 上轮 `find(sova)` 硬钉定
+  // 是探针不可用根因之一：池固定，掷不出 sova 就 80s 空转 + {err:'no bot'}——改为
+  // 优先 sova、缺失立即回退第一只官方 bot，实际英雄写入每行输出供跨轮比对
   let b = null
-  for (let i = 0; i < 400 && !b; i++) { b = (g.bots.bots ?? []).find(x => x._officialLo); if (!b) await new Promise(r => setTimeout(r, 200)) }
+  for (let i = 0; i < 400 && !b; i++) {
+    const pool = (g.bots.bots ?? []).filter(x => x._officialLo)
+    b = pool.find(x => x.heroKey === 'sova') ?? pool[0] ?? null
+    if (!b) await new Promise(r => setTimeout(r, 200))
+  }
   if (!b) return { err: 'no bot' }
+  const HERO = b.heroKey ?? 'unknown'
   g.bots.roundEndAt = 0; g.bots.countdownUntil = 0
   if (g.bots.hold) for (const s of g.bots.hold.slots) { s.nextAt = 1e18; s.bot = null }
   for (const x of g.bots.bots) if (x !== b && x.active) x.hide()
@@ -27,21 +36,28 @@ const out = await page.evaluate(async () => {
   // 玩家侧放远点，pull 朝向稳定为正对（yaw 恒定不穿越）
   const px = g.player.pos.x, pz = g.player.pos.z
 
-  const run = (tag, { style, vx, sec = 3, crouchWalk = false }) => {
-    // 垂直几何：bot 与玩家同 x（正前方），运动 ±x = 纯横移（真实 peek 波几何；
-    // 斜摆会让横移锚只能抵消横向分量，测出假滑步——162 轮起 cross 也面向玩家，
-    // 同样受此几何约束）
+  // vx 默认 0：N 场景只传 vz（vz 驱动、横移分量为 0）——undefined 会经
+  // groundStep(·, undefined, …) 的 st·max(|undefined|=NaN, …) = 0·NaN 在首 tick
+  // 把 velX/pos.x 打成 NaN（锚权→0、脚矩阵→NaN、支撑相样本=0，med.toFixed 崩）
+  const run = (tag, { style, vx = 0, vz = 0, sec = 3, crouchWalk = false }) => {
+    // 垂直几何：bot 与玩家同 x（正前方）。横移场景运动 ±x = 纯横移（真实 peek
+    // 波几何；斜摆会让横移锚只能抵消横向分量，测出假滑步——162 轮起 cross 也
+    // 面向玩家，同样受此几何约束）。N 场景（vz≠0）运动沿 ±z = 纯前后（审计
+    // #4：style='cross' 会拉起 _strafeW 播 E/W 横移 clip，runN/walkN 官方 N 族
+    // 从未被活体测量——N 场景改用非横移 style（strafeRampW 对未知 style 返 0
+    // → N 族权重）+ vz 驱动，运动轴与锚扫轴（mesh z=−psa x）对齐后锚世界静止）
     b.place(px, pz - 6, 'peek')
-    b.peek = { style, dir: Math.sign(vx), phase: 'out', startX: b.pos.x,
-      endX: b.pos.x + Math.sign(vx) * 60, stopAt: 1, stopped: false, stopUntil: 0,
+    b.peek = { style, dir: Math.sign(vx || vz), phase: 'out', startX: b.pos.x,
+      endX: b.pos.x + Math.sign(vx || vz) * 60, stopAt: 1, stopped: false, stopUntil: 0,
       holdX: b.pos.x, resolved: true, jiggleAt: 0, crouchWalk, jumpPlanned: false, jumped: false }
     b._reachClampN = 0 // D2 钳制触发率探针：逐场景清零
+    b._pinDbg = null // 钉地状态机诊断（下一 tick 重建计数）：逐场景清零
     const warm = Math.round(1.2 / dt)
-    for (let i = 0; i < warm; i++) { b.moveToward(vx, dt); g.bots.step(dt, 1) }
+    for (let i = 0; i < warm; i++) { b.moveToward(vx, dt, vz); g.bots.step(dt, 1) }
     const rows = []
     const N = Math.round(sec / dt)
     for (let i = 0; i < N; i++) {
-      b.moveToward(vx, dt)
+      b.moveToward(vx, dt, vz)
       g.bots.step(dt, 1)
       b.mesh.rotation.y = 0; g.bots.step(0, 1) // 锁正对：纯垂直横移几何（玩家在 +z，GLB 正面 +Z ⇒ 正对 yaw=0（164 轮）；远离玩家后朝向 lerp 会把横移扭成斜向，测出假滑步）
       b.mesh.updateMatrixWorld(true)
@@ -49,28 +65,34 @@ const out = await page.evaluate(async () => {
       for (const leg of b._strafeRig.legs) {
         leg.foot.updateWorldMatrix(true, false)
         const e = leg.foot.matrixWorld.elements
-        row[leg.side] = { x: e[12], y: e[13] }
+        row[leg.side] = { x: e[12], y: e[13], z: e[14] }
       }
       rows.push(row)
     }
-    // 支撑脚滑速：低脚（y<0.14）沿 x 的速度 − 体速
+    // 支撑脚滑速：低脚（y<0.14）沿运动轴的速度 − 体速
+    const axis = vz !== 0 ? 'z' : 'x'
     const slides = []
     for (let i = 1; i < rows.length; i++) {
       for (const s of ['L', 'R']) {
         if (rows[i][s].y < 0.14 && rows[i - 1][s].y < 0.14) { // 官方触地平台 0.123-0.125；0.21 会把摆动脚过地带帧算进来
-          slides.push(Math.abs((rows[i][s].x - rows[i - 1][s].x) / dt)) // 支撑脚自身世界速度：0=完美钉住
+          slides.push(Math.abs((rows[i][s][axis] - rows[i - 1][s][axis]) / dt)) // 支撑脚自身世界速度：0=完美钉住
         }
       }
     }
     slides.sort((a, c) => a - c)
     const trim = slides.slice(Math.floor(slides.length * 0.1), Math.floor(slides.length * 0.9))
-    const mean = trim.reduce((a, v) => a + v, 0) / trim.length
-    const med = trim[Math.floor(trim.length / 2)]
+    // 空样本防护：双脚全程离地（异常态）时 trim 空 → NaN.toFixed 输出 null 废门，
+    // 保险回 0 并以 stanceFrames=0 显形
+    const mean = trim.length ? trim.reduce((a, v) => a + v, 0) / trim.length : 0
+    const med = trim.length ? trim[Math.floor(trim.length / 2)] : 0
     // D2 硬判停②的分量（近似口径，与审计探针同族）：
     //  bothAir  = 双踝同步腾空（y>0.25m）tick 占比（官方 runN 0% / strafe ≤8%）
     //  hoverPct = 贴地悬停带（平台+2cm~+6cm，既非钉地也非真摆动弧）tick 占比
     //             （审计修前支撑相悬空 29~33% → 门 <5%）
-    //  liftMax  = 单脚近地带（≤平台+10cm）内最大抬升（蹬地提踵口径，门 ≤4cm）
+    //  liftMax  = 支撑相（y<0.14，与滑速判定同口径）单脚近地带（≤平台+10cm）
+    //             内最大抬升（蹬地提踵口径，门 ≤4cm）。审计 #10：整窗口径下
+    //             摆动弧自然填满 10cm 计量带、门不可判（基准卡 ⚠ 注同此结论
+    //             ——须限支撑相 tick 才与门同口径）
     const plat = { L: 9, R: 9 }
     for (const r of rows) for (const s of ['L', 'R']) plat[s] = Math.min(plat[s], r[s].y)
     let both = 0, hover = 0
@@ -80,20 +102,33 @@ const out = await page.evaluate(async () => {
       for (const s of ['L', 'R']) {
         const h = r[s].y - plat[s]
         if (h > 0.02 && h <= 0.06) hover++
-        if (h > 0.02 && h <= 0.10) liftMax[s] = Math.max(liftMax[s], h)
+        if (r[s].y < 0.14 && h > 0.02 && h <= 0.10) liftMax[s] = Math.max(liftMax[s], h)
       }
     }
-    return { tag, side: b._strafeSide, v: +Math.abs(vx).toFixed(2),
+    // 诊断字段（163 轮）：门比较器只读上列字段，以下为 bothAir/hover 残余病理的
+    // live 地面真值——脚高范围（钉固是否真的把脚放回平台）、髋世界高范围（锚-髋
+    // 几何的可达性边界）、缩放、状态机 leg-tick 分布
+    const fy = { L: [9, -9], R: [9, -9] }
+    for (const r of rows) for (const s of ['L', 'R']) {
+      if (r[s].y < fy[s][0]) fy[s][0] = r[s].y
+      if (r[s].y > fy[s][1]) fy[s][1] = r[s].y
+    }
+    const dbg = b._pinDbg ?? {}
+    return { tag, hero: HERO, side: b._strafeSide, v: +Math.abs(vx || vz).toFixed(2),
       stanceFrames: slides.length, slideMean: +mean.toFixed(2), slideMed: +med.toFixed(2),
       slideP90: +trim[Math.floor(trim.length * 0.9)].toFixed(2),
       bothAirPct: +(100 * both / rows.length).toFixed(1),
       hoverPct: +(100 * hover / (rows.length * 2)).toFixed(1),
       liftMax: { L: +liftMax.L.toFixed(3), R: +liftMax.R.toFixed(3) },
-      clampN: b._reachClampN ?? 0 }
+      clampN: b._reachClampN ?? 0,
+      dbg: { heroScale: +(b._heroScale ?? 0).toFixed(4),
+        footY: { L: [+fy.L[0].toFixed(3), +fy.L[1].toFixed(3)], R: [+fy.R[0].toFixed(3), +fy.R[1].toFixed(3)] },
+        hipY: [+(dbg.hipMin ?? 0).toFixed(3), +(dbg.hipMax ?? 0).toFixed(3)],
+        states: { latch: dbg.latch ?? 0, lift: dbg.lift ?? 0, loose: dbg.loose ?? 0, swing: dbg.swing ?? 0, heel: dbg.heel ?? 0 } } }
   }
   return [
-    run('runN@5.4', { style: 'cross', vx: 5.4 }),
-    run('walkN@3.0', { style: 'cross', vx: 3.0 }),
+    run('runN@5.4', { style: 'N', vz: -5.4 }),
+    run('walkN@3.0', { style: 'N', vz: -3.0 }),
     run('strafe@5.4(拉右)', { style: 'pull', vx: 5.4 }),
     run('strafe@5.4(拉左)', { style: 'pull', vx: -5.4 }),
     run('crouchWalk@2.7', { style: 'pull', vx: 2.7, crouchWalk: true }),

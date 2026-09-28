@@ -609,7 +609,7 @@ describe('procGaitPose 程序化贴地步态（支撑贴地/摆动抬脚/横移�
         const g = procGaitPose({ phase: ph, stepLen, wFore: 1, wLat: 0, runW })
         for (let k = 0; k < 2; k++) {
           const leg = g.legs[k]
-          const stance = Math.sin(ph + k * Math.PI) > 0
+          const stance = leg.stance // 支撑窗随 runW 收缩（跑 65% 有腾空相）——legs[] 自带判定
           const ankleH = LEG * Math.cos(leg.hip) + LEG * Math.cos(leg.hip - leg.knee)
           // 踝世界 = meshY + 局部 = (bob − dip) + (1.0 − 落差)；落差含 +bob − dip
           // （与身体下沉同项相消）→ 鞋底 = 0.06 + lift 恒定贴地
@@ -625,12 +625,15 @@ describe('procGaitPose 程序化贴地步态（支撑贴地/摆动抬脚/横移�
   })
 
   it('横移（wLat=1）：双腿前向偏移恒 ±交叉偏置（L 前于 R 的交叉步型，非剪刀）；侧摆大幅；身体下沉', () => {
-    const g = procGaitPose({ phase: 0.7, stepLen: 1.4, wFore: 0, wLat: 1, latSign: 1 })
+    // phase 0.1 = 落地段（u≈0.94）：dip/侧摆都接近峰值——旧 phase 0.7 断言的
+    // dip>0.05 依赖旧 0.18 深蹲钳制（扫幅超可达域的几何掩盖），新步态 dip 回
+    // 几何下限（横移 0.06@落地、髋节律官方 0.091 口径），落地相仍 >0.05
+    const g = procGaitPose({ phase: 0.1, stepLen: 1.4, wFore: 0, wLat: 1, latSign: 1 })
     const fore = (leg) => LEG * Math.sin(leg.hip) + LEG * Math.sin(leg.hip - leg.knee) // +前（−Z）
     expect(fore(g.legs[0])).toBeGreaterThan(0.05)  // L 在前（拉右交叉，官方 strafeR 口径）
     expect(fore(g.legs[1])).toBeLessThan(-0.05)    // R 在后
     expect(g.legs[0].z).toBeGreaterThan(0.3)       // 大幅侧摆（官方腿链大幅侧扫）
-    expect(g.dip).toBeGreaterThan(0.05)            // 官方 RunE 深膝低姿同构
+    expect(g.dip).toBeGreaterThan(0.05)            // 落地端几何落差（√(L²−halfS²) 口径）
   })
 
   it('run 摆动膝峰值落在官方区间（抬脚弧自然给出 ~103°）；walk 峰 ~83-89°', () => {

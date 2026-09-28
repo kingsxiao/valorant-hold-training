@@ -49,43 +49,55 @@ describe('strafeRampW 横移步态权重（clip→程序化侧移淡入）', () 
 })
 
 describe('strafeStepPose 程序化侧移步态（官方横移循环口径）', () => {
-  it('官方 RunE 结构：腿链反向交叉 yaw（D11，L 负/R 正 ~±0.90），左右腿反相深膝循环（一屈一伸）', () => {
-    const p0 = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 })
-    expect(p0.yawL).toBeCloseTo(-0.90 + 0.12)                      // 向右移：L 交叉朝 −Y、R 朝 +Y
-    expect(p0.yawR).toBeCloseTo(0.90 + 0.12)
-    expect(p0.yawL).toBeLessThan(0)                                // 反向交叉：L/R 反号（官方 L∈[−118°,−57°]/R∈[+44°,+103°]）
-    expect(p0.yawR).toBeGreaterThan(0)
+  it('官方 RunE/W 方向性剪：thigh 幅 0.548±0.109 随向、偏置 ∓0.56（TP_Core 实测幅/偏置），yaw 脚尖朝向保留', () => {
+    // 右移（W 族）：L 大腿偏置 +0.56（官方 RunW L ∈ [+5.5°,+55.8°] → +0.535）
+    const pw = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 })
+    expect(pw.thighL).toBeCloseTo((0.548 - 0.109) * Math.sin(0) + 0.56)
+    expect(pw.thighL).toBeGreaterThan(0.3)                          // L 前跨（沿运动方向）
+    expect(pw.thighR).toBeCloseTo(-(0.548 - 0.109) * Math.sin(0) - 0.56) // R 反相镜像
+    // 左移（E 族）：L 大腿偏置 −0.56（官方 RunE L ∈ [−71°,+4.3°] → −0.582）
+    const pe = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: -1 })
+    expect(pe.thighL).toBeCloseTo((0.548 + 0.109) * Math.sin(0) - 0.56)
+    expect(pe.thighL).toBeLessThan(-0.3)                            // L 后蹬
+    expect(pw.yawL).toBeCloseTo(-0.90 + 0.12)                       // yaw 脚尖朝向机制保留
+    expect(pw.yawR).toBeCloseTo(0.90 + 0.12)
     const pl = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: -1 })
-    expect(pl.yawL).toBeCloseTo(0.90 + 0.12)                       // 换侧：交叉整体镜像
+    expect(pl.yawL).toBeCloseTo(0.90 + 0.12)                        // 换侧：交叉整体镜像
     expect(pl.yawR).toBeCloseTo(-0.90 + 0.12)
-    expect(p0.thighR).toBeCloseTo(-p0.thighL)                      // 反相：一前一后
     const half = strafeStepPose({ speed: 5.4, phase: Math.PI, lateralVel: 1 })
-    expect(p0.kneeR).toBeCloseTo(half.kneeL)                       // R 腿取 p+π 相位
+    expect(half.thighL).toBeCloseTo(pw.thighL)                      // 偏置不随相位翻转（方向性）
+    expect(half.kneeL).toBeCloseTo(pw.kneeR)                        // R 腿取 p+π 相位
+    // R 腿 = 反相振荡 + 反号偏置：sin(π/2)=1 → L=amp+bias、R=−amp−bias
+    const q = strafeStepPose({ speed: 5.4, phase: Math.PI / 2, lateralVel: 1 })
+    expect(q.thighL).toBeCloseTo((0.548 - 0.109) + 0.56)
+    expect(q.thighR).toBeCloseTo(-(0.548 - 0.109) - 0.56)
   })
 
-  it('膝曲线官方 WalkE→RunE 双锚点按速度插值：5.4=RunE 既有口径、走速以下全程 WalkE 深膝', () => {
+  it('膝曲线官方 WalkE→RunE 双锚点按速度插值：5.4=RunE 既有口径、走速以下全程 WalkE 深膝；thigh 幅不随速', () => {
     const p = strafeStepPose({ speed: 5.4, phase: 2.0, lateralVel: 1 })
-    expect(p.thighL).toBeCloseTo(0.82 * Math.sin(2.0))             // 官方髋摆 0.82rad（RunE 锚点）
+    expect(p.thighL).toBeCloseTo((0.548 - 0.109) * Math.sin(2.0) + 0.56) // 幅 0.439（W 实测）+ 偏置
     expect(p.kneeL).toBeCloseTo(0.20 + 1.55 * Math.max(0, -Math.sin(2.0 - 0.5))) // 官方 RunE 膝曲线
     // 走速（3.39）及以下 = WalkE 锚点（基础 28.1°/摆动幅 60.6°）：起步拉出是深膝慢步，不再浅膝缩放
     const slow = strafeStepPose({ speed: 1.35, phase: 2.0, lateralVel: 1 })
-    expect(slow.thighL).toBeCloseTo(0.70 * Math.sin(2.0))
+    expect(slow.thighL).toBeCloseTo(p.thighL)                       // 方向性剪幅值不随速（官方只有跑速实测）
     expect(slow.kneeL).toBeCloseTo(0.49 + 1.06 * Math.max(0, -Math.sin(2.0 - 0.5)))
     const atWalk = strafeStepPose({ speed: 3.39, phase: 2.0, lateralVel: 1 })
     expect(atWalk.kneeL).toBeCloseTo(slow.kneeL)                   // 3.39 以下不再随速度缩幅
     // 中点线性插值（(1.35+5.4)/2 不落在锚点上，取 4.395 = t 0.5）
     const mid = strafeStepPose({ speed: 4.395, phase: 2.0, lateralVel: 1 })
     expect(mid.kneeL).toBeCloseTo((p.kneeL + slow.kneeL) / 2)
-    expect(mid.thighL).toBeCloseTo((p.thighL + slow.thighL) / 2)
   })
 
-  it('小幅外展稳定（±0.12·k·s，官方 RunE 髋 Y 分量 ~35% 的量级）', () => {
-    const p0 = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 })   // s=1
-    expect(p0.abductL).toBeCloseTo(-0.12)
-    expect(p0.abductR).toBeCloseTo(0.12)
-    const ph = strafeStepPose({ speed: 5.4, phase: Math.PI / 2, lateralVel: 1 }) // s=0
-    expect(ph.abductL).toBeCloseTo(0)
-    expect(ph.abductR).toBeCloseTo(0)
+  it('外展幅 0.41 + 方向偏置 ±0.155（官方 RunE [−27.6°,+20°]/RunW [−9.1°,+37.2°]）', () => {
+    const pw0 = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 })   // s=1（右移 W）
+    expect(pw0.abductL).toBeCloseTo(-0.41 + 0.155)
+    expect(pw0.abductR).toBeCloseTo(0.41 + 0.155)
+    const pwMid = strafeStepPose({ speed: 5.4, phase: Math.PI / 2, lateralVel: 1 }) // s=0
+    expect(pwMid.abductL).toBeCloseTo(0.155)                        // 方向偏置恒在（外展不对称）
+    expect(pwMid.abductR).toBeCloseTo(0.155)
+    const peMid = strafeStepPose({ speed: 5.4, phase: Math.PI / 2, lateralVel: -1 }) // 左移 E
+    expect(peMid.abductL).toBeCloseTo(-0.155)
+    expect(peMid.abductR).toBeCloseTo(-0.155)
   })
 
   it('重心起伏：落脚最低（|s|=1 → 0）、过中点最高（0.01+speed·0.0036）', () => {
@@ -110,12 +122,13 @@ function spawnWith(lastStyles, randVal) {
   // 复用同一 slot 第二次调用的不是"到期出人"，只透传 lastStyles 历史
   const slot = { nextAt: -1, bot: null, lastStyles: [...(lastStyles ?? [])] }
   const bot = { peek: null, place() { } }
-  const mgr = {
-    now: () => 0,
-    params: { peekSide: 'left' },
-    map: { gaps: [GAP], peekLineZ: -23 },
-    _bot: () => bot,
-  }
+  // 必须走原型链（peek-delay.test.js 同款纪律）：_stepSlot 调 this._peekZ() 等
+  // 原型方法，字面量对象链上找不到
+  const mgr = Object.create(BotManager.prototype)
+  mgr.now = () => 0
+  mgr.params = { peekSide: 'left', botDistance: 13 }
+  mgr.map = { gaps: [GAP], spawn: { z: -17 } }
+  mgr._bot = () => bot
   const orig = Math.random
   Math.random = () => randVal
   try {

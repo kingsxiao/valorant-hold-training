@@ -247,25 +247,36 @@ describe('sampleIkAnchor 官方落地锚采样', () => {
     expect(sampleIkAnchor({ L: [1, 2] }, 0.6, 2, 0, 'L', out)).toBeNull() // 数据不齐
   })
 
-  it('locomotion.json 官方锚的落地性：跑步支撑窗内锚世界漂移 <0.15m（锁 TP_Core 数据质量）', () => {
-    const c = locoJson.core.runN
-    const STEP = 1.55, rate = (2 * STEP) / c.duration // 锁相世界推进速率
-    for (const side of ['L', 'R']) {
-      const anchors = []
-      for (let f = 0; f < c.n; f++) {
-        anchors.push(rate * (f / (c.n - 1)) * c.duration + c.ik[side][f * 3]) // 世界 x
+  it('locomotion.json 官方锚的落地性：支撑窗内锚世界漂移 跑<6cm/走<8cm（锁 TP_Core 数据质量）', () => {
+    // 容差收紧（审计 #11）：旧 <0.15m 松于官方口径 ~3×（官方锚支撑窗漂移
+    // ±2cm/0.3s ≈ 7cm/s，psa2clips.mjs:64-66）——0.15m 窗容许 25~75cm/s 均值
+    // 滑步仍绿，挡不住滑步级回归。新界 = 实测最优窗漂移（跑 4.5~4.9cm@锁
+    // STEP_RUN、走 5.6~5.9cm@STEP_WALK）+2cm 余量；锁相常量同步改回真实步距族
+    // （gaitStepLen 的 STEP_RUN 1.54 / STEP_WALK 1.05，旧 1.55 是步距族统一前的
+    // 遗留值）。支撑窗长：跑族触地 12/37 帧 ≈ n/3；走全触地双支撑交替 = n/2
+    for (const [clip, lock, winFrac, bound] of [
+      [locoJson.core.runN, 1.54, 1 / 3, 0.06],
+      [locoJson.core.walkN, 1.05, 1 / 2, 0.08],
+    ]) {
+      const c = clip
+      const rate = (2 * lock) / c.duration // 锁相世界推进速率
+      for (const side of ['L', 'R']) {
+        const anchors = []
+        for (let f = 0; f < c.n; f++) {
+          anchors.push(rate * (f / (c.n - 1)) * c.duration + c.ik[side][f * 3]) // 世界 x
+        }
+        // 最优连续支撑窗内最小漂移：官方曲线必须提供一段世界系可落地窗
+        // （锚随盆骨后退 ≈ 体速互相抵消）。支撑窗可跨循环边界——补一段
+        // +周期位移的环绕副本
+        const win = Math.floor(c.n * winFrac)
+        const ext = anchors.concat(anchors.map(a => a + rate * c.duration))
+        let best = Infinity
+        for (let i = 0; i + win <= ext.length; i++) {
+          const seg = ext.slice(i, i + win)
+          best = Math.min(best, Math.max(...seg) - Math.min(...seg))
+        }
+        expect(best).toBeLessThan(bound)
       }
-      // 最优连续 1/3 周期窗（≈支撑期长）内最小漂移：官方曲线必须提供一段
-      // 世界系可落地窗（锚随盆骨后退 ≈ 体速互相抵消）。支撑窗可跨循环边界——
-      // 补一段 +周期位移的环绕副本
-      const win = Math.floor(c.n / 3)
-      const ext = anchors.concat(anchors.map(a => a + rate * c.duration))
-      let best = Infinity
-      for (let i = 0; i + win <= ext.length; i++) {
-        const seg = ext.slice(i, i + win)
-        best = Math.min(best, Math.max(...seg) - Math.min(...seg))
-      }
-      expect(best).toBeLessThan(0.15)
     }
   })
 

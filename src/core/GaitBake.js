@@ -77,7 +77,8 @@ export function matchRigBones(root) {
   return { hips, legs, spine, neck, arms, weaponL, weaponR }
 }
 
-// ---- 步态曲线（mesh 空间角，X 轴：+ 前摆 / − 后屈；相位 p：|sin/cos| 周期 = 一步）----
+// ---- 步态曲线（mesh 空间角，X 轴镜像约定：GLB 正面 +Z ⇒ 屈膝/压脚尖 = +X、
+// 前摆/勾脚尖 = −X；相位 p：|sin/cos| 周期 = 一步）----
 // 官方动画实测校准（assets-raw/{jett,sova}-psa：Rocklan Drive Animations 目录的
 // 第三人称 .psa 骨骼曲线，腿部见 psa_osc.py、盆骨见 psa_pelvis.py）：
 // 跑周期 0.6s / 走周期 0.8~0.87s；膝基础屈曲 跑 20~33°、走 29~63°，摆动峰值
@@ -85,11 +86,14 @@ export function matchRigBones(root) {
 // （前倾由盆骨承担：RunN 盆骨前倾 -7(Jett~-13.5)°、RunS 后仰 +12.8°——N/S 对比
 // 锁定 X=俯仰轴；E/W 横移侧倾 -4.8°/+9.8° 镜像——锁定 Z=侧倾轴）。
 // 盆骨三轴振荡（1×/步）：yaw ~11.5°（跑/走同）、roll 跑 10.1° / 走 5.65°（相位
-// sin(p+0.83)，相对膝曲线超前 2.47rad ≈ 本约定下与大腿同相）、pitch 振荡 ≤2.5°
-// 可忽略；盆骨高度起伏 跑 ≤3mm、走/横移恒 0（bob 只留防滑步的最小值）
+// sin(p+0.83)，相对膝曲线超前 2.47rad ≈ 与大腿同相）、pitch 振荡 ≤2.5°
+// 可忽略；盆骨高度起伏 跑 ≤3mm、走/横移恒 0（bob 只留防滑步的最小值）。
+// ⚠ 镜像符号（D3）：本骨架 +X 把脊柱上方节点甩向 +Z=身前——X 轴角全部按
+// 「正面 +Z」口径给号：前摆/勾脚尖为 −X、屈膝/压脚尖为 +X（旧 + 前摆/− 屈
+// 是程序化假人正面 −Z 的口径，D3 镜像单次提交后两套路径世界方向一致）
 export const GAIT = {
-  walk: { thigh: 0.70, knee: 0.95, kneeBase: 0.50, foot: 0.26, toe: 0.155, bob: 0.006, hipsYaw: 0.207, hipsRoll: 0.099, hipsPitch: 0.05, lean: 0, neck: 0 },
-  run: { thigh: 0.82, knee: 1.55, kneeBase: 0.38, foot: 0.45, toe: 0.13, bob: 0.012, hipsYaw: 0.201, hipsRoll: 0.176, hipsPitch: -0.15, lean: 0.05, neck: -0.08 },
+  walk: { thigh: 0.70, knee: 0.95, kneeBase: 0.50, foot: 0.26, toe: 0.155, bob: 0.006, hipsYaw: 0.207, hipsRoll: -0.099, hipsPitch: -0.05, lean: 0, neck: 0 },
+  run: { thigh: 0.82, knee: 1.55, kneeBase: 0.38, foot: 0.45, toe: 0.13, bob: 0.012, hipsYaw: 0.201, hipsRoll: -0.176, hipsPitch: 0.15, lean: 0.05, neck: -0.08 },
 }
 
 // 动画权重的时间常数平滑（线性限速：每 tick 最多向目标走 dt×rate）：rise 快
@@ -101,16 +105,18 @@ export function smoothW(cur, target, dt, rise = 22, fall = 7) {
   return cur + THREE.MathUtils.clamp(target - cur, -maxStep, maxStep)
 }
 
-// 单腿三关节角：大腿正弦摆动；膝 = 基础屈曲（官方走/跑全程不屈直）+ 后摆段踢腿
-// 折膝（脚跟离地）；脚 = 落脚前勾脚尖/蹬地压脚尖的小幅摆动；趾 = 蹬地屈伸（官方
-// L_Toe 2× 步频谐波主导：跑 7.5°/走 8.85°，峰值在膝摆动峰前 ~0.5rad = 蹬地瞬间，
+// 单腿三关节角（X 轴镜像口径：屈膝/压脚尖 = +X，前摆/勾脚尖 = −X，见 GAIT 注）：
+// 大腿正弦摆动；膝 = 基础屈曲（官方走/跑全程不屈直）+ 后摆段踢腿折膝（脚跟离地）；
+// 脚 = 落脚前勾脚尖/蹬地压脚尖的小幅摆动（限幅外层取反 ≡ clamp(−x)：压脚尖幅
+// 0.55 > 勾脚尖幅 0.45 的解剖不对称随号镜像保留）；趾 = 蹬地屈伸（官方 L_Toe
+// 2× 步频谐波主导：跑 7.5°/走 8.85°，峰值在膝摆动峰前 ~0.5rad = 蹬地瞬间，
 // 只屈不反关节）
 export function legAngles(p, c) {
   return {
-    thigh: c.thigh * Math.sin(p),
-    knee: -((c.kneeBase ?? 0.12) + c.knee * Math.max(0, -Math.sin(p - 0.5))),
-    foot: THREE.MathUtils.clamp(c.foot * Math.sin(p + 2.4), -0.45, 0.55),
-    toe: -(c.toe ?? 0) * Math.max(0, -Math.sin(2 * (p + 1.6))),
+    thigh: -c.thigh * Math.sin(p),
+    knee: (c.kneeBase ?? 0.12) + c.knee * Math.max(0, -Math.sin(p - 0.5)),
+    foot: THREE.MathUtils.clamp(-(c.foot * Math.sin(p + 2.4)), -0.55, 0.45),
+    toe: (c.toe ?? 0) * Math.max(0, -Math.sin(2 * (p + 1.6))),
   }
 }
 
@@ -164,11 +170,14 @@ export function bakeLocomotionClips({ hipsBone, legs, spineBones = [], neckBone 
     // 髋：官方盆骨三轴轨道（psa_pelvis.py 实测，见 GAIT 注）——yaw 摆动与大腿
     // 摆同相；roll 侧摆相位 sin(p+0.83)（摆动腿侧下沉）；pitch 前倾为常量（跑前倾
     // / 走微后仰，LB 脊柱零轨道）。合成 roll·pitch·yaw·bind：roll/pitch 在最外层
-    // 按 mesh 世界轴施加，不随 yaw 换轴；起伏 bob 取官方值减半（防滑步下限）
+    // 按 mesh 世界轴施加，不随 yaw 换轴；起伏 bob 取官方值减半（防滑步下限）。
+    // hipsYaw 的镜像取反写在使用处（D3）：GAIT 常量保持正幅值口径（单测锁值），
+    // legAngles 翻转后大腿摆相位已镜像——使用处同步取反才保住「yaw 摆动与大腿
+    // 摆同相」的官方语义
     const hq = [], hp = []
     for (let i = 0; i <= samples; i++) {
       const p = (times[i] / duration) * Math.PI * 2
-      _Q1.setFromAxisAngle(_AX_Y, c.hipsYaw * Math.sin(p))
+      _Q1.setFromAxisAngle(_AX_Y, -c.hipsYaw * Math.sin(p))
       _Q2.setFromAxisAngle(_AX_X, c.hipsPitch ?? 0)
       _Q3.setFromAxisAngle(_AX_Z, (c.hipsRoll ?? 0) * Math.sin(p + 0.83))
       q.copy(_Q3).multiply(_Q2).multiply(_Q1).multiply(hipsBindQ)
@@ -211,24 +220,27 @@ export function bakeLocomotionClips({ hipsBone, legs, spineBones = [], neckBone 
 
 // ---- 死亡塌倒（无畏契约击杀表现：中弹后仰、身体折叠拍地、撒手）----
 // 姿态量随 t（0→1）的曲线（ease-out 立方与旧刚体死亡同节奏——0.63 处拍地
-// 音效/结算时序不动）：
-//  hipsPitch  盆骨绕 mesh X 后仰（t=1 ≈83°，身体放平）
-//  thigh      大腿反向补偿盆骨的旋转（盆骨转多少腿转回多少 → 躺平时腿顺地面，
-//             留 ~18% 不补全 = 膝盖微抬的自然尸体位）
-//  knee/foot  屈膝/勾脚；spineCurl 每节脊柱轻微前卷；neck 头后仰
+// 音效/结算时序不动）。X 轴角全部按 GLB 正面 +Z 口径一次取反（D3+D8 与
+// GAIT/legAngles 同批镜像提交，防 deathPose knee 双翻）：旧号是程序化假人
+// 正面 −Z 的口径，本骨架 +X 把脊柱上方节点甩向 +Z=身前——镜像后 hipsPitch
+// 负号 = 盆骨向 −Z（背后）放倒、t=1 ≈83° 身体放平；elbowCurl 翻 +X（不翻则
+// 尸体前臂反向弯折）；armDrop 是 Z 轴角不随 X 镜像换号。语义方向定稿留抓帧
+//  hipsPitch  盆骨绕 mesh X 后仰放平；thigh 大腿反向补偿盆骨的旋转（盆骨转
+//             多少腿转回多少 → 躺平时腿顺地面，留 ~18% 不补全 = 膝盖微抬的
+//             自然尸体位）；knee/foot 屈膝/勾脚；spineCurl 脊柱微卷；neck 头仰
 //  armDrop/elbowCurl 撒手——上臂外垂、前臂微屈（握枪姿态松开）
 export function deathPose(t) {
   const e = 1 - Math.pow(1 - THREE.MathUtils.clamp(t, 0, 1), 3)
   return {
     e,
-    hipsPitch: 1.45 * e,
-    thigh: -1.45 * 0.82 * e,
-    knee: -0.32 * e,
-    foot: 0.18 * e,
-    spineCurl: 0.06 * e,
-    neck: -0.22 * e,
+    hipsPitch: -1.45 * e,
+    thigh: 1.45 * 0.82 * e,
+    knee: 0.32 * e,
+    foot: -0.18 * e,
+    spineCurl: -0.06 * e,
+    neck: 0.22 * e,
     armDrop: 0.32 * e,
-    elbowCurl: -0.35 * e,
+    elbowCurl: 0.35 * e,
   }
 }
 

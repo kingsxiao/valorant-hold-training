@@ -36,7 +36,7 @@ export function strafeRampW({ style, speed, minSpeed = 0.25, rampSpeed = 1.15 })
 }
 
 // 程序化侧移步态的姿态量 —— 官方口径（assets-raw/sova-psa Q_Bow_RunE/WalkE 实测）：
-// 横移循环 = 腿链朝移动方向 yaw 后的「前进跑循环」——左右腿反相（一屈一伸交替）。
+// 横移循环 = 腿链交叉朝向后跑「前进跑循环」——左右腿反相（一屈一伸交替）。
 // 膝曲线用官方 WalkE/RunE 双锚点按速度插值：走速以下全程 WalkE 深膝（起步拉出
 // 不再被 k=speed/5.4 缩成浅膝碎步——官方走速横移本身就是 88.7° 峰值的大幅深膝），
 // 走→跑速之间线性过渡，5.4 及以上 = 既有 RunE 验收口径不变：
@@ -44,22 +44,29 @@ export function strafeRampW({ style, speed, minSpeed = 0.25, rampSpeed = 1.15 })
 //   RunE  膝 基础 11.5°/峰值 ~106°            → base 0.20 / swing = GAIT.run.knee
 // 髋摆同插值（走 ~42° 全幅 → 跑 0.82rad）；躯干/盆骨不扭（正对瞄准方向），盆骨
 // 侧倾随步态。相位由里程推进（每步 π，调用侧保证横移步距口径，见 Bot.STRAFE_STEP_LEN）
+// ⚠ 腿链 yaw 为反向交叉（D11，官方 Q_Bow_RunE 腿链实测 L∈[−118°,−57°]/
+//   R∈[+44°,+103°]，幅值 ~±90°——双腿各自绕 Y 反号交叉，非旧版双腿同向
+//   ±(45~58°)）；abductL/abductR 保持官方幅值口径（正负号随官方 RunE 髋 Z
+//   分量，消费端 Bot._applyLegPose 的 Z 轴镜像取反不在本函数——与 PeekPose
+//   单测锁值解耦）
 const STRAFE_WALKE = { thigh: 0.70, base: 0.49, swing: 1.06 }
 export function strafeStepPose({ speed, phase, lateralVel, moveSpeed = 5.4 }) {
   const t = Math.min(1, Math.max(0, (speed - 3.39) / (moveSpeed - 3.39)))
   const thigh = STRAFE_WALKE.thigh + (GAIT.run.thigh - STRAFE_WALKE.thigh) * t
   const base = STRAFE_WALKE.base + (0.20 - STRAFE_WALKE.base) * t
   const swing = STRAFE_WALKE.swing + (GAIT.run.knee - STRAFE_WALKE.swing) * t
-  const sgn = -Math.sign(lateralVel || 1) // 模型右 +X：向右移腿链朝右
+  const sgn = -Math.sign(lateralVel || 1) // 模型右 +X：向右移交叉朝向整体换侧
   const leg = (p) => ({
     thigh: thigh * Math.sin(p),
     knee: base + swing * Math.max(0, -Math.sin(p - 0.5)),
   })
   const L = leg(phase)
   const R = leg(phase + Math.PI)
+  const yawOsc = Math.cos(phase) * 0.12
   return {
     s: Math.cos(phase),
-    yaw: sgn * 0.90 + Math.cos(phase) * 0.12,
+    yawL: sgn * 0.90 + yawOsc,
+    yawR: -sgn * 0.90 + yawOsc,
     thighL: L.thigh, thighR: R.thigh,
     kneeL: L.knee, kneeR: R.knee,
     abductL: Math.cos(phase) * -0.12 * (0.75 + 0.25 * t),

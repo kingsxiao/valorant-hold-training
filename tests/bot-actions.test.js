@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import { solveGunAim, pickAimTarget, gunBobPose, stepDroppedGun, settleFlatQ, kickPose, solveTwoBoneIK, deriveGunHoldPoints, solveGripMount } from '../src/core/WeaponAim.js'
 import { deathPose, bakeDeathClips } from '../src/core/GaitBake.js'
-import { Bot } from '../src/entities/Bot.js'
+import { Bot, solveLeg2D, procGaitPose } from '../src/entities/Bot.js'
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z)
 
@@ -256,19 +256,19 @@ describe('solveTwoBoneIK 左手两骨 IK', () => {
 })
 
 describe('deathPose 死亡塌倒曲线', () => {
-  it('t=0 全零（击杀瞬间不跳变），随 t 单调放大，t=1 到位', () => {
+  it('t=0 全零（击杀瞬间不跳变），随 t 单调放大（D3 镜像：X 轴号取反、单调方向随号），t=1 到位', () => {
     const p0 = deathPose(0)
     for (const k of ['hipsPitch', 'knee', 'spineCurl', 'armDrop']) expect(Math.abs(p0[k])).toBe(0)
     let prev = 0
     for (let i = 1; i <= 8; i++) {
       const p = deathPose(i / 8)
-      expect(p.hipsPitch).toBeGreaterThan(prev)
+      expect(p.hipsPitch).toBeLessThan(prev) // 盆骨向 −X（GLB 正面 +Z 的背后）单调放倒
       prev = p.hipsPitch
     }
     const p1 = deathPose(1)
-    expect(p1.hipsPitch).toBeCloseTo(1.45, 6)   // 盆骨后仰 ~83°
-    expect(p1.thigh).toBeCloseTo(-1.45 * 0.82, 6) // 腿反向补偿（躺平）
-    expect(p1.knee).toBeLessThan(0)               // 屈膝不为反关节
+    expect(p1.hipsPitch).toBeCloseTo(-1.45, 6)    // 盆骨后仰放平 ~83°（镜像 −X）
+    expect(p1.thigh).toBeCloseTo(1.45 * 0.82, 6)  // 腿反向补偿（躺平）
+    expect(p1.knee).toBeGreaterThan(0)            // 屈膝（镜像 +X）不为反关节
   })
 })
 
@@ -564,5 +564,89 @@ describe('受击踉跄/开火后坐的枪-手锚定（脊柱覆盖前移到挂�
     boneR.updateWorldMatrix(true, false)
     const hand = boneR.getWorldPosition(new THREE.Vector3())
     expect(gripWorld(bot).distanceTo(hand)).toBeLessThan(0.01)
+  })
+})
+
+// ---- 程序化假人贴地步态纯函数（二轮 D5/D11/D15：solveLeg2D + procGaitPose）----
+const LEG = 0.52
+// 腿面内 FK：由关节角重建踝相对髋枢的位置（local，向下 = −y）
+const ankleFK = (s) => {
+  const sig = s.hip - s.knee
+  return {
+    y: -LEG * Math.cos(s.hip) - LEG * Math.cos(sig),
+    z: -LEG * Math.sin(s.hip) - LEG * Math.sin(sig),
+  }
+}
+
+describe('solveLeg2D 平面二骨解（贴地约束步态的核）', () => {
+  it('踝精确落到 (落差, 前偏移)、鞋底水平（踝=膝−髋）、膝向前不反关节', () => {
+    for (const [drop, f] of [[0.94, 0], [0.89, 0.4], [0.83, -0.5], [0.94, 0.25], [0.94, -0.25], [0.7, 0]]) {
+      const s = solveLeg2D(LEG, LEG, drop, f)
+      const a = ankleFK(s)
+      expect(a.y).toBeCloseTo(-drop, 4)            // 竖直落差精确
+      expect(a.z).toBeCloseTo(-f, 4)               // 前向偏移精确（+f = −z 前）
+      expect(s.ankle).toBeCloseTo(s.knee - s.hip, 9) // 鞋底水平（总俯仰 = 0）
+      expect(s.knee).toBeGreaterThanOrEqual(-1e-9)   // 膝只屈不反关节
+      expect(s.knee).toBeLessThanOrEqual(Math.PI + 1e-9)
+    }
+  })
+
+  it('不可达目标：沿方向缩到满展（踝距离 = 腿长上限、不越界不抛错）', () => {
+    const s = solveLeg2D(LEG, LEG, 0.8, 0.9) // D≈1.20 > 1.04
+    const a = ankleFK(s)
+    expect(Math.hypot(a.y, a.z)).toBeLessThanOrEqual(2 * LEG + 1e-6)
+    expect(Math.hypot(a.y, a.z)).toBeGreaterThan(2 * LEG * 0.99)
+    expect(Number.isFinite(s.hip + s.knee + s.ankle)).toBe(true)
+  })
+})
+
+describe('procGaitPose 程序化贴地步态（支撑贴地/摆动抬脚/横移交叉/步距落差）', () => {
+  it('支撑相鞋底全程贴地（−1mm 容差内不穿地、不悬浮）；摆动相抬脚弧 >10cm', () => {
+    for (const [stepLen, runW] of [[1.05, 0], [1.54, 1]]) {
+      let minSole = 9, maxLift = 0
+      for (let i = 0; i <= 64; i++) {
+        const ph = (i / 64) * Math.PI * 2
+        const g = procGaitPose({ phase: ph, stepLen, wFore: 1, wLat: 0, runW })
+        for (let k = 0; k < 2; k++) {
+          const leg = g.legs[k]
+          const stance = Math.sin(ph + k * Math.PI) > 0
+          const ankleH = LEG * Math.cos(leg.hip) + LEG * Math.cos(leg.hip - leg.knee)
+          // 踝世界 = meshY + 局部 = (bob − dip) + (1.0 − 落差)；落差含 +bob − dip
+          // （与身体下沉同项相消）→ 鞋底 = 0.06 + lift 恒定贴地
+          const sole = 1.015 + g.bob - g.dip - ankleH - 0.06
+          if (stance) minSole = Math.min(minSole, sole)
+          else maxLift = Math.max(maxLift, sole)
+        }
+      }
+      expect(minSole).toBeGreaterThanOrEqual(-0.001) // 不穿地
+      expect(minSole).toBeLessThan(0.035)            // 贴地
+      expect(maxLift).toBeGreaterThan(0.10)          // 摆动脚离地
+    }
+  })
+
+  it('横移（wLat=1）：双腿前向偏移恒 ±交叉偏置（L 前于 R 的交叉步型，非剪刀）；侧摆大幅；身体下沉', () => {
+    const g = procGaitPose({ phase: 0.7, stepLen: 1.4, wFore: 0, wLat: 1, latSign: 1 })
+    const fore = (leg) => LEG * Math.sin(leg.hip) + LEG * Math.sin(leg.hip - leg.knee) // +前（−Z）
+    expect(fore(g.legs[0])).toBeGreaterThan(0.05)  // L 在前（拉右交叉，官方 strafeR 口径）
+    expect(fore(g.legs[1])).toBeLessThan(-0.05)    // R 在后
+    expect(g.legs[0].z).toBeGreaterThan(0.3)       // 大幅侧摆（官方腿链大幅侧扫）
+    expect(g.dip).toBeGreaterThan(0.05)            // 官方 RunE 深膝低姿同构
+  })
+
+  it('run 摆动膝峰值落在官方区间（抬脚弧自然给出 ~103°）；walk 峰 ~83-89°', () => {
+    const peak = (stepLen, runW) => {
+      let mx = 0
+      for (let i = 0; i <= 48; i++) {
+        const g = procGaitPose({ phase: (i / 48) * Math.PI * 2, stepLen, wFore: 1, wLat: 0, runW })
+        for (const leg of g.legs) mx = Math.max(mx, leg.knee)
+      }
+      return mx
+    }
+    const runPk = peak(1.54, 1) * 180 / Math.PI
+    const walkPk = peak(1.05, 0) * 180 / Math.PI
+    expect(runPk).toBeGreaterThan(95)   // 官方 run 103° 带
+    expect(runPk).toBeLessThan(120)
+    expect(walkPk).toBeGreaterThan(75)  // 官方 walk 89° 带
+    expect(walkPk).toBeLessThan(100)
   })
 })

@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import fs from 'node:fs'
-import { buildClip, buildLocomotion, locoWeights, sampleIkAnchor, pickDeathSide, CROUCH_WALK_STEP, CROUCH_WALK_SPEED, locoBodyY, PELVIS_REF_Y, PELVIS_CROUCH_DROP, FOOT_GROUND_Y, gaitStepLen, STEP_WALK, STEP_RUN, STEP_STRAFE_RUN } from '../src/core/Locomotion.js'
+import { buildClip, buildLocomotion, locoWeights, sampleIkAnchor, pickDeathSide, CROUCH_WALK_STEP, CROUCH_WALK_SPEED, gaitStepLen, STEP_WALK, STEP_RUN, STEP_STRAFE_RUN } from '../src/core/Locomotion.js'
 
 // 假骨架：UE 风格带 _NNNN 后缀骨名（与英雄 GLB 同构）
 function fakeHeroSkeleton(suffixes) {
@@ -115,6 +115,77 @@ describe('buildClip psa 根链参考系修正（Splitter/Skeleton 轨道值为 G
     const clip = buildClip(JSON_CLIP, root, 'runN')
     const q = clip.tracks.find(t => t.name === 'L_Hip_0136.quaternion')
     JSON_CLIP.tracks[1].q.forEach((v, i) => expect(q.values[i]).toBeCloseTo(v, 6))
+  })
+})
+
+describe('buildClip 官方空间口径（原始骨架空间：轨道全原样，缩放统一在运行时消费）', () => {
+  const S = 1.0461 // 高个英雄归一化缩放（UserAssets normalizeAgent：身高 1.721 → 1.8/1.721）
+  // 带根缩放的假骨架：骨名按 json 实际出现面建（含根链/骨盆/IK 足骨/武器挂点
+  // 等超集）。官方空间=原始骨架空间（2026-09-28 二轮定稿）：一轮曾在构建期 ÷s，
+  // 造成身体矮于 kamae/idle 口径 + 锚-髋几何失衡（双脚腾空/滑步回归）——轨道
+  // 必须原样，×s 的缩放消费统一在 Bot._stepFootPin 的锚升世界处
+  function scaledSkeleton(boneNames, s) {
+    const root = new THREE.Object3D()
+    root.name = 'mesh'
+    root.scale.set(s, s, s)
+    for (const b of boneNames) {
+      const bone = new THREE.Bone()
+      bone.name = b + '_9'
+      root.add(bone)
+    }
+    return root
+  }
+  const allClips = (o, prefix = '') => Object.entries(o ?? {}).flatMap(([k, v]) =>
+    v?.tracks ? [[`${prefix}${k}`, v]] : allClips(v, `${prefix}${k}.`))
+
+  it('官方 json 全集逐轨断言：位置/旋转轨道原样（缩放骨架不改变轨道值；death/runAdd/core 全覆盖）', () => {
+    const locoJson = JSON.parse(fs.readFileSync('public/models/locomotion.json', 'utf8'))
+    const clips = allClips(locoJson)
+    // 用例面防空转：death（根位移/IK 足骨/武器挂点）与 runAdd（Splitter）确有 p 轨
+    const deathP = clips.filter(([n]) => n.startsWith('death.')).flatMap(([, c]) => c.tracks.filter(t => t.p))
+    expect(deathP.length).toBeGreaterThan(0)
+    const runAddP = clips.filter(([n]) => n.startsWith('runAdd.')).flatMap(([, c]) => c.tracks.filter(t => t.p && t.b === 'Splitter'))
+    expect(runAddP.length).toBeGreaterThan(0)
+    const bones = new Set()
+    for (const [, c] of clips) for (const t of c.tracks) bones.add(t.b)
+    const root = scaledSkeleton([...bones], S)
+    for (const [name, json] of clips) {
+      const clip = buildClip(json, root, name)
+      expect(clip, name).toBeTruthy()
+      for (const t of json.tracks) {
+        const node = t.b + '_9'
+        if (t.q) {
+          const tr = clip.tracks.find(x => x.name === node + '.quaternion')
+          if (!tr) continue // 根链（Splitter/Skeleton）只保留位置轨道
+          for (let i = 0; i < t.q.length; i++) expect(tr.values[i]).toBeCloseTo(t.q[i], 5)
+        }
+        if (t.p) {
+          const tr = clip.tracks.find(x => x.name === node + '.position')
+          expect(tr, `${name} ${node} 位置轨`).toBeTruthy()
+          for (let i = 0; i < t.p.length; i++) expect(tr.values[i]).toBeCloseTo(t.p[i], 5)
+        }
+      }
+    }
+  })
+
+  it('buildLocomotion 对缩放骨架同样原样（无任何按 scale.x 的构建期换算）', () => {
+    const locoJson = JSON.parse(fs.readFileSync('public/models/locomotion.json', 'utf8'))
+    const boneNames = [...new Set(Object.values(locoJson.core).flatMap(c => c.tracks.map(t => t.b)))]
+    const jsonP = locoJson.core.walkN.tracks.find(t => t.p)
+    for (const s of [S, 1]) {
+      const built = buildLocomotion(locoJson, 'jett', scaledSkeleton(boneNames, s))
+      const tr = built.walk.tracks.find(x => x.name === jsonP.b + '_9.position')
+      for (let i = 0; i < jsonP.p.length; i++) expect(tr.values[i]).toBeCloseTo(jsonP.p[i], 5)
+    }
+  })
+
+  it('ik 锚曲线逐值不变（原始骨架空间；运行时 Bot._stepFootPin ×英雄根缩放升世界）', () => {
+    const root = scaledSkeleton(['Pelvis'], S)
+    const ik = { L: [0.12, 0.5, 0.125, -0.31, 0.2, 0.137], R: [0.05, -0.4, 0.13] }
+    const json = { duration: 0.6, times: [0, 0.6], ik, n: 2, tracks: [{ b: 'Pelvis', q: [0, 0, 0, 1, 0, 0, 0, 1] }] }
+    const clip = buildClip(json, root, 'x')
+    expect(clip.userData.ik.L).toEqual(ik.L)
+    expect(clip.userData.ik.R).toEqual(ik.R)
   })
 })
 
@@ -270,40 +341,6 @@ describe('locoWeights 走/跑/横移权重分配', () => {
   })
 })
 
-
-describe('locoBodyY 身体高度解算（状态混合准静态参考，2026-09-11 抽搐回归修复）', () => {
-  it('端点锁值：站定=贴地余量−最低脚高（kamae 双脚落clip 无伪影）；移动=骨盆参考高−骨盆局部高', () => {
-    // kamae 实测：双脚落局部高 0.127 → 站定 mesh.y ≈ −0.037；runN 实测骨盆
-    // 局部 1.05~1.14 → 移动 mesh.y ≈ −0.2±（骨盆世界 0.85~0.94）
-    expect(FOOT_GROUND_Y).toBeCloseTo(0.09, 5)
-    expect(PELVIS_REF_Y).toBeCloseTo(0.90, 5)
-    expect(locoBodyY({ hipsLocalY: 0.895, loMinY: 0.127, moveW: 0 })).toBeCloseTo(-0.037, 3)
-    expect(locoBodyY({ hipsLocalY: 1.10, loMinY: 0.6, moveW: 1 })).toBeCloseTo(-0.20, 3)
-  })
-
-  it('moveW 混合连续单调：两参考间线性过渡，无跳变（追逐逐帧脚高的弹跳已根除）', () => {
-    const a = locoBodyY({ hipsLocalY: 1.10, loMinY: 0.127, moveW: 0 })
-    const mid = locoBodyY({ hipsLocalY: 1.10, loMinY: 0.127, moveW: 0.5 })
-    const b = locoBodyY({ hipsLocalY: 1.10, loMinY: 0.127, moveW: 1 })
-    expect(mid).toBeCloseTo((a + b) / 2, 6)
-    expect(mid).toBeGreaterThan(Math.min(a, b))
-    expect(mid).toBeLessThan(Math.max(a, b))
-  })
-
-  it('移动态目标与最低脚高无关（跑步机伪影隔离）：loMinY 大幅摆动不动摇移动态高度', () => {
-    const y1 = locoBodyY({ hipsLocalY: 1.10, loMinY: 0.45, moveW: 1 })
-    const y2 = locoBodyY({ hipsLocalY: 1.10, loMinY: 0.96, moveW: 1 })
-    expect(y1).toBe(y2)
-  })
-
-  it('蹲族移动态降骨盆参考：crouchW=1 时目标低 0.18（官方蹲姿骨盆 ≈0.72）', () => {
-    const stand = locoBodyY({ hipsLocalY: 0.95, loMinY: 0.5, moveW: 1 })
-    const crouch = locoBodyY({ hipsLocalY: 0.95, loMinY: 0.5, moveW: 1, crouchW: 1 })
-    expect(stand - crouch).toBeCloseTo(PELVIS_CROUCH_DROP, 5)
-    // 蹲走实测：hipsLocal 0.947 → 骨盆世界 ≈ 0.72
-    expect(crouch).toBeCloseTo(0.90 - 0.18 - 0.95, 5)
-  })
-})
 
 // 161 轮玩法收敛（纯移动靶：不停步/不跳）后停步转身（turn 8 向）、急停支架
 // （stopAdd）与跳 peek（jump 三段）整层下线：官方集构建/运行时消费/用例一并

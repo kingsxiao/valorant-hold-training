@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { FOOT_PIN_BAND } from '../src/entities/Bot.js'
 
 const loco = JSON.parse(readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), '../public/models/locomotion.json'), 'utf8'))
@@ -88,5 +89,29 @@ describe('蹲走坏侧 stance 窗重建（165 轮第二/三刀）', () => {
     expect(Math.abs(sweep - canon)).toBeLessThanOrEqual(0.01)
     // touchdown 端点（f19）保持官方原值
     expect(Math.abs(y[19] - 0.801)).toBeLessThanOrEqual(0.002)
+  })
+})
+
+describe('锚目标地面钳安全值（D6）：钳线恒低于本英雄支撑锚带下沿（世界 = 原始×s）', () => {
+  it('钳值公式 min(净距−5mm, 0.115·s−5mm) 对任意英雄缩放低于该英雄世界带下沿；原始带全库 ≥0.115', () => {
+    // 二轮定稿：官方空间 = 原始骨架空间，锚升世界 ×英雄根缩放——带下沿的世界
+    // 值 = 0.115·s，地面钳取 min(量测净距−5mm, 0.115·s−5mm) 恒在带下之下，
+    // 不把贴地锚悬浮抬高（净距例 0.09×s）
+    expect(FOOT_PIN_BAND).toBeCloseTo(0.115, 5)
+    for (const s of [0.85, 0.8926, 0.9365, 0.9759, 1.0, 1.0461, 1.1]) {
+      const cap = Math.min(0.09 * s - 0.005, FOOT_PIN_BAND * s - 0.005)
+      expect(cap).toBeLessThan(FOOT_PIN_BAND * s)
+      expect(cap).toBeGreaterThan(0)
+    }
+    // 原始空间全库任一帧最低锚 ≥ 带下沿（上方普查另锁 ≤0.137 与两侧差）
+    const paths = ['core.walkN', 'core.walkE', 'core.walkW', 'core.runN', 'core.runE', 'core.runW',
+      'crouch.idle', 'crouch.walkN', 'crouch.walkE', 'crouch.walkW',
+      'crouch.walkNE', 'crouch.walkNW', 'crouch.walkSE', 'crouch.walkSW']
+    for (const p of paths) {
+      const clip = p.split('.').reduce((o, k) => o[k], loco)
+      for (const side of ['L', 'R']) {
+        expect(Math.min(...zOf(clip, side)), `${p} ${side}`).toBeGreaterThanOrEqual(FOOT_PIN_BAND)
+      }
+    }
   })
 })

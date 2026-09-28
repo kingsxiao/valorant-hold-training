@@ -17,3 +17,7 @@ __pycache__/
 
 # 无授权再分发的原始素材（本地管线数据源，脚本按路径引用，永不入库）
 assets-raw/
+
+# 验收截图证据体量大（无损 PNG 渲染帧 ~1MB/张），不入库，留存本地；
+# 数值证据（foot-trace.json 等）照常入库
+docs/bot-leg-audit/**/*.png

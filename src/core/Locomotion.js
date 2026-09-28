@@ -23,7 +23,12 @@ export function buildClip(jsonClip, skeletonRoot, name = 'loco') {
   // psa 原始链」的组合下恰好逐帧复现官方世界姿态（M⊗P_split = Skel⊗G 恒等，
   // 无需任何逐骨换系——157 轮曾试过对直接子骨左乘 restQ，反而把髋关节偏移
   // 转到骨盆上方 10cm，腿全歪，158 轮回退）。位置轨道（Splitter 高度/骨盆
-  // 微动/死亡根位移）在公共父框架 z-up 里与 GLB 一致，原样保留
+  // 微动/死亡根位移/IK 足骨/武器挂点）与旋转轨道全部原样保留：官方空间 =
+  // 原始骨架空间（psa 与英雄 GLB 骨骼同源同约定，cm×0.01 精确进位），mixer
+  // 播放时经英雄根缩放（UserAssets normalizeAgent 的 ×s）整体缩放——身体与
+  // IK 锚曲线同空间同倍率，锚-髋几何才与官方自洽（2026-09-28 二轮定稿：
+  // 一轮曾在此 ÷s，导致身体矮于 kamae/idle 且锚不可达——双脚腾空/滑步回归，
+  // 已回退；缩放消费统一在 Bot._stepFootPin 的锚升世界处 ×s）
   const tracks = []
   for (const t of jsonClip.tracks) {
     const boneName = byStripped.get(t.b)
@@ -38,8 +43,10 @@ export function buildClip(jsonClip, skeletonRoot, name = 'loco') {
   }
   if (!tracks.length) return null
   const clip = new THREE.AnimationClip(name, jsonClip.duration, tracks)
-  // 官方 IK 目标锚曲线（盆骨局部，脚部落地的本体数据）：不进 mixer（GLB 无对应
-  // 骨也不需要），Bot._stepFootPin 按 action.time 采样作钉地锚
+  // 官方 IK 目标锚曲线（根骨空间=原始骨架空间，脚部落地的本体数据）：不进
+  // mixer（GLB 无对应骨也不需要），Bot._stepFootPin 按 action.time 采样后
+  // ×英雄根缩放升世界（与身体同一 ×s——锚-髋距离的官方自洽几何由此保持，
+  // 支撑锚带 0.115~0.137 为原始空间口径，世界值随英雄 ×s）
   if (jsonClip.ik) clip.userData.ik = { L: jsonClip.ik.L, R: jsonClip.ik.R, n: jsonClip.n }
   return clip
 }
@@ -141,8 +148,8 @@ export function pickDeathSide(forwardDot) {
 }
 
 // 官方 IK 目标锚采样（纯函数，Bot._stepFootPin 与单测共用）：在 clip 的 ik
-// 曲线（L/R 各 n×3 帧，盆骨局部空间）上按动作播放头 t 线性插值。返回 out
-// （Vector3，盆骨局部），无数据返回 null
+// 曲线（L/R 各 n×3 帧，根骨空间）上按动作播放头 t 线性插值。返回 out
+// （Vector3，根骨空间），无数据返回 null
 export function sampleIkAnchor(ik, duration, n, t, side, out) {
   if (!ik?.[side] || ik[side].length < 3) return null
   const f = Math.min(n - 1, Math.max(0, (t / duration) * (n - 1)))
@@ -170,32 +177,6 @@ export function locoWeights({ moveW, runW, strafeW = 0, hasStrafe = false }, out
   r.runS = moveW * runW * wS
   r.walkNoIdle = noIdleWalk * (1 - runW) * (1 - wS) + idle
   return r
-}
-
-// 官方骨盆参考高（移动态）：runN 固定 mesh.y=-0.2 实测骨盆世界高 0.85~0.94m
-// 取中；支撑踝官方锚 0.125m + 载荷腿跨，全部官方走跑横移同高（骨盆轨道 ±7mm）
-export const PELVIS_REF_Y = 0.90
-// 蹲族（蹲走/蹲踞移动）骨盆参考降幅：官方蹲姿 = 踝锚 0.125 + 深屈膝支撑跨
-// ~0.48 + 髋偏移 0.115 ≈ 0.72（clip 自身骨盆轨道 ≈ 站高、蹲姿在腿/脊柱旋转
-// 里——不降参考 = 浮空深蹲，实测脚悬 0.3~0.6m）
-export const PELVIS_CROUCH_DROP = 0.18
-// 站定脚踝离地余量：kamae 双脚落clip自含（实测落地世界高 0.09m）
-export const FOOT_GROUND_Y = 0.09
-
-// 身体高度解算（纯函数，Bot.step 官方曲线路径与单测共用）：
-//  - 移动态参考 = 骨盆参考高（蹲族按 crouchW 降 PELVIS_CROUCH_DROP）− 骨盆局
-//    部高——官方起伏由 clip 自己的骨盆/Splitter 位置轨道携带（±7mm + 相位起
-//    伏），身体高度本身准静态
-//  - 站定参考 = 贴地余量 − 最低脚局部高（kamae 站姿脚高稳定无伪影；蹲踞待机
-//    的脚高含在 clip 里，sink 表现为下蹲）
-//  - 两参考按移动权重（调用侧已 smoothW）线性混合
-// ⚠ 绝不让身体追逐逐帧最低脚高：官方导出剥离根位移后 clip 内脚高含跑步机伪影
-//   （runN 实测全周期 0.45~0.96m 摆动），追逐它 = 每步 ±20cm 弹跳 + 长期沉入
-//   地下 0.5m（2026-09-11 抽搐回归根因，勿回退）
-export function locoBodyY({ hipsLocalY, loMinY, moveW, crouchW = 0 }) {
-  const stand = FOOT_GROUND_Y - loMinY
-  const move = PELVIS_REF_Y - PELVIS_CROUCH_DROP * Math.min(1, Math.max(0, crouchW)) - hipsLocalY
-  return stand + (move - stand) * Math.min(1, Math.max(0, moveW))
 }
 
 // 官方 IK 锚曲线的支撑/摆动落地窗（锚 z = 踝离地高，psa 实测）：支撑

@@ -33,11 +33,127 @@ import { raySphere } from '../world/World.js'
 //    受击踉跄/开火后坐走脊柱骨骼覆盖（_applyUpperFlinch 共轭精确合成）；
 //    死亡为骨骼化塌倒（bakeDeathClips 烘焙：盆骨后仰下沉+腿折叠+撒手）+
 //    撒手掉枪弹道（WeaponAim.stepDroppedGun：抛落翻滚落地摆平）
-const STEP_LEN = 1.55 // 一步的位移（m）：程序化假人/烘焙近似/无官方数据模型的相位
-                      // 锁相基准（官方曲线集走 gaitStepLen：走 1.05/跑 1.54/横移跑
+const STEP_LEN = 1.55 // 一步的位移（m）：烘焙近似/无官方数据模型的相位锁相基准
+                      // （官方曲线集走 gaitStepLen：走 1.05/跑 1.54/横移跑
                       // 1.40，各族官方步距不同——160 轮；本值 = 跑族口径，与官方
-                      // runN 实测 1.54 互证）
+                      // runN 实测 1.54 互证。程序化假人 _stepLegs 亦走 gaitStepLen）
 const STRAFE_STEP_LEN = 1.15 // 横移步距保持既有调校口径（pull 出场节奏 1 步/1.15m 已验收）
+// D6：官方支撑锚带下沿（原始骨架空间口径，tests/loco-ik-repair.test.js 全库
+// 普查 zMin ≥0.115 锁定）。运行时地面钳 = min(量测踝-鞋底净距−5mm, 本值×英雄
+// 缩放−5mm)——钳线恒低于该英雄的支撑锚带下沿（世界值随 ×s），不把贴地锚
+// 悬浮抬高
+export const FOOT_PIN_BAND = 0.115
+// ---- 程序化假人腿（二轮定稿：贴地约束步态 + 官方交叉横移 + kamae 交错站姿）----
+// 骨架口径对齐英雄 GLB：髋枢 1.0（GLB L_Hip ~1.015）、髋距 ±0.115（L_Hip 侧偏
+// 11.5cm）、腿长 1.04（sova maxReach 1.111 的 94%，短腿由贴地约束与步距上限
+// 吸收）、踝-鞋底净距 6cm。正面 −Z：+X=髋前摆、−X=屈膝
+const LEG_L1 = 0.52 // 大腿（髋枢→膝）
+const LEG_L2 = 0.52 // 小腿（膝→踝）
+const LEG_LEN = LEG_L1 + LEG_L2 // 1.04
+const HIP_Y = 1.015 // 英雄 GLB 髋关节实测高（D15：与腿长 1.04 组合的站姿膝屈 ~47°，官方带内）
+const ANKLE_SOLE = 0.06 // 踝关节到靴底（站姿踝高 = HIP_Y − 支撑落差）
+const STANCE_H = HIP_Y - ANKLE_SOLE // 0.94：支撑相髋-踝竖直落差（贴地约束）
+const KAMAE_DIP = 0.02 // kamae 站姿重心微沉（GLB 髋 1.015：有效待机髋高 ~0.995）
+// 平面二骨解（矢状面，Y-Z 平面）：髋枢在原点，踝目标 = 竖直落差 drop（>0 向下）
+// + 前向偏移 f（+前/−后）。膝向前（人体膝）；返回角使鞋底水平（踝补偿 = 膝−髋）
+export function solveLeg2D(l1, l2, drop, f) {
+  const cl = (v) => Math.min(1, Math.max(-1, v))
+  const lMax = (l1 + l2) * 0.999
+  let d = Math.hypot(drop, f)
+  if (d > lMax) { const k = lMax / d; drop *= k; f *= k; d = lMax } // 不可达：沿方向缩到满展（脚略高不穿地）
+  const aLine = Math.atan2(f, drop) // 髋→踝线相对竖直的前倾角
+  const gamma = Math.acos(cl((l1 * l1 + d * d - l2 * l2) / (2 * l1 * d)))
+  const hip = aLine + gamma // 膝在前：大腿比髋-踝线更前倾
+  const knee = Math.PI - Math.acos(cl((l1 * l1 + l2 * l2 - d * d) / (2 * l1 * l2)))
+  return { hip, knee, ankle: knee - hip } // 踝补偿保鞋底水平
+}
+// 程序化步态纯函数（单测锁值；_stepLegs 每 tick 消费）。相位约定：p=0 前跨
+// 落地（脚在前 extreme）、p=π 后蹬离地、π..2π 摆动（sin(p)>0 = 支撑相）。
+// 支撑相由 solveLeg2D 逐相位把踝钉在 (落差, 前偏移) 上——鞋底全程水平贴地、
+// 落地/离地瞬间腿近满展（支撑中期脚世界静止 = 无滑步）；摆动相叠加抬脚弧
+// lift（官方摆动膝峰 walk 89°/run 103° 由抬脚高度自然给出）。横移（wLat）：
+// 双髋同向 yaw + 大幅侧摆 φ（官方腿链大幅侧扫）+ 反向交叉偏置 crossBias
+//（官方 strafeR L 踝恒前于 R ~0.24m 的交叉步型）；身体随步态下沉 dip（落地
+// 最低，吸收侧摆/大步距的几何落差——官方 RunE 深膝低姿同构）
+// 腿链 FK（复现运行时 Euler 合成：hip 'XYZ'(x,y,z) + 膝 −x）：量踝局部高——
+// 髋 yaw×侧摆 φ 的fold轴倾斜让一阶 /cosφ 模型漏高（实测 35° 侧摆 + yaw 0.37
+// 漏 ~9cm），解算器用「解→FK 量误差→修 drop」两轮迭代把踝精确钉到目标落差
+const _pgq1 = new THREE.Quaternion()
+const _pgq2 = new THREE.Quaternion()
+const _pgq3 = new THREE.Quaternion()
+const _pge = new THREE.Euler()
+const _pgd1 = new THREE.Vector3()
+const _pgd2 = new THREE.Vector3()
+const _pgX = new THREE.Vector3(1, 0, 0)
+function procAnkleY(hip, knee, yaw, phi) {
+  _pge.set(hip, yaw, phi, 'XYZ')
+  _pgq1.setFromEuler(_pge)
+  _pgd1.set(0, -LEG_L1, 0).applyQuaternion(_pgq1)
+  _pgq2.copy(_pgq1).multiply(_pgq3.setFromAxisAngle(_pgX, -knee))
+  _pgd2.set(0, -LEG_L2, 0).applyQuaternion(_pgq2)
+  return HIP_Y + _pgd1.y + _pgd2.y
+}
+export function procGaitPose({ phase, stepLen, wFore = 1, wLat = 0, runW = 0, latSign = 1, yaw = 0, bobAmp = 0.01, cross = 0.13 }) {
+  const ph = ((phase % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
+  const stance = ph < Math.PI // 0..π 支撑（前跨 → 后蹬）、π..2π 摆动
+  // 三角波脚迹（u：+1 前跨落地 → 线性后扫 → −1 后蹬离地 → 线性前摆回 +1）：
+  // 支撑相脚相对髋匀速后扫 = 脚世界静止（体速被完全抵消，零滑步剖面）——
+  // 余弦剖面中段过扫（脚反向 3.6m/s）、两端停滞，是滑步均值的直接来源
+  const u = stance ? 1 - (2 * ph) / Math.PI : -1 + (2 * (ph - Math.PI)) / Math.PI
+  const half = THREE.MathUtils.clamp(stepLen / 2, 0, 0.77) // 半步距（支撑扫距半径）
+  // 步距落差（抛物线，|u|=1 落地最低）：腿长固定时跨距越大骨盆越低——
+  // 落地端满展需要 drop = sqrt(L²−half²)，中段富余由膝屈吸收（贴地约束）
+  const dipMax = THREE.MathUtils.clamp(STANCE_H - Math.sqrt(Math.max(0.09, LEG_LEN * LEG_LEN - half * half)), 0, 0.18)
+  const dip = dipMax * u * u
+  const swingFrac = stance ? 0 : (ph - Math.PI) / Math.PI
+  const lift = stance ? 0 : (0.16 + 0.16 * runW) * Math.sin(Math.PI * swingFrac) // 摆动抬脚弧 16~32cm
+  const phiAmp = Math.asin(Math.min(0.72, half / LEG_LEN)) // 官方横移大幅侧扫（≤46°，扫幅=步距）
+  const leg = (ph2, bias) => {
+    const u2 = ph2 === ph ? u : -u // 反相腿取镜像三角波（tri(ph+π) ≡ −tri(ph)）
+    const phi = phiAmp * u2 * wLat
+    const f = half * u2 * wFore + bias * wLat
+    // 竖直落差：髋世界高 = HIP_Y + meshY = HIP_Y + bob − dip·u²，踝要钉在
+    // ANKLE_SOLE → 落差 = 髋高 − 0.06 = STANCE_H + bob − dip·u² − lift（bob/dip
+    // 在「身体下沉」与「腿伸展」两侧同项相消，鞋底全程钉地；侧摆/yaw 漏高由
+    // 下方二分精确补偿）
+    // 落地缓冲：|u| 0.9→1 抬起 4cm（跟落地前脚略浮，吃满展钳位段的鞋跟残余）
+    const tdFloat = 0.04 * THREE.MathUtils.clamp((Math.abs(u2) - 0.9) / 0.1, 0, 1)
+    const drop0 = STANCE_H - dipMax * u2 * u2 - lift + bob - tdFloat
+    let s = solveLeg2D(LEG_L1, LEG_L2, drop0, f)
+    // FK 精化（二分 8 轮）：yaw×φ 折轴倾斜的漏高随二分补偿——实际踝高对 drop
+    // 单调（drop 越大腿越直、踝越高），二分必收敛不振荡；饱和段自然钳在满展
+    //（脚略高不穿地）
+    const target = HIP_Y - drop0
+    if (Math.abs(procAnkleY(s.hip, s.knee, yaw, phi) - target) > 0.0015) {
+      let lo = drop0 - 0.1, hi = drop0 + 0.12
+      for (let it = 0; it < 8; it++) {
+        const mid = (lo + hi) / 2
+        const sm = solveLeg2D(LEG_L1, LEG_L2, mid, f)
+        if (procAnkleY(sm.hip, sm.knee, yaw, phi) > target) lo = mid
+        else hi = mid
+      }
+      s = solveLeg2D(LEG_L1, LEG_L2, (lo + hi) / 2, f)
+    }
+    return { hip: s.hip, knee: s.knee, ankle: s.ankle, z: phi }
+  }
+  const bob = (1 - Math.abs(u)) * bobAmp // 身体起伏（落脚压低、过中点抬高）
+  return {
+    dip, u, bob,
+    legs: [leg(ph, latSign * cross), leg((ph + Math.PI) % (Math.PI * 2), -latSign * cross)],
+  }
+}
+// kamae 前后交错站姿（程序化假人 idle/急停收敛目标）：左前右后大交错（GLB
+// kamae 双脚前后错位 ~1.06m 的持枪戒备站姿，非并腿立正）——solveLeg2D 解出
+// 贴地姿态，后脚跟落/前脚掌贴地
+const KAMAE_STANCE = (() => {
+  // 前后双脚同落差（鞋底水平贴地，无跟落趾仰的悬空角）——大交错由 f ±给出
+  const front = solveLeg2D(LEG_L1, LEG_L2, STANCE_H - KAMAE_DIP, 0.42)
+  const back = solveLeg2D(LEG_L1, LEG_L2, STANCE_H - KAMAE_DIP, -0.46)
+  return [
+    { hip: front.hip, knee: front.knee, ankle: front.ankle, yaw: 0.06, z: -0.05 },
+    { hip: back.hip, knee: back.knee, ankle: back.ankle, yaw: -0.06, z: 0.05 },
+  ]
+})()
 const BOT_EYE_Y = 1.68 // Bot 眼位（模型总高 1.8m 的眼部；可见性判定起点。注意与
 // 玩家 CONFIG.movement.eyeHeight=1.65 是两个口径——玩家是相机高度、Bot 是模型眼骨位）
 const _v = new THREE.Vector3()
@@ -223,21 +339,29 @@ export class Bot {
     put('accent', boxGeo(0.07, 0.02, 0.12), -0.24, 1.525, 0)
     put('accent', boxGeo(0.07, 0.02, 0.12), 0.24, 1.525, 0)
 
-    // 腿：髋部枢轴摆动；裤腿圆柱 + 靴 + 护膝
+    // 腿：三级关节链（髋 Group→膝 Group→踝 Group，_stepLegs 走贴地约束步态）。
+    // 骨架口径对齐英雄 GLB：髋枢高 1.0（GLB L_Hip ~1.015）、髋距 ±0.115（L_Hip
+    // 侧偏 11.5cm）、腿长 1.04（sova maxReach 1.111 的 94%）、靴底 = 踝下 6cm
+    //（支撑相踝高 0.06 时靴底精确落 0）。正面 −Z：+X=髋前摆、−X=屈膝
     const makeLeg = (side) => {
-      const pivot = new THREE.Group(); pivot.position.set(side * 0.105, 0.88, 0)
-      const leg = new THREE.Mesh(mergeGeometries([
-        new THREE.CylinderGeometry(0.078, 0.066, 0.44).translate(0, -0.22, 0),   // 大腿
-        new THREE.CylinderGeometry(0.064, 0.05, 0.42).translate(0, -0.61, 0.008),// 小腿
+      const hip = new THREE.Group(); hip.position.set(side * 0.115, HIP_Y, 0)
+      const thigh = new THREE.Mesh(mergeGeometries([
+        new THREE.CylinderGeometry(0.078, 0.066, 0.56).translate(0, -0.28, 0),   // 大腿
         boxGeo(0.14, 0.1, 0.16).translate(0, -0.34, -0.028),                     // 大腿挂包
       ], false), M.suit)
+      const knee = new THREE.Group(); knee.position.y = -LEG_L1
+      const shin = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.064, 0.05, 0.54).translate(0, -0.27, 0.008), M.suit)
+      const kneePad = new THREE.Mesh(boxGeo(0.13, 0.075, 0.05).translate(0, 0, -0.07), M.accent)
+      const ankle = new THREE.Group(); ankle.position.y = -LEG_L2
       const boot = new THREE.Mesh(mergeGeometries([
-        boxGeo(0.13, 0.09, 0.26).translate(0, -0.838, -0.05),                    // 靴
-        boxGeo(0.135, 0.05, 0.1).translate(0, -0.782, 0.07),                     // 后跟
+        boxGeo(0.13, 0.09, 0.26).translate(0, -0.015, -0.05),                    // 靴（底 = 踝下 6cm）
+        boxGeo(0.135, 0.05, 0.1).translate(0, 0.02, 0.07),                       // 后跟
       ], false), M.glove)
-      const knee = new THREE.Mesh(boxGeo(0.13, 0.075, 0.05).translate(0, -0.43, -0.07), M.accent)
-      pivot.add(leg, boot, knee)
-      return pivot
+      knee.add(shin, kneePad, ankle)
+      hip.add(thigh, knee)
+      ankle.add(boot)
+      return { hip, knee, ankle }
     }
     const legL = makeLeg(-1)
     const legR = makeLeg(1)
@@ -261,13 +385,14 @@ export class Bot {
     const blob = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), this.blobMat)
     blob.rotation.x = -Math.PI / 2
 
-    g.add(legL, legR)
+    g.add(legL.hip, legR.hip)
     g.visible = false
     this.scene.add(g)
     this.scene.add(blob)
 
     this.mesh = g
-    this.legL = legL; this.legR = legR
+    this.legL = legL.hip; this.legR = legR.hip // 髋 Group（历史字段：step 分支判型用）
+    this._legs = [legL, legR] // 三级关节链：_stepLegs 每 tick 重写髋/膝/踝，place() 全清
     this.blob = blob
     this.deathT = 0
     this.hitFlash = 0
@@ -331,6 +456,38 @@ export class Bot {
       }))
     }
     this._strafeRig = rig ? { hips: rig.hips, hipsBind: bindOf(rig.hips), legs: rigLegs } : null
+    if (rig) {
+      // 英雄根缩放（UserAssets normalizeAgent ×s）：官方曲线/锚曲线活在原始骨
+      // 架空间，运行时锚升世界按同一 ×s 消费（与身体同倍率——锚-髋距离的官方
+      // 自洽几何由此保持，二轮 D2 修复的根据）
+      this._heroScale = Math.abs(clone.scale.x || 1) || 1
+      // D2：每腿可达半径基准 = bind 骨段长实测（髋→膝 + 膝→踝，世界距离含英雄
+      // 缩放，骨段平移与姿态无关）；k=0.99 实例参数留 solver 余量（钳制触发率
+      // 见 _stepFootPin 的 _reachClampN 探针）
+      this._reachClampK = 1 // 满展量测直达 solver 物理上限（余量由钳制杠杆承担）
+      for (const l of rigLegs) {
+        const hipW = l.up.getWorldPosition(new THREE.Vector3())
+        const kneeW = l.knee.getWorldPosition(new THREE.Vector3())
+        const footW = l.foot.getWorldPosition(new THREE.Vector3())
+        l.maxReach = hipW.distanceTo(kneeW) + kneeW.distanceTo(footW)
+      }
+      // D6：踝-鞋底净距量测（bind 姿态=kamae 官方站姿：蒙皮网格 bind 包围盒
+      // 最低点 ≈ 鞋底、L_Foot 骨原点 ≈ 踝，世界距离已含 ×s）——锚目标地面钳
+      // 安全值 min(净距−5mm, 官方锚带下沿×s−5mm)。量测失败（无网格/包围盒异常）
+      // 保持 undefined → _stepFootPin 走 0.03 保守回退
+      const bb = new THREE.Box3()
+      const bbTmp = new THREE.Box3()
+      clone.traverse(o => {
+        if (!o.isMesh || !o.geometry) return
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox()
+        if (!o.geometry.boundingBox) return
+        bb.union(bbTmp.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld))
+      })
+      if (Number.isFinite(bb.min.y)) {
+        const ankleY = rig.legs[0].foot.getWorldPosition(new THREE.Vector3()).y
+        this._pinGroundY = Math.max(0.02, Math.min(ankleY - bb.min.y - 0.005, FOOT_PIN_BAND * this._heroScale - 0.005))
+      }
+    }
     // 死亡塌倒烘焙 + 受击脊柱覆盖层的 bind 基准（mixer 首次 update 前的
     // kamae 绑定姿态）：盆骨父级/自身世界四元数、盆骨世界高、脊柱/颈世界基准
     this._rigExtra = null
@@ -759,23 +916,26 @@ export class Bot {
 
   // 骨骼化受击踉跄/开火后坐的脊柱层：clip 快照上叠加 mesh 空间后仰角（共轭到
   // 骨局部精确合成，角度随冲击/衰减曲线归零时自动回到快照）。无脊柱链返回
-  // false → 调用方退回整体刚体后仰（老模型/程序化假人路径）
+  // false → 调用方退回整体刚体后仰（老模型/程序化假人路径）。
+  // ⚠ GLB 正面 +Z ⇒ mesh 空间 −X 才是「向背后仰、离开玩家」（D9 镜像：与
+  // GaitBake 的 X 轴口径同批翻转；程序化假人路径保持 +X 刚体后仰，两路径
+  // 世界方向对齐）
   _applyUpperFlinch(theta) {
     const ex = this._rigExtra
     if (!ex || !ex.spine.length || theta <= 0) return false
     const n = ex.spine.length
     let parentW = this._boneWorldQ(ex.spine[0].parent, _chainW)
     for (let i = 0; i < n; i++) {
-      // 目标世界 = R_x(θ/n)·W_当前（mesh 空间后仰分摊到每节脊柱）；
-      // 局部 = parentW⁻¹·R_x(θ)·parentW·q（共轭，自上而下父级用本帧已写值）
-      _q1.setFromAxisAngle(_axX, theta / n)
+      // 目标世界 = R_x(−θ/n)·W_当前（mesh 空间后仰分摊到每节脊柱）；
+      // 局部 = parentW⁻¹·R_x(−θ)·parentW·q（共轭，自上而下父级用本帧已写值）
+      _q1.setFromAxisAngle(_axX, -theta / n)
       _q2.copy(parentW).invert().multiply(_q1).multiply(parentW)
       ex.spine[i].quaternion.copy(ex.spine[i].userData._clipQ ?? ex.spine[i].quaternion).premultiply(_q2)
       _curW.copy(parentW).multiply(ex.spine[i].quaternion)
       parentW = _curW
     }
     if (ex.neck) {
-      _q1.setFromAxisAngle(_axX, theta * 0.4)
+      _q1.setFromAxisAngle(_axX, -theta * 0.4)
       _q2.copy(parentW).invert().multiply(_q1).multiply(parentW)
       ex.neck.quaternion.copy(ex.neck.userData._clipQ ?? ex.neck.quaternion).premultiply(_q2)
     }
@@ -791,7 +951,9 @@ export class Bot {
     const rig = this._strafeRig
     if (!rig) return
     // 相位由 step() 的 mixer 分支统一推进（位移锁相，见 step）——这里只消费
-    const lx = this.velX * Math.cos(this.mesh.rotation.y) // 模型局部横向速度（模型空间 x 分量；GLB 正面 +Z ⇒ 右侧为 -x）
+    // 局部横向速度全量式（D14 口径对齐 _stepLegs：velX·cos(yaw) − velZ·sin(yaw)；
+    // 当前接线 bot.velZ 恒 0，第二项为零——targetVelZ 未来接线防呆）
+    const lx = this.velX * Math.cos(this.mesh.rotation.y) - this.velZ * Math.sin(this.mesh.rotation.y)
     // 侧倾：向移动方向倾，回正比起倾更快（急停干净利落，与 _stepLegs 同节奏）。
     // ⚠ 官方横移 clip 路径不叠 mesh 级侧倾（167 轮）：官方 RunE/W 盆骨自带
     // ±5~10° 侧倾，再倾一层 6° = 全身刚体倒 11~16°，而脚被钉地 IK 按住 →
@@ -854,9 +1016,14 @@ export class Bot {
       const abduct = i === 0 ? pose?.abductL : pose?.abductR
       const thigh = i === 0 ? pose?.thighL : pose?.thighR
       const knee = i === 0 ? pose?.kneeL : pose?.kneeR
-      const yaw = pose?.yaw ?? 0
-      this._poseLegBone(leg.up, leg.bind.up, _chainW, yaw, abduct ?? 0, thigh ?? 0, w, _curW)
-      this._poseLegBone(leg.knee, leg.bind.knee, _curW, yaw, 0, -(knee ?? 0), w, _curW)
+      // 反向交叉 yaw（D11）：yawL/yawR 各自反号（官方 RunE 腿链 L 负/R 正）
+      const yaw = (i === 0 ? pose?.yawL : pose?.yawR) ?? 0
+      // Z 轴镜像取反在消费端（D11，与 X 轴屈膝镜像同类）：PeekPose 保持官方
+      // 幅值口径（peek-pose 单测锁值不动），abduct 是 Z 轴角、施加方向随本骨
+      // 架正面约定在消费端换号
+      this._poseLegBone(leg.up, leg.bind.up, _chainW, yaw, -(abduct ?? 0), thigh ?? 0, w, _curW)
+      // 屈膝 X 角不再取负（D3 镜像后 strafeStepPose 的 knee 幅值即 +X 屈膝口径）
+      this._poseLegBone(leg.knee, leg.bind.knee, _curW, yaw, 0, knee ?? 0, w, _curW)
       this._poseLegBone(leg.foot, leg.bind.foot, _curW, yaw, 0, 0, w, null)
       this._poseLegBone(leg.toe, leg.bind.toe, _curW, yaw, 0, 0, w, null)
     }
@@ -945,20 +1112,20 @@ export class Bot {
       leg.foot.quaternion.copy(leg.foot.userData._clipQ)
       leg.foot.updateWorldMatrix(true, false) // 含祖先链：还原后的膝/脚矩阵一并刷新
       leg.foot.getWorldPosition(_fpFoot)
-      // mesh 局部脚高/骨盆高（扣除当前身体偏移）——直接量世界高会把上一 tick 的偏移喂回
-      // 量测，定点迭代只收敛到所需偏移的一半。骨盆参考高走一阶慢滤（k=3 ≈ τ0.33s）：
-      // 只跟状态的慢漂移（kamae↔跑/蹲的骨盆基高差），不追 clip 骨盆/胸轨的步频
-      // bob——那 ±4cm 起伏是官方身体起伏，逐帧抵消它 = 身体僵直 + 脚反相弹跳
+      // mesh 局部最低脚高（扣除当前身体偏移）——直接量世界高会把上一 tick 的偏移
+      // 喂回量测，定点迭代只收敛到所需偏移的一半。仅作 verify-twitch 探针列消费
+      //（scripts/verify-twitch.mjs loMin），不参与身体高度逻辑（clip Splitter 轨道
+      // 权威，见 step）
       this._loMinY = Math.min(this._loMinY, _fpFoot.y - this.mesh.position.y)
-      const hipsLocal = rig.hips.matrixWorld.elements[13] - this.mesh.position.y
-      this._hipsLocalY = (this._hipsLocalY ?? 0) === 0 ? hipsLocal
-        : this._hipsLocalY + (hipsLocal - this._hipsLocalY) * Math.min(1, dt * 3)
       if (this._pinOff) continue // 调试/曲线比对：只量高度不钉地
       // 2) 官方锚加权混合（各源按 mixer 权重，与姿态混合同源连续）：
-      //    psa 锚活在根骨空间（UE 轴向：前=+X、侧=+Y、上=+Z）。实测该空间支撑
-      //    期目标世界静止 ±2cm。骨矩阵链带 UE 常量节点旋转会把锚甩飞——按轴映
-      //    射直接落到 mesh 系（前=−Z、上=+Y）再升世界；侧轴符号以「世界系支撑
-      //    期静止」为准。锚世界高 = psaZ（与 mesh.y 无关，psa 地面即世界地面——
+      //    psa 锚活在原始骨架空间（UE 轴向：前=+X、侧=+Y、上=+Z），升世界时
+      //    ×英雄根缩放（与身体同倍率——支撑锚世界高 = 带下沿×s，锚-髋距离与
+      //    腿长同为 ×s 口径，几何自洽；二轮 D2：一轮的「锚不缩放」让高腿长英雄
+      //    的锚全部不可达 = 双脚腾空 + 支撑滑步体速）。实测该空间支撑期目标
+      //    世界静止 ±2cm。骨矩阵链带 UE 常量节点旋转会把锚甩飞——按轴映射直
+      //    接落到 mesh 系（前=−Z、上=+Y）再升世界；侧轴符号以「世界系支撑期静
+      //    止」为准。锚世界高 = psaZ×s（与 mesh.y 无关，psa 地面即世界地面——
       //    跳跃弧线（mesh.y 加成）自动把锚抬升 = 收腿随体）
       //    ⚠ 锚曲线与脚同名同侧（167 轮翻转）：旧「L 目标曲线跟随右脚」反号
       //    在 runN 上锚 y 仅 ±0.05~0.13（近中线）两种配对都可达、分辨不出；
@@ -983,28 +1150,97 @@ export class Bot {
         // 收腿位（曾把弧线对消 = 锚沉在地面、髋在 2.3m，腿被拉成垂直下蹬的
         // 超人腿——160 轮跳跃腾空期修复）
         st.anchor.set(_fpBlend.y / wSum, _fpBlend.z / wSum, -_fpBlend.x / wSum)
+          .multiplyScalar(this._heroScale ?? 1) // 官方原始骨架空间 → 本英雄世界（与身体同一 ×s）
           .applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
         st.w = Math.min(1, st.w + dt * 8)
+        st.rel = null // 重获锚源：末步收脚窗口作废
       } else {
-        st.w = Math.max(0, st.w - dt * 20) // 无锚源（纯站定 kamae）：权重坡放回 clip 脚位
+        // 无锚源（纯站定 kamae）释放 = 末步收脚（D7）：释放瞬间锁存最后锚位
+        // 作起点、kamae clip 脚位作终点，衰减窗内目标沿两点插值并叠 sin(π·p)
+        // 抬脚弧——双脚带弧收进站姿而非贴地直线滑回（旧 20/s 直落权重 = 脚在
+        // 地面拖行穿帮）。8/s ≈ 125ms 与步态权重坡（smoothW fall 7~8）同相
+        if (!st.rel) st.rel = { from: st.anchor.clone(), to: _fpFoot.clone(), t: 0 }
+        st.rel.t = Math.min(1, st.rel.t + dt * 8)
+        st.anchor.lerpVectors(st.rel.from, st.rel.to, st.rel.t)
+        st.anchor.y += Math.sin(Math.PI * st.rel.t) * 0.07
+        st.w = Math.max(0, st.w - dt * 8)
       }
       if (st.w <= 0) continue
-      // 3) IK 目标 = 官方锚（全程，无让步）。旧「可达性越距让步」是放倒管线
-      //    时代的补丁：骨盆高度被钳低 24cm 时锚不可达，释放回 clip 脚位防滑。
-      //    158 轮骨盆回到官方高度后，锚-髋距离的几何由官方数据自洽保证
-      //    （锚后扫极限 ~1.17m，在腿长满展边界附近），让步反而会把目标放回
-      //    psa 原始摆动姿（官方 FootIK 之前的曲线，摆动中脚高达 1.5m+）=
-      //    支撑末期整腿踢到胸口/头高（158 轮腿部残留问题的根因）。极端越距时
-      //    solver 自然钳为指向锚的满展位 = 蹬地推移。绝不 skip IK
+      // 3) IK 目标 = 官方锚（全程，无让步）+ 可达性几何钳（D2 双杠杆）。旧
+      //    「可达性越距让步」是放倒管线时代的补丁：骨盆高度被钳低 24cm 时锚
+      //    不可达，释放回 clip 脚位防滑。158 轮骨盆回到官方高度后，锚-髋距离
+      //    的几何大体自洽（锚后扫极限 ~1.17m，在腿长满展边界附近），让步反而
+      //    会把目标放回 psa 原始摆动姿（官方 FootIK 之前的曲线，摆动中脚高达
+      //    1.5m+）= 支撑末期整腿踢到胸口/头高（158 轮腿部残留问题的根因）。
+      //    绝不 skip IK；越距只做几何钳制（见下），solver 对钳后目标求解
       leg.up.matrixWorld.decompose(_fpHip, _q1, _gscl)
       leg.knee.matrixWorld.decompose(_fpKnee, _q2, _gscl)
       _fpKneeWClip.setFromRotationMatrix(leg.knee.matrixWorld) // clip 膝世界 Q（此刻矩阵=还原后的 clip 姿态）
       _fpAnchor.copy(st.anchor).lerp(_fpFoot, 1 - st.w)
-      // 目标地面钳制：权重坡途中目标 = 锚（贴地）与 clip 原始姿（起步混合段踝可
-      // 低至 -0.10，实测 pull/out 加速段穿地 ~20cm 脚底）的中值——中值同样穿地。
-      // 正常步态锚高 0.10+ 不受影响；只把异常下探抬回脚踝最低线（脚底仍略 below
-      // 踝，0.03 只挡穿透不做"悬浮修正"）
-      if (_fpAnchor.y < 0.03) _fpAnchor.y = 0.03
+      // 3a) 目标地面钳制：权重坡途中目标 = 锚（贴地）与 clip 原始姿（起步混合段
+      // 踝可低至 -0.10，实测 pull/out 加速段穿地 ~20cm 脚底）的中值——中值同样
+      // 穿地。正常步态锚高 0.115×s+ 不受影响；只把异常下探抬回踝-鞋底净距线
+      //（D6：每 rig 量测净距取 min(净距−5mm, 官方带下沿×s−5mm)，恒低于本英雄
+      // 的支撑锚带下沿——起步/急停/换侧混合窗鞋底不再穿地，也不做"悬浮修正"）
+      const groundY = this._pinGroundY ?? 0.03
+      if (_fpAnchor.y < groundY) _fpAnchor.y = groundY
+      // 3b) 可达性钳制（D2 双杠杆）：主杠杆=锚-髋水平距离超允许半径（k·maxReach
+      // 与 Δy 的几何半径）时钳水平——maxReach 为 bind 骨段长实测（含英雄缩放），
+      // k=0.99 留 1% solver 余量；|Δy|≥k·maxReach 病态窗绝不取负 sqrt（NaN 根
+      // 源）：保水平、目标 y 降到可达球面下交点。第二杠杆=钳制触发时蹬地段目标
+      // 踝高受控上浮（≤4cm，官方蹬地本就提踵）：|Δy| 减小 → 允许水平半径几何性
+      // 增大，保住被钳掉的步幅。钳后目标经 clampW 速率限幅（20/s 坡）——dH 在
+      // 半径边界徘徊时目标在钳/不钳间瞬跳 = 边界抖动
+      let clamped = false
+      const reach = (leg.maxReach ?? 0) * (this._reachClampK ?? 1)
+      if (reach > 0) {
+        const dx = _fpAnchor.x - _fpHip.x, dz = _fpAnchor.z - _fpHip.z
+        const dy = _fpAnchor.y - _fpHip.y
+        const dH = Math.hypot(dx, dz)
+        const absDy = Math.abs(dy)
+        st.clampT ??= new THREE.Vector3() // 钳后目标暂存（速率限幅混合用）
+        if (absDy < reach) {
+          const rad = Math.sqrt(reach * reach - dy * dy)
+          if (dH > rad) {
+            // 主杠杆：保方向钳水平到允许半径
+            const sc = rad / dH
+            let cy = _fpAnchor.y
+            // 第二杠杆：踝高受控上浮补半径——|Δy| 缩到 sqrt(reach²−dH²) 时允许
+            // 半径恰=dH（被钳掉的步幅收回），上浮封顶 4cm、不越过髋高，且只在
+            // 支撑带（锚贴地段）生效——摆动段高锚上浮会把双脚腾空窗拉长
+            const s2 = reach * reach - dH * dH
+            if (s2 > 0 && dy < 0 && _fpAnchor.y < 0.13 * (this._heroScale ?? 1)) {
+              // 封顶 2cm 且只对带内低位锚生效：钳后目标必须留在支撑采样带
+              // （<0.16·s）内，蹬地提踵表现为锚贴地段的小幅上浮而非抬出带外
+              const lift = Math.min(0.02, absDy - Math.sqrt(s2))
+              if (lift > 0) cy = Math.min(cy + lift, _fpHip.y)
+            }
+            st.clampT.set(_fpHip.x + dx * sc, cy, _fpHip.z + dz * sc)
+            clamped = true
+          }
+        } else {
+          // 病态窗（目标单独 Δy 已超 k·maxReach）：绝不取负 sqrt——保水平，
+          // 目标 y 降到腿长球面下交点（sqrt 入参 max(0,·) 双保险）
+          st.clampT.set(_fpAnchor.x, _fpHip.y - Math.sqrt(Math.max(0, (leg.maxReach ?? 0) ** 2 - dH * dH)), _fpAnchor.z)
+          clamped = true
+        }
+        if (clamped) this._reachClampN = (this._reachClampN ?? 0) + 1 // 钳制触发率探针（D2 调参判停用）
+      }
+      // 钳制期目标钉世界系（D2 滑步口径）：锚随体走、几何钳位若逐 tick 重算会
+      // 把钳后目标拖着以体速滑行（支撑滑步 5+ m/s 的来源）——钳制持续期间锁存
+      // 首个钳位世界点作目标（= 满展撑地不动），锚回到可达域（钳制解除）才释放
+      if (clamped) {
+        const holdDist = st.clampHold
+          ? Math.hypot(st.clampHold.x - _fpHip.x, st.clampHold.y - _fpHip.y, st.clampHold.z - _fpHip.z)
+          : Infinity
+        if (!st.clampHold || holdDist > reach) st.clampHold = st.clampT.clone() // 髋拉过可达域：脱锚滑到新极限
+        else st.clampT.copy(st.clampHold)
+      } else if (st.clampHold) st.clampHold = null
+      // 钳后目标速率限幅（20/s 坡）：dH 在允许半径边界徘徊时，钳制权重连续
+      // 升降、目标在原锚与钳位间平滑过渡，无边界抖动瞬跳
+      st.clampW ??= 0
+      st.clampW += ((clamped ? 1 : 0) - st.clampW) * Math.min(1, dt * 20)
+      if (clamped) _fpAnchor.lerp(st.clampT, st.clampW)
       // 膝极向 = 面朝方向（psa 原始腿曲线是官方 FootIK 之前的姿态，膝常反折，
       // 跟随当前肘方向会把反关节保留下来；官方 UE TwoBoneIK 同样用显式极向）。
       // GLB 视觉正面 = 局部 +Z（164 轮）：极向取 +Z 侧（旧 -Z 在 180° 翻转的
@@ -1039,56 +1275,73 @@ export class Bot {
     }
   }
 
-  // 程序化假人腿部：按无畏契约 strafe 运动规则驱动
-  //  1) 步频与位移锁相：walkPhase 由里程推进（每 STEP_LEN 米 = 一步 = π），相位无跳变；
-  //  2) 横移步态（cross-side-step）：双腿镜像侧摆（步距开合交替）+ 双髋同向偏转
-  //     （脚尖朝行进方向）+ 步内小幅反摆；朝/背玩家移动的前后分量按局部速度方向混合
-  //  3) counter-strafe 急停：硬站定快速收步（不做长缓动漂浮）+ 一次短促下沉卸力
-  //  4) 身体向移动方向微倾（lean into strafe），急停时快速回正
+  // 程序化假人腿部：贴地约束步态（D5 二轮定稿）+ 官方交叉横移（D11）
+  //  1) 步频与位移锁相：walkPhase 由里程推进（每 stepLen 米 = 一步 = π），步距 =
+  //     官方族口径 gaitStepLen（走 1.05/跑 1.54/横移跑 1.40 按速度/横向权重内插）
+  //  2) 支撑相（sin(p)>0）由 solveLeg2D 逐相位把踝钉在 (落差, 前偏移) 上：
+  //     鞋底全程水平贴地（零穿地）、落地/离地腿近满展、支撑中期脚世界静止
+  //     （无滑步）；摆动相叠加抬脚弧（官方摆动膝峰 walk 89°/run 103° 自然给出）
+  //  3) 横移步态（D11 官方交叉口径）：双髋同向 yaw（脚尖朝行进方向）+ 大幅
+  //     侧摆 φ（官方腿链大幅侧扫）+ 反向交叉偏置（官方 strafeR 的 L 踝恒前于
+  //     R ~0.24m，非前后剪刀）+ 身体随步态下沉（官方 RunE 深膝低姿同构）
+  //  4) counter-strafe 急停：三关节收敛到 kamae 大交错站姿（每 tick 重写）+
+  //     一次短促下沉卸力
+  //  5) 身体向移动方向微倾（lean into strafe），急停时快速回正
+  //  ⚠ 全分支每 tick 重写三关节 × 双腿——膝/踝残留不串下一条命
   _stepLegs(speed, dt) {
-    const legL = this.legL, legR = this.legR
+    const legs = this._legs
     // 局部横向速度（模型正面 -Z、右侧 +X）：面向玩家横移时该分量为主
     const yaw = this.mesh.rotation.y
     const lx = this.velX * Math.cos(yaw) - this.velZ * Math.sin(yaw)
+    const sp = Math.max(speed, 1e-4)
+    const wLat = speed > 0.3 ? Math.min(1, Math.abs(lx) / sp) : 0 // 横向权重：纯侧移 = 1
+    // 官方步距族选择（runW 映射与 _setAnimWeights 的 runTarget 同式）
+    const runW = THREE.MathUtils.clamp((speed - 3.0) / 1.6, 0, 1)
+    const stepLen = gaitStepLen({ runW, strafeW: wLat })
 
     // 相位始终随位移推进（里程积分），跨低速段也不失锁。
-    // 脚步声：walkPhase 每跨过 kπ = 走满一步（STEP_LEN 位移），恰是 |cos|=1
-    // 的落脚瞬间——听到的步声与看到的落脚同拍；onFootstep 由 BotManager 注入，
-    // 传连续速度（脚步随加速渐强，不是两档跳变）
+    // 脚步声：walkPhase 每跨过 kπ = 走满一步（stepLen 位移），恰是落地/离地瞬间
+    // ——听到的步声与看到的落脚同拍；onFootstep 由 BotManager 注入
     const kPrev = Math.floor(this.walkPhase / Math.PI)
-    this.walkPhase += speed * dt * Math.PI / STEP_LEN
+    this.walkPhase += speed * dt * Math.PI / stepLen
     if (speed > 0.5 && Math.floor(this.walkPhase / Math.PI) > kPrev) {
       this.onFootstep?.(speed)
     }
 
     if (speed > 0.3) {
-      // 摆动取 cos：walkPhase = kπ（每步整除 STEP_LEN）时 |cos|=1，正是落脚（步距最开）瞬间
-      const s = Math.cos(this.walkPhase)
-      const sp = Math.max(speed, 1e-4)
-      const wLat = Math.min(1, Math.abs(lx) / sp)      // 横向权重：纯侧移 = 1
       const wFore = 1 - wLat
-      const aLat = Math.min(0.36, 0.12 + speed * 0.058)
-      // 前摆幅随 STEP_LEN 1.55 加大：不滑步要求 2·L·sin(a) ≥ 步距（5.4m/s 全速
-      // 需 ~55°，此处 0.92rad≈52.7° 覆盖 91%，与官方循环的轻微滑步率一致）
-      const aFore = Math.min(0.92, 0.22 + speed * 0.13)
-      // 镜像侧摆：步距张开-并拢交替（s=±1 为落脚支撑，s=0 双腿交叠过中点）
-      legL.rotation.z = -s * aLat * wLat
-      legR.rotation.z = s * aLat * wLat
-      legL.rotation.x = s * aFore * wFore
-      legR.rotation.x = -s * aFore * wFore
       // 双髋同向偏转：脚尖朝行进方向（脚位朝移动、上身持枪朝目标 = VALORANT strafe 姿态）
-      const hipYaw = -Math.sign(lx || 1) * 0.26 * wLat + s * 0.12 * wLat
-      legL.rotation.y = hipYaw
-      legR.rotation.y = hipYaw
-      // 步态起伏：落脚张开时最低（重心压上支撑步）、并腿过中点最高
-      this._yBase = (1 - Math.abs(s)) * (0.01 + speed * 0.0036)
+      const hipYaw = -Math.sign(lx || 1) * 0.26 * wLat + Math.cos(this.walkPhase) * 0.12 * wLat
+      // 官方横移交叉方向：拉右（lx>0）L 踝恒前于 R（foot-trace 官方轨迹实测）
+      const latSign = Math.sign(lx || 1)
+      // 交叉偏置只跟 pull（拉出对枪侧跨）；cross（贯穿跑过）保持前进剪式
+      const pose = procGaitPose({ phase: this.walkPhase, stepLen, wFore, wLat, runW, latSign, yaw: hipYaw, bobAmp: 0.01 + speed * 0.0036,
+        cross: this.peek?.style === 'pull' ? 0.13 : 0 })
+      const [L, R] = legs, [pl, pr] = pose.legs
+      L.hip.rotation.set(pl.hip, hipYaw, pl.z)
+      R.hip.rotation.set(pr.hip, hipYaw, pr.z)
+      // 膝屈取负施加（正面 −Z：屈膝 = −X；solver 的 knee 为正屈曲量，FK σ=hip−knee）。
+      // 踝反滚 −φ（绕 Z）：抵消髋侧摆的鞋底倾斜（R_z(φ)·R_x(0)·R_z(−φ)=I）——
+      // 大幅侧摆（官方横移侧扫 35°）下鞋底保持水平，外缘不犁地
+      L.knee.rotation.x = -pl.knee
+      R.knee.rotation.x = -pr.knee
+      L.ankle.rotation.set(pl.ankle, 0, -pl.z)
+      R.ankle.rotation.set(pr.ankle, 0, -pr.z)
+      // 步态起伏：落地张开时最低（步距落差 dip 已含 u² 相位）、并腿过中点最高
+      this._yBase = pose.bob - pose.dip
       this._foreW = wFore // 前倾只跟前进分量走：侧移对枪（wFore≈0）上身立直
     } else {
-      // 急停即刻站定：快速收步 + 高度归零（counter-strafe 是硬停，不做漂浮缓动）
-      const k = 1 - Math.min(1, dt * 22)
-      legL.rotation.x *= k; legL.rotation.y *= k; legL.rotation.z *= k
-      legR.rotation.x *= k; legR.rotation.y *= k; legR.rotation.z *= k
-      this._yBase *= k
+      // 急停/idle：三关节收敛到 kamae 大交错站姿（22/s 硬停节奏；每 tick 重写）
+      const k = Math.min(1, dt * 22)
+      for (let i = 0; i < 2; i++) {
+        const leg = legs[i], t = KAMAE_STANCE[i]
+        leg.hip.rotation.x += (t.hip - leg.hip.rotation.x) * k
+        leg.hip.rotation.y += (t.yaw - leg.hip.rotation.y) * k
+        leg.hip.rotation.z += (t.z - leg.hip.rotation.z) * k
+        leg.knee.rotation.x += (-t.knee - leg.knee.rotation.x) * k // 屈膝 = −X（同步态分支）
+        leg.ankle.rotation.x += (t.ankle - leg.ankle.rotation.x) * k
+      }
+      this._yBase += (-KAMAE_DIP - this._yBase) * k // kamae 低姿重心（交错的几何落差）
       this._foreW = 0
     }
 
@@ -1162,14 +1415,19 @@ export class Bot {
     this.plantT = 0
     this._prevSpeed = 0
     this._wasFast = false
-    if (this.legL) { this.legL.rotation.set(0, 0, 0); this.legR.rotation.set(0, 0, 0) }
+    if (this._legs) for (let i = 0; i < 2; i++) { // 直接落到 kamae 站姿：零位直腿
+      // 比髋枢长 4cm（贴地约束步态的前提），归零 = 出生瞬间穿地 10cm
+      const l = this._legs[i], t = KAMAE_STANCE[i]
+      l.hip.rotation.set(t.hip, t.yaw, t.z)
+      l.knee.rotation.x = -t.knee
+      l.ankle.rotation.x = t.ankle
+    }
     if (this._strafeRig) for (const leg of this._strafeRig.legs) { // 不带上一条的脚钉锚点
       const st = leg.foot.userData._pin
-      if (st) st.w = 0
+      if (st) { st.w = 0; st.rel = null } // rel = 末步收脚窗口（D7）一并作废
     }
     this._loY = 0 // 官方曲线贴地高度偏移归零
-    this._loMinY = 0 // 最低脚局部高（贴地跟踪量测，首帧前归零防 NaN）
-    this._hipsLocalY = 0 // 骨盆局部高（身体高度移动态参考，同上首帧归零）
+    this._loMinY = 0 // 最低脚局部高（verify-twitch 探针量测，首帧前归零防 NaN）
     this.setOpacity(1)
     this.blobMat.opacity = 1
     this.spawnGuardUntil = this.now() + CONFIG.bot.spawnGuardMs / 1000
@@ -1361,9 +1619,11 @@ export class Bot {
         this.mixer.update(dt)
         if (!this._officialDeath) this.mesh.position.y *= 1 - Math.min(1, dt * 22)
       } else {
-        // 刚体后仰倒地（程序化假人/无烘焙老模型）：ease-out + 随机侧倒 + 下沉
+        // 刚体后仰倒地（程序化假人/无烘焙老模型）：ease-out + 随机侧倒 + 下沉。
+        // X 号按正面门控（D3 镜像）：GLB 正面 +Z ⇒ 后仰 = −X；程序化假人正面
+        // −Z ⇒ +X（此分支只服务 mixer 为空或无烘焙的模型，门控按 this.mixer）
         const e = 1 - Math.pow(1 - t, 3)
-        this.mesh.rotation.x = e * (Math.PI / 2) * 0.95
+        this.mesh.rotation.x = e * (Math.PI / 2) * 0.95 * (this.mixer ? -1 : 1)
         this.mesh.rotation.z = this.deathRoll * e
         this.mesh.position.y = -e * 0.05
       }
@@ -1512,7 +1772,9 @@ export class Bot {
       // 翻正不可见）；换侧一律先把横移权重压到 0（E/W 两套独立循环，任何非零
       // 权重下硬切 = 镜像整姿跳变，实测单膝差可达 178°）
       if (this.anim?.strafe && w < 0.85 && Math.abs(this.velX) > 0.5) {
-        const lx = this.velX * Math.cos(this.mesh.rotation.y)
+        // 局部横向速度全量式（D14 口径对齐 _stepLegs；bot.velZ 恒 0，第二项为
+        // 零——targetVelZ 未来接线防呆）
+        const lx = this.velX * Math.cos(this.mesh.rotation.y) - this.velZ * Math.sin(this.mesh.rotation.y)
         // 官方锚数据锁定的配对：E 族锚支撑期向局部 +X 扫、W 族向 −X 扫（psa
         // 实测 runE/runW/crouchWalk 双向），锚要世界静止必须逆着局部移动方向扫
         // → 局部左移（lx<0）配 E、右移配 W。旧「lx>0→E」是反的：纯垂直横移下
@@ -1563,15 +1825,14 @@ export class Bot {
       _v.copy(this.prevPos).lerp(this.pos, ctx.alpha ?? 1)
       this.mesh.position.x = _v.x
       this.mesh.position.z = _v.z
-      this._stepFootPin(dt)
-      // 受击踉跄/开火后坐的脊柱覆盖 + 微沉前移到挂枪解算前：旧序在 _stepGun
-      // 之后写覆盖——握把钉位按覆盖前的手骨世界位解算、渲染手位随覆盖偏移，
-      // 交火期枪-手锚定每 tick 跳变 4.5~6cm（体检仿真：爆头踉跄 0.045m、仅后
-      // 坐 0.061m，量级 = 每 tick 步进位移）。前移后枪锚吃到的就是含覆盖的本
-      // 帧手骨位，钉点与渲染手位同帧一致。两个顺序约束：①微沉插入点在
-      // _officialLo 基座归零之后（归零每 tick 无条件执行，早于它会被清掉 =
-      // 踉跄下沉消失）；②flinch/kick 衰减保持在公共尾段——_stepGun 内
-      // kickPose 消费的是衰减前值（与旧序同相位）
+      // 受击踉跄/开火后坐的脊柱覆盖 + 微沉，在钉地 IK 之前（D13 顺序修正）：
+      // 钉地按含沉位姿解算——旧序（钉地后写 −k·0.025 沉位）把已钉双脚整体带
+      // 入地 2.5cm；挪前后锚/极向/IK 全部按沉后髋位解算，踉跄期双脚不出地。
+      // 覆盖本身在挂枪解算前（167 轮：握把钉位按覆盖前的手骨世界位解算会让
+      // 枪-手锚定每 tick 跳变 4.5~6cm）。三个顺序约束：①微沉在 _officialLo
+      // 基座归零之后（归零每 tick 无条件执行，早于它会被清掉 = 踉跄下沉消失）；
+      // ②在 _stepFootPin 之前（本修复）；③flinch/kick 衰减保持在公共尾段——
+      // _stepGun 内 kickPose 消费的是衰减前值（与旧序同相位）
       if (this.flinch > 0 || (this.gun && this.gun.kick > 0)) {
         const k = this.flinch > 0 ? Math.sin(Math.min(1, this.flinch) * Math.PI) : 0
         const theta = k * this.flinchAmp + kickPose(this.gun?.kick ?? 0).spine
@@ -1580,6 +1841,7 @@ export class Bot {
           upperFlinchDone = true // 覆盖成功：尾段只衰减；失败（无脊柱链老模型）尾段走刚体回退
         }
       }
+      this._stepFootPin(dt)
       this._stepGun(dt, ctx.player)
     } else if (speed > 0.3) {
       // 无动画的自定义模型兜底：至少保留位移节奏的起伏

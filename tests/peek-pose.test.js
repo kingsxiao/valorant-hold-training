@@ -49,10 +49,15 @@ describe('strafeRampW 横移步态权重（clip→程序化侧移淡入）', () 
 })
 
 describe('strafeStepPose 程序化侧移步态（官方横移循环口径）', () => {
-  it('官方 RunE 结构：腿链朝移动方向 yaw≈0.90，左右腿反相深膝循环（一屈一伸）', () => {
+  it('官方 RunE 结构：腿链反向交叉 yaw（D11，L 负/R 正 ~±0.90），左右腿反相深膝循环（一屈一伸）', () => {
     const p0 = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 })
-    expect(p0.yaw).toBeCloseTo(-0.90 + 0.12)                       // 向右移腿链朝右
-    expect(strafeStepPose({ speed: 5.4, phase: 0, lateralVel: -1 }).yaw).toBeCloseTo(0.90 + 0.12)
+    expect(p0.yawL).toBeCloseTo(-0.90 + 0.12)                      // 向右移：L 交叉朝 −Y、R 朝 +Y
+    expect(p0.yawR).toBeCloseTo(0.90 + 0.12)
+    expect(p0.yawL).toBeLessThan(0)                                // 反向交叉：L/R 反号（官方 L∈[−118°,−57°]/R∈[+44°,+103°]）
+    expect(p0.yawR).toBeGreaterThan(0)
+    const pl = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: -1 })
+    expect(pl.yawL).toBeCloseTo(0.90 + 0.12)                       // 换侧：交叉整体镜像
+    expect(pl.yawR).toBeCloseTo(-0.90 + 0.12)
     expect(p0.thighR).toBeCloseTo(-p0.thighL)                      // 反相：一前一后
     const half = strafeStepPose({ speed: 5.4, phase: Math.PI, lateralVel: 1 })
     expect(p0.kneeR).toBeCloseTo(half.kneeL)                       // R 腿取 p+π 相位

@@ -10,14 +10,17 @@
 // 转换口径（scripts 内实测对齐）：
 //   - 骨名：psa 无后缀名（L_Knee）↔ 英雄 GLB 带 _NNNN 后缀（L_Knee_0137），
 //     运行时按「去后缀」解析，JSON 里存 psa 名
-//   - 旋转：psa 局部四元数与 GLB kamae 第 0 帧逐骨完全一致（0.0°，含 R 侧）——
-//     直接采用；(上上轮记录的「R 侧镜像约定」是坏 parent 字段导致的 FK 误诊)
+//   - 位置：psa cm × 0.01 = GLB m（L_Hip 11.522cm ↔ 0.11522m 分毫不差）
+//   - 旋转（2026-09-29 勘误）：psa 局部四元数是关节旋转的「逆」存储——旧注
+//     「与 GLB kamae 第 0 帧逐骨 0.0° 一致、直接采用」不成立（raw 直挂 = 官方
+//     姿态逐骨取反：腿链 FK 抬腿朝天，被钉地 IK 追锚掩盖成蟹脚/下扣/剪刀交叉；
+//     离线 scale-aware FK 实证 conj 后官方锚残差 0.1mm、支撑窗脚 yaw 与官方
+//     angleRanges 逐值吻合，raw 下锚残差 1.6m+）。共轭统一在运行时
+//     core/Locomotion.js buildClip 入轨处做（json 保持 psa 原样，本脚本不预处理）
 //     ⚠ 例外（157 轮实测）：根链骨 Splitter/Skeleton 的 psa 轨道值是 GLB rest
 //     的逆（Splitter 恒 (0.5,0.5,0.5,-0.5) vs GLB rest +0.5，相差 120°）——
-//     直挂应用 = 整副骨架放倒（超人姿）。运行时 core/Locomotion.js buildClip
-//     统一修正（根链跳过旋转轨道、Splitter 直接子骨左乘 restQ 换系），本脚本
-//     保持 psa 数据原样导出
-//   - 位置：psa cm × 0.01 = GLB m（L_Hip 11.522cm ↔ 0.11522m 分毫不差）
+//     直挂应用 = 整副骨架放倒（超人姿）。运行时 buildClip 统一修正（根链跳过
+//     旋转轨道），本脚本保持 psa 数据原样导出
 //   - 只保留有动画的骨（LB 恰好 12 根：Splitter/Pelvis + 双腿链），
 //     恒定轨道不发（mixer 缺轨=保持 rest，骨架 rest 即官方 bind）
 import fs from 'node:fs'
@@ -148,15 +151,13 @@ const SRC = {
   // 30%——下蹲过渡由权重坡合成，命中区按同比例缩放）
   crouch: {
     idle: 'assets-raw/core-psa/TP_Core_CrouchIdle_LB.psa',
-    // 蹲走全 8 向：walkE/W 已接入（蹲走拉出 pull 变体）；斜向 4 向 + N/S 数据
-    // 就绪待玩法决策（斜向蹲走/背向蹲走均无现有波次类型）
+    // 蹲走三向：E/W 接入蹲走拉出 pull 变体、N 接入 walkout 沿 z 前进；斜向
+    // 4 向（NE/NW/SE/SW）曾随「全 8 向数据就绪待玩法决策」一并导出——运行时
+    // 零消费（白占开局关键路径预载 ~48KB），已随 14 轮清理剔除。将来真做
+    // 斜向蹲走波再从 assets-raw/core-psa 重引入
     walkN: 'assets-raw/core-psa/TP_Core_CrouchWalkN_LB.psa',
     walkE: 'assets-raw/core-psa/TP_Core_CrouchWalkE_LB.psa',
     walkW: 'assets-raw/core-psa/TP_Core_CrouchWalkW_LB.psa',
-    walkNE: 'assets-raw/core-psa/TP_Core_CrouchWalkNE_LB.psa',
-    walkNW: 'assets-raw/core-psa/TP_Core_CrouchWalkNW_LB.psa',
-    walkSE: 'assets-raw/core-psa/TP_Core_CrouchWalkSE_LB.psa',
-    walkSW: 'assets-raw/core-psa/TP_Core_CrouchWalkSW_LB.psa',
   },
 }
 const out = {}
@@ -182,10 +183,6 @@ const IK_Z_REPAIRS = [
   { clip: out.crouch.idle, bad: 'R', name: 'crouchIdle' },
   { clip: out.crouch.walkE, bad: 'R', name: 'crouchWalkE' },
   { clip: out.crouch.walkW, bad: 'L', name: 'crouchWalkW' },
-  // 斜向蹲走同族缺陷（L 侧抬高 1.3~1.6cm；165 轮普查发现，当前无波型使用、
-  // 数据先治好备将来斜向波）：SE 0.136/0.120、SW 0.136/0.123
-  { clip: out.crouch.walkSE, bad: 'L', name: 'crouchWalkSE' },
-  { clip: out.crouch.walkSW, bad: 'L', name: 'crouchWalkSW' },
 ]
 const CW_STEP_CANON = 0.735 // 官方蹲走步距（Locomotion.CROUCH_WALK_STEP 同源）
 for (const { clip, bad, name } of IK_Z_REPAIRS) {

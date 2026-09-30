@@ -38,7 +38,19 @@ export function buildClip(jsonClip, skeletonRoot, name = 'loco') {
       if (t.p) tracks.push(new THREE.VectorKeyframeTrack(`${boneName}.position`, jsonClip.times, t.p))
       continue
     }
-    tracks.push(new THREE.QuaternionKeyframeTrack(`${boneName}.quaternion`, jsonClip.times, t.q))
+    // psa 旋转四元数按共轭入轨（2026-09-29 畸形 r1 修复）：psa 存储的是关节
+    // 旋转的逆四元数——直挂（raw）= 官方姿态逐骨取反，腿链 FK 整条抬腿朝天
+    //（位置被钉地 IK 追锚掩盖、脚朝向修正忠实还原垃圾朝向 = 蟹脚/下扣/剪刀
+    // 交叉的根因）。实证（scripts 外离线 FK，2026-09-29）：conj 后官方锚残差
+    // 0.1mm（runN/walkN/runE/runW 四 clip 全绿），支撑窗脚 yaw 与官方 angleRanges
+    // 逐值吻合（runN −0.1..−11.1°、walkN −7.9..−20.5°、runE −40..−45.4°、
+    // runW L +25.8..+38.9°）；raw 下锚残差 1.6m+ 级、yaw 全跑飞
+    const q = t.q
+    const conj = new Array(q.length)
+    for (let i = 0; i < q.length; i += 4) {
+      conj[i] = -q[i]; conj[i + 1] = -q[i + 1]; conj[i + 2] = -q[i + 2]; conj[i + 3] = q[i + 3]
+    }
+    tracks.push(new THREE.QuaternionKeyframeTrack(`${boneName}.quaternion`, jsonClip.times, conj))
     if (t.p) tracks.push(new THREE.VectorKeyframeTrack(`${boneName}.position`, jsonClip.times, t.p))
   }
   if (!tracks.length) return null
@@ -101,8 +113,8 @@ export function buildLocomotion(locoJson, heroKey, skeletonRoot) {
     c.blendMode = THREE.AdditiveAnimationBlendMode
   }
   // 161 轮玩法收敛（纯移动靶：不停步/不跳）后停步转身踏步（turn 8 向）、急停
-  // 支架（stopAdd）与跳 peek（jump 三段）整层下线——不再构建，json 里的对应
-  // 集是待清理的遗留数据
+  // 支架（stopAdd）与跳 peek（jump 三段）整层下线——不再构建，json 里的对应集
+  // 已随 14 轮从生成器输出剔除（斜向蹲走 NE/NW/SE/SW 同趟清理，运行时零消费）
   return { walk, run, strafe, death, runAdd, crouchIdle, crouchWalk }
 }
 
@@ -181,6 +193,7 @@ export function locoWeights({ moveW, runW, strafeW = 0, hasStrafe = false }, out
 
 // 官方 IK 锚曲线的支撑/摆动落地窗（锚 z = 踝离地高，psa 实测）：支撑
 // 0.123~0.155、摆动 0.31+——脚步声/落地事件如需判定窗，用 0.21/0.26 分离带。
-// （旧「支撑窗钉地状态机」已在 2026-09-11 抽搐修复中移除：官方锚曲线全程
-// 驱动脚部，不存在释放回 clip 姿态的动作——释放窗内慢放=拖拽、快放=瞬移，
-// 双向都是跳变）
+// （注记 reconciliation，2026-09-29：旧注「支撑窗钉地状态机已于 2026-09-11
+// 移除、锚曲线全程驱动脚部」已过时——D2 轮起 Bot._stepFootPin 重新启用世界系
+// 钉固状态机（入带 ≤0.156·s 锁存、>0.19·s 提离、>0.21·s 交还+120ms loose 混
+// 合），锚曲线仍是唯一目标源、不回退 clip 姿态；本带值即其阈值的官方依据）

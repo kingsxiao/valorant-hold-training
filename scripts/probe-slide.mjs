@@ -53,13 +53,21 @@ const out = await page.evaluate(async () => {
     b._reachClampN = 0 // D2 钳制触发率探针：逐场景清零
     b._pinDbg = null // 钉地状态机诊断（下一 tick 重建计数）：逐场景清零
     const warm = Math.round(1.2 / dt)
-    for (let i = 0; i < warm; i++) { b.moveToward(vx, dt, vz); g.bots.step(dt, 1) }
+    // 面向 = 运动方向（N 场景顺跑向；横移场景正对玩家 yaw=0）。2026-09-29 畸形
+    // r1：锚前轴修正为 +psa.x 后，N 场景若仍 yaw=0 + vz<0 = 逆跑向倒放（锚与
+    // 腿链 FK 反向，支撑末 dH 拉出可达域=假病理）——面向运动方向才是 runN/
+    // walkN 的官方消费几何（walkout 波沿跑向同款）；预热期即锁定防测量窗开头
+    // 的换向瞬态
+    const faceYaw = vz < 0 ? Math.PI : 0
+    for (let i = 0; i < warm; i++) { b.moveToward(vx, dt, vz); g.bots.step(dt, 1); b.mesh.rotation.y = faceYaw; g.bots.step(0, 1) }
     const rows = []
     const N = Math.round(sec / dt)
     for (let i = 0; i < N; i++) {
       b.moveToward(vx, dt, vz)
       g.bots.step(dt, 1)
-      b.mesh.rotation.y = 0; g.bots.step(0, 1) // 锁正对：纯垂直横移几何（玩家在 +z，GLB 正面 +Z ⇒ 正对 yaw=0（164 轮）；远离玩家后朝向 lerp 会把横移扭成斜向，测出假滑步）
+      // 锁面向：横移场景正对（玩家在 +z，GLB 正面 +Z ⇒ 正对 yaw=0（164 轮）；
+      // 远离玩家后朝向 lerp 会把横移扭成斜向，测出假滑步）；N 场景顺跑向（见上）
+      b.mesh.rotation.y = faceYaw; g.bots.step(0, 1)
       b.mesh.updateMatrixWorld(true)
       const row = { v: b.velX }
       for (const leg of b._strafeRig.legs) {
@@ -89,10 +97,12 @@ const out = await page.evaluate(async () => {
     //  bothAir  = 双踝同步腾空（y>0.25m）tick 占比（官方 runN 0% / strafe ≤8%）
     //  hoverPct = 贴地悬停带（平台+2cm~+6cm，既非钉地也非真摆动弧）tick 占比
     //             （审计修前支撑相悬空 29~33% → 门 <5%）
-    //  liftMax  = 支撑相（y<0.14，与滑速判定同口径）单脚近地带（≤平台+10cm）
-    //             内最大抬升（蹬地提踵口径，门 ≤4cm）。审计 #10：整窗口径下
-    //             摆动弧自然填满 10cm 计量带、门不可判（基准卡 ⚠ 注同此结论
-    //             ——须限支撑相 tick 才与门同口径）
+    //  liftMax  = 支撑相（y<0.16）单脚近地带（≤平台+10cm）内最大抬升（蹬地提
+    //             踵口径，门 ≤4cm）。审计 #10：整窗口径下摆动弧自然填满 10cm
+    //             计量带、门不可判（基准卡 ⚠ 注同此结论——须限支撑相 tick 才
+    //             与门同口径）。2026-09-29 量程放宽 y<0.14→0.16：提踵目标帽
+    //             yCap=平台+3.2cm≈0.157 世界高，旧 0.14 窗把提踵弧顶裁掉——
+    //             计量口径修正（探针量程，非门值；门 ≤4cm 不动）
     const plat = { L: 9, R: 9 }
     for (const r of rows) for (const s of ['L', 'R']) plat[s] = Math.min(plat[s], r[s].y)
     let both = 0, hover = 0
@@ -102,7 +112,7 @@ const out = await page.evaluate(async () => {
       for (const s of ['L', 'R']) {
         const h = r[s].y - plat[s]
         if (h > 0.02 && h <= 0.06) hover++
-        if (r[s].y < 0.14 && h > 0.02 && h <= 0.10) liftMax[s] = Math.max(liftMax[s], h)
+        if (r[s].y < 0.16 && h > 0.02 && h <= 0.10) liftMax[s] = Math.max(liftMax[s], h)
       }
     }
     // 诊断字段（163 轮）：门比较器只读上列字段，以下为 bothAir/hover 残余病理的

@@ -28,9 +28,11 @@ const JSON_CLIP = {
     { b: 'Nope_Bone', q: [0, 0, 0, 1] }, // 目标骨架没有 → 跳过
   ],
 }
+// psa 旋转按共轭入轨（2026-09-29 畸形 r1）：xyz 取反、w 保留
+const conjOf = (q) => q.flatMap((_, i) => (i % 4 < 3 ? [-q[i]] : [q[i]]))
 
 describe('buildClip 骨名后缀解析', () => {
-  it('psa 无后缀骨名 → GLB _NNNN 后缀骨名建轨道；缺骨跳过；四元数/位置原样保留', () => {
+  it('psa 无后缀骨名 → GLB _NNNN 后缀骨名建轨道；缺骨跳过；四元数按共轭入轨、位置原样保留', () => {
     const root = fakeHeroSkeleton([['Pelvis', '0131'], ['L_Hip', '0136']])
     const clip = buildClip(JSON_CLIP, root, 'runN')
     expect(clip.name).toBe('runN')
@@ -43,7 +45,7 @@ describe('buildClip 骨名后缀解析', () => {
     const q = clip.tracks.find(t => t.name === 'L_Hip_0136.quaternion')
     expect(q.values.length).toBe(12) // 3 帧 × 4 分量
     // KeyframeTrack 内部转 Float32（0.05 → 0.0500000007…）→ 逐分量近似比对
-    JSON_CLIP.tracks[1].q.forEach((v, i) => expect(q.values[i]).toBeCloseTo(v, 6))
+    conjOf(JSON_CLIP.tracks[1].q).forEach((v, i) => expect(q.values[i]).toBeCloseTo(v, 6))
     const p = clip.tracks.find(t => t.name === 'Pelvis_0131.position')
     JSON_CLIP.tracks[0].p.forEach((v, i) => expect(p.values[i]).toBeCloseTo(v, 6))
   })
@@ -99,26 +101,26 @@ describe('buildClip psa 根链参考系修正（Splitter/Skeleton 轨道值为 G
     ROOT_CLIP.tracks[0].p.forEach((v, i) => expect(sp.values[i]).toBeCloseTo(v, 6))
   })
 
-  it('非根链骨（含 Splitter 直接子骨）轨道原样保留——无需逐骨换系', () => {
+  it('非根链骨（含 Splitter 直接子骨）旋转按共轭入轨——无需逐骨换系', () => {
     const root = heroSkeleton()
     const clip = buildClip(ROOT_CLIP, root, 'runN')
-    // Pelvis 是 Splitter 直接子骨：psa 局部与 GLB 局部同约定，原样保留
+    // Pelvis 是 Splitter 直接子骨：psa 局部四元数共轭后即 GLB 局部（畸 r1 修复）
     const pelvis = clip.tracks.find(t => t.name === 'Pelvis_0147.quaternion')
-    ROOT_CLIP.tracks[2].q.forEach((v, i) => expect(pelvis.values[i]).toBeCloseTo(v, 6))
-    // 孙骨同样原样
+    conjOf(ROOT_CLIP.tracks[2].q).forEach((v, i) => expect(pelvis.values[i]).toBeCloseTo(v, 6))
+    // 孙骨同样共轭
     const hip = clip.tracks.find(t => t.name === 'L_Hip_0138.quaternion')
-    ROOT_CLIP.tracks[3].q.forEach((v, i) => expect(hip.values[i]).toBeCloseTo(v, 6))
+    conjOf(ROOT_CLIP.tracks[3].q).forEach((v, i) => expect(hip.values[i]).toBeCloseTo(v, 6))
   })
 
-  it('无 Splitter 的骨架（Mixamo XBot 回退）→ 全部原样保留（旧行为）', () => {
+  it('无 Splitter 的骨架（Mixamo XBot 回退）→ 同样共轭（口径不分支）', () => {
     const root = fakeHeroSkeleton([['Pelvis', '0131'], ['L_Hip', '0136']])
     const clip = buildClip(JSON_CLIP, root, 'runN')
     const q = clip.tracks.find(t => t.name === 'L_Hip_0136.quaternion')
-    JSON_CLIP.tracks[1].q.forEach((v, i) => expect(q.values[i]).toBeCloseTo(v, 6))
+    conjOf(JSON_CLIP.tracks[1].q).forEach((v, i) => expect(q.values[i]).toBeCloseTo(v, 6))
   })
 })
 
-describe('buildClip 官方空间口径（原始骨架空间：轨道全原样，缩放统一在运行时消费）', () => {
+describe('buildClip 官方空间口径（位置轨道原样、缩放统一在运行时消费；旋转共轭入轨）', () => {
   const S = 1.0461 // 高个英雄归一化缩放（UserAssets normalizeAgent：身高 1.721 → 1.8/1.721）
   // 带根缩放的假骨架：骨名按 json 实际出现面建（含根链/骨盆/IK 足骨/武器挂点
   // 等超集）。官方空间=原始骨架空间（2026-09-28 二轮定稿）：一轮曾在构建期 ÷s，
@@ -138,7 +140,7 @@ describe('buildClip 官方空间口径（原始骨架空间：轨道全原样，
   const allClips = (o, prefix = '') => Object.entries(o ?? {}).flatMap(([k, v]) =>
     v?.tracks ? [[`${prefix}${k}`, v]] : allClips(v, `${prefix}${k}.`))
 
-  it('官方 json 全集逐轨断言：位置/旋转轨道原样（缩放骨架不改变轨道值；death/runAdd/core 全覆盖）', () => {
+  it('官方 json 全集逐轨断言：位置原样、旋转按共轭（xyz 取反 w 留）；death/runAdd/core 全覆盖', () => {
     const locoJson = JSON.parse(fs.readFileSync('public/models/locomotion.json', 'utf8'))
     const clips = allClips(locoJson)
     // 用例面防空转：death（根位移/IK 足骨/武器挂点）与 runAdd（Splitter）确有 p 轨
@@ -157,7 +159,13 @@ describe('buildClip 官方空间口径（原始骨架空间：轨道全原样，
         if (t.q) {
           const tr = clip.tracks.find(x => x.name === node + '.quaternion')
           if (!tr) continue // 根链（Splitter/Skeleton）只保留位置轨道
-          for (let i = 0; i < t.q.length; i++) expect(tr.values[i]).toBeCloseTo(t.q[i], 5)
+          // psa 四元数共轭入轨（畸 r1）：|q| 归一不破坏、xyz 变号
+          for (let i = 0; i < t.q.length; i += 4) {
+            expect(tr.values[i]).toBeCloseTo(-t.q[i], 5)
+            expect(tr.values[i + 1]).toBeCloseTo(-t.q[i + 1], 5)
+            expect(tr.values[i + 2]).toBeCloseTo(-t.q[i + 2], 5)
+            expect(tr.values[i + 3]).toBeCloseTo(t.q[i + 3], 5)
+          }
         }
         if (t.p) {
           const tr = clip.tracks.find(x => x.name === node + '.position')
@@ -166,6 +174,18 @@ describe('buildClip 官方空间口径（原始骨架空间：轨道全原样，
         }
       }
     }
+  })
+
+  it('共轭语义：psa 存储关节旋转的逆——轨道应用后骨局部 = Ry(−θ)（psa Ry(+θ)）', () => {
+    const root = fakeHeroSkeleton([['Pelvis', '9']])
+    const th = 0.4
+    const q = [0, Math.sin(th / 2), 0, Math.cos(th / 2)]
+    const clip = buildClip({ duration: 0.6, times: [0, 0.6], tracks: [{ b: 'Pelvis', q: [...q, ...q] }] }, root, 'x')
+    const tr = clip.tracks.find(t => t.name === 'Pelvis_9.quaternion')
+    const bone = root.children[0]
+    bone.quaternion.set(tr.values[0], tr.values[1], tr.values[2], tr.values[3])
+    const e = new THREE.Euler().setFromQuaternion(bone.quaternion, 'YXZ')
+    expect(e.y).toBeCloseTo(-th, 6) // 逆存储 → 运行时共轭还原官方 +θ
   })
 
   it('buildLocomotion 对缩放骨架同样原样（无任何按 scale.x 的构建期换算）', () => {

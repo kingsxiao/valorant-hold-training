@@ -15,15 +15,14 @@ const zOf = (clip, side) => Array.from({ length: clip.n }, (_, i) => clip.ik[sid
 const yOf = (clip, side) => Array.from({ length: clip.n }, (_, i) => clip.ik[side][i * 3 + 1])
 
 describe('全库锚 z 平台普查（两侧都触地，0.115~0.137 带内）', () => {
-  // 带宽含官方天然差异（走E 两侧差 5mm、蹲走SE/SW 最低 0.136、NW 0.1157
-  // ——均为未修复 clip 的原始数据）；被修复的三条曲线由下方专项 describe
-  // 用更紧的断言锁定
+  // 带宽含官方天然差异（走E 两侧差 5mm、蹲走N 最低 0.1157——均为未修复 clip
+  // 的原始数据）；被修复的三条曲线由下方专项 describe 用更紧的断言锁定。
+  // 斜向蹲走 NE/NW/SE/SW 已随 14 轮从生成器输出剔除（运行时零消费），用例同步收缩
   const cases = [
     ['core.walkN', '走N'], ['core.walkE', '走E'], ['core.walkW', '走W'],
     ['core.runN', '跑N'], ['core.runE', '跑E'], ['core.runW', '跑W'],
     ['crouch.idle', '蹲踞'], ['crouch.walkN', '蹲走N'], ['crouch.walkE', '蹲走E'],
-    ['crouch.walkW', '蹲走W'], ['crouch.walkNE', '蹲走NE'], ['crouch.walkNW', '蹲走NW'],
-    ['crouch.walkSE', '蹲走SE'], ['crouch.walkSW', '蹲走SW'],
+    ['crouch.walkW', '蹲走W'],
   ]
   for (const [path, label] of cases) {
     it(`${label} 两侧都触地（带 0.115~0.137，差 ≤6mm）`, () => {
@@ -105,8 +104,7 @@ describe('锚目标地面钳安全值（D6）：钳线恒低于本英雄支撑�
     }
     // 原始空间全库任一帧最低锚 ≥ 带下沿（上方普查另锁 ≤0.137 与两侧差）
     const paths = ['core.walkN', 'core.walkE', 'core.walkW', 'core.runN', 'core.runE', 'core.runW',
-      'crouch.idle', 'crouch.walkN', 'crouch.walkE', 'crouch.walkW',
-      'crouch.walkNE', 'crouch.walkNW', 'crouch.walkSE', 'crouch.walkSW']
+      'crouch.idle', 'crouch.walkN', 'crouch.walkE', 'crouch.walkW']
     for (const p of paths) {
       const clip = p.split('.').reduce((o, k) => o[k], loco)
       for (const side of ['L', 'R']) {

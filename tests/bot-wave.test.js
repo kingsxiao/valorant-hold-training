@@ -10,8 +10,7 @@ import * as THREE from 'three'
 import { BotManager } from '../src/entities/BotManager.js'
 import { Bot } from '../src/entities/Bot.js'
 import { CONFIG } from '../src/core/Config.js'
-
-const GAP = { x0: -9, x1: -6 } // 训练不变量：左缺口（MapBuilder 锁死）
+import { GAP_LEFT as GAP, SPAWN_Z } from '../src/world/corridor.js' // 训练不变量单一事实源
 const DT = 1 / 128
 
 // 桩 Bot：波次推进只依赖这些面；moveToward 默认走真实地面模型（速度积分出 pos）
@@ -20,6 +19,7 @@ function waveBot(over = {}) {
     active: true, mode: 'peek', peek: null, slot: null,
     pos: { x: 0, z: 0 }, velX: 0, velZ: 0,
     firstVisibleAt: -1, hidden: false,
+    now: () => 0, tagUntil: 0, // moveToward 的 tagging 消费面（未 tag = 不减速）
     hide() { this.hidden = true; this.active = false; this.mode = 'idle' },
     ...over,
   }
@@ -31,7 +31,7 @@ function mgrStub() {
   const mgr = Object.create(BotManager.prototype)
   mgr.now = () => 0
   mgr.params = { peekSide: 'left', speedMult: 1.0, rampUp: false, delayMin: 400, delayMax: 1400 }
-  mgr.map = { gaps: [GAP], spawn: { z: -17 } }
+  mgr.map = { gaps: [GAP], spawn: { z: SPAWN_Z } }
   mgr.stats = BotManager.prototype._freshStats.call(mgr)
   mgr._bot = () => waveBot()
   return mgr
@@ -163,13 +163,14 @@ describe('BotManager damage() 击杀清槽重排', () => {
 
 describe('BotManager pull 掷定几何不变量', () => {
   // 队列：0.99→pull；藏点 rand(1.8,2.4)、折返 rand(0,0.9)、jiggle 掷骰（<0.3 掷中）、
-  // 蹲走掷骰（桩无 anim.crouchWalk → F8 起不消耗）、双拉掷骰（默认 0.99 不掷中）
-  function spawnPull(queue, peekSide = 'left') {
-    const b = { peek: null, slot: null, place() {} } // 无 anim：蹲走掷骰短路
+  // 蹲走掷骰（桩无 anim.crouchWalk → F8 起不消耗）、走路掷骰（<0.25 掷中；蹲走
+  // 掷中/jiggle 波短路不消耗）、双拉掷骰（默认 0.99 不掷中）
+  function spawnPull(queue, peekSide = 'left', botOver = {}) {
+    const b = { peek: null, slot: null, place() {}, ...botOver } // 无 anim：蹲走掷骰短路
     const mgr = Object.create(BotManager.prototype)
     mgr.now = () => 0
     mgr.params = { peekSide, botDistance: 13 }
-    mgr.map = { gaps: [GAP], spawn: { z: -17 } }
+    mgr.map = { gaps: [GAP], spawn: { z: SPAWN_Z } }
     mgr._bot = () => b
     const slot = { nextAt: -1, bot: null, lastStyles: [] }
     mgr.hold = { slots: [slot, { nextAt: Infinity, bot: null, partner: true }] }
@@ -210,6 +211,48 @@ describe('BotManager pull 掷定几何不变量', () => {
     const b = spawnPull([0.99, 0.5, 0.5, 0.99])
     expect(b.peek.jiggleAt).toBe(0)
     expect(b.peek.crouchWalk).toBe(false) // 无官方蹲走 clip 的模型不进蹲走波（F8）
+  })
+
+  it('走路掷定：非蹲走非 jiggle 波掷中 walkPeekChance → peek.walk；蹲走掷中/jiggle 波 walk 恒 false（慢速档互斥）', () => {
+    // 队列：0.99→pull、0.5/0.5 几何、0.99 jiggle 不中（蹲走短路）、0.1 → walk 掷中（<0.25）
+    const b = spawnPull([0.99, 0.5, 0.5, 0.99, 0.1])
+    expect(b.peek.walk).toBe(true)
+    expect(b.peek.crouchWalk).toBe(false)
+    // 蹲走掷中（<0.2）→ 走路掷骰短路：不双掷慢速档
+    const c = spawnPull([0.99, 0.5, 0.5, 0.99, 0.1], 'left', { anim: { crouchWalk: {} } })
+    expect(c.peek.crouchWalk).toBe(true)
+    expect(c.peek.walk).toBe(false)
+    // jiggle 波（<0.3）无慢速档（露头即缩是快速变体）
+    const j = spawnPull([0.99, 0.5, 0.5, 0.1])
+    expect(j.peek.jiggleAt).not.toBe(0)
+    expect(j.peek.walk).toBe(false)
+    expect(j.peek.crouchWalk).toBe(false)
+  })
+})
+
+describe('BotManager walk 走路波（shift 静步级 62.8% 跑速）', () => {
+  it('walk pull 波稳态速度 ≈ 5.4×0.628；leave 缩回同走慢档（全程 62.8%）', () => {
+    const b = waveBot()
+    b.peek = { style: 'pull', startX: -11, turnX: -7.5, endX: -11, dir: 1, phase: 'out', jiggleAt: 0, crouchWalk: false, walk: true }
+    b.pos.x = -11
+    const mgr = mgrStub()
+    const slot = { nextAt: 1e9, bot: b }
+    for (let i = 0; i < 128; i++) mgr._stepSlot(slot, DT) // 1s：加速收敛到走路档
+    expect(b.velX).toBeCloseTo(CONFIG.bot.moveSpeed * CONFIG.training.walkMult, 1)
+    drive(mgr, slot, () => b.peek.phase !== 'out') // 到折返点换 leave
+    mgr._stepSlot(slot, DT) // 反向首步（摩擦减速起步）
+    for (let i = 0; i < 128; i++) mgr._stepSlot(slot, DT)
+    expect(b.velX).toBeCloseTo(-CONFIG.bot.moveSpeed * CONFIG.training.walkMult, 1)
+  })
+
+  it('walk cross 贯穿波同慢档', () => {
+    const b = waveBot()
+    b.peek = { style: 'cross', startX: -11.2, endX: -3.8, dir: 1, walk: true }
+    b.pos.x = -11.2
+    const mgr = mgrStub()
+    const slot = { nextAt: 1e9, bot: b }
+    for (let i = 0; i < 128; i++) mgr._stepSlot(slot, DT)
+    expect(b.velX).toBeCloseTo(CONFIG.bot.moveSpeed * CONFIG.training.walkMult, 1)
   })
 })
 
@@ -312,6 +355,7 @@ describe('Bot.place() 池复用归零（安全网：复用 Bot 不带上一条�
     bot._animAcc = 0.009
     bot.flinch = 1
     bot.hitFlash = 1
+    bot.tagUntil = 5 // 上一条命被打中的 tagging 残留
     bot.firstVisibleAt = 3
     bot.reactRecorded = true
     bot.walkPhase = 2
@@ -332,6 +376,7 @@ describe('Bot.place() 池复用归零（安全网：复用 Bot 不带上一条�
     expect(bot.anim.walk.time).toBe(0)
     expect(bot._animAcc).toBe(0)
     expect(bot.flinch).toBe(0)
+    expect(bot.tagUntil).toBe(0) // 复用 Bot 不带旧 tagging 减速
     expect(bot.firstVisibleAt).toBe(-1)
     expect(bot.reactRecorded).toBe(false)
     expect(bot.walkPhase).toBe(0)

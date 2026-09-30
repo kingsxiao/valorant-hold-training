@@ -133,7 +133,12 @@ export const CONFIG = {
     },
     classic: {
       name: 'Classic', slot: 'secondary', auto: false,
-      burst: true,                                               // 右键三连发
+      burst: true,                                               // 右键三连发（Alt Fire 口径见 alt）
+      alt: { count: 3, cooldown: 0.45, spreadStand: 1.9, crouchMult: 0.9 }, // 维基 Classic 页
+                                    // Alt Fire 行：三发「instantly」近同帧霰弹式扇出（不走左键
+                                    // 垂直 climb 表，水平随机扇），组间 ≈0.45s 冷却；组散布站立
+                                    // 1.9°、蹲 ×0.9。移动/跳跃惩罚不放宽：实际取 max(alt 值,
+                                    // 左键移动态口径)——跑步右键不比左键准
       fireRate: 6.75, magSize: Infinity, equipTime: 0.75,  // 维基 Normal 档（手枪 0.75/步枪 1.0/近战 0.6）
       damage: { head: 78, body: 26, leg: 22 },
       falloff: [                                                 // 30m 起 ×0.846（维基分距离表）
@@ -170,6 +175,13 @@ export const CONFIG = {
       name: 'Tactical Knife', slot: 'melee', auto: false,
       fireRate: 1.33, magSize: Infinity, equipTime: 0.6,  // 维基 Melee 页 Normal 档（Fast 0.3/Instant 0）
       damage: { head: 50, body: 50, leg: 50 }, range: 1.9,
+      // Alt Fire（维基 Melee 页定性「重刺：单发更高、恢复更长、范围/判定框略小」；
+      // 数值口径 Shacknews weapons 表）：射速 1.33→0.5/s、范围 1.9→1.7m、单发 75
+      alt: { damage: { head: 75, body: 75, leg: 75 }, fireRate: 0.5, range: 1.7 },
+      // 背刺 ×2（维基 Melee 页「deals double damage when striking the target's
+      // back」）：主/副攻击同乘；判定 = Bot 朝向·玩家方向点积（与 startDeath 的
+      // 死亡方向判定同口径，dot ≤ 0 = 玩家在 Bot 背后）
+      backstabMult: 2,
       moveSpeedMult: 1.25,                                       // 持刀 = 6.75 m/s
       sound: 'knife',
     },
@@ -182,6 +194,11 @@ export const CONFIG = {
     hitFlashTime: 0.09,
     deathTime: 0.55,
     spawnGuardMs: 250,      // 出生保护（不可被击中）
+    // 命中 tagging（3.0 补丁定值：「Bullet tagging changed from 75% slow >>> 72.5%
+    // slow」= 命中后移速乘 0.725，Fandom Patch Notes/3.0）：打中未杀的 Bot 走线减速，
+    // 补枪/跟枪提前量按真实对枪节奏练
+    taggingSpeed: 0.725,    // tagging 期间移速系数（5.4 → 3.92 m/s）
+    taggingTime: 2.0,       // tagging 持续（s）：每发命中重置（不叠加，取最新到期时刻）
   },
 
   // ---- 训练模式默认参数（可在菜单改）----
@@ -201,6 +218,10 @@ export const CONFIG = {
     crouchWalkChance: 0.2,  // pull 波掷定蹲走拉出的概率（官方蹲走循环，命中区经骨锚跟随蹲姿）
     crouchWalkSpeed: 2.7,   // 蹲走拉出移速（m/s）：本体口径 = 50% 跑速；播放松条可调
                             // （1.4-2.7）——步幅恒定、步频随移速（151 轮定案，回归测试锁死）
+    walkPeekChance: 0.25,   // 走路（shift）拉出波概率：非蹲走/非 jiggle 波掷定（cross 贯穿波同掷）
+    walkMult: 0.628,        // 走路移速系数：官方 shift 走 = 跑速 62.8%（5.4 → ≈3.39 m/s）——
+                            // 声音读局的中间档（比跑轻、比蹲走响）；步态 runW=(speed-3.0)/1.6
+                            // 同式覆盖、脚步声阈值 3.2 恰被 3.39 越过，声/步态链路零改动
     crossChance: 0.5,       // 每波风格：侧面跑过（贯穿缺口顺跑向）vs 正面横移走出（面向玩家拉出即缩）
     pullJiggleChance: 0.3,  // 拉出波里"露头即缩"jiggle-peek 的概率（拉到中段折返）
     doublePeekChance: 0.18, // 双拉波概率：同一波两人同帧拉出（同侧同风格锁步跟随）
@@ -343,9 +364,15 @@ export const CONFIG = {
 // 单发 0.18×climb/4.03（vandal 17.11° / phantom 16.16°），climb 标定值不动；
 // 垂直增量按 climb/4.03 等比缩放基线形状，
 // 水平摆幅 = √比例 × 实测包络（vandal 列 x 展宽 125px/phantom 57px → 峰峰 5-8°）。
-export function makeSprayPattern(n = 25, { prot = 6, swing = 5.9, climb = 16 } = {}) {
+export function makeSprayPattern(n = 25, { prot = 6, swing = 5.9, climb = 16, rng = null } = {}) {
   const K = climb / 4.03 // 垂直比例尺（基线形状 25 发累计 4.03°）
   const H = Math.sqrt(K) // 水平比例尺
+  // 逐次随机化（上方 335-341 行自述语义的落地）：rng 提供时本次扫射会话掷一次
+  // 方向（±1 镜像 50/50，"先右后左"可翻成"先左后右"）与幅度（实测包络 1.0°±0.3
+  // → [0.7,1.3] 系数，掷骰顺序先方向后幅度）；垂直 p 序列保持实测确定形状。
+  // rng 缺省 null = 确定性基线表（幅度标定锚定与表值锁测试用）
+  const dir = rng ? (rng() < 0.5 ? -1 : 1) : 1
+  const amp = rng ? 0.7 + rng() * 0.6 : 1
   const pat = []
   let p = 0
   for (let i = 0; i < n; i++) {
@@ -361,7 +388,7 @@ export function makeSprayPattern(n = 25, { prot = 6, swing = 5.9, climb = 16 } =
     // 方向：先向右漂再拉左 —— bo3.gg 记载 Phantom"vertical start with a rightward
     // lean, then horizontal pull left"，VALTRAIN 记载 Vandal 压枪"pull down then
     // micro-adjust down-left"（补偿左下 = 弹道右上漂）。y 正值 = 向左偏
-    const y = i < prot ? 0 : -Math.sin(t * Math.PI) * (0.16 + Math.min(1.0, Math.max(0, t) * 0.10)) * H
+    const y = i < prot ? 0 : dir * -Math.sin(t * Math.PI) * (0.16 + Math.min(1.0, Math.max(0, t) * 0.10)) * H * amp
     pat.push({ p, y })
   }
   return pat

@@ -190,6 +190,28 @@ describe('makeSprayPattern 后坐力弹道表', () => {
       expect(Math.abs(y)).toBeLessThan(10)
     }
   })
+
+  it('rng 注入（逐次随机化落地）：方向 ±镜像 + 幅度 [0.7,1.3] 缩放；垂直 p 与确定表逐项一致', () => {
+    const base = makeSprayPattern(30, { prot: 6, swing: 5.85, climb: 18 })
+    // 掷骰顺序先方向后幅度（makeSprayPattern 注释约定）：恒 0 → dir=-1、amp=0.7；恒 1 → dir=+1、amp=1.3
+    const neg = makeSprayPattern(30, { prot: 6, swing: 5.85, climb: 18, rng: () => 0 })
+    const pos = makeSprayPattern(30, { prot: 6, swing: 5.85, climb: 18, rng: () => 1 })
+    for (let i = 0; i < 30; i++) {
+      expect(neg[i].p, i).toBe(base[i].p) // 垂直形状保持实测确定，不随会话抖动
+      expect(pos[i].p, i).toBe(base[i].p)
+      expect(neg[i].y, i).toBeCloseTo(base[i].y * -0.7, 12)
+      expect(pos[i].y, i).toBeCloseTo(base[i].y * 1.3, 12)
+    }
+  })
+
+  it('不同会话（不同 rng 流）产出不同水平序列；保护窗恒 0 不受随机影响', () => {
+    let s = 0.1
+    const rng = () => (s = (s * 9301 + 0.2113) % 1) // 简单可复现乱序源
+    const a = makeSprayPattern(30, { prot: 6, swing: 5.85, climb: 18, rng })
+    const b = makeSprayPattern(30, { prot: 6, swing: 5.85, climb: 18, rng })
+    expect(a.some(({ y }, i) => Math.abs(y - b[i].y) > 1e-9)).toBe(true) // 不可背板
+    for (let i = 0; i < 6; i++) { expect(a[i].y).toBe(0); expect(b[i].y).toBe(0) }
+  })
 })
 
 describe('Rng（mulberry32 可复现伪随机）', () => {
@@ -259,6 +281,18 @@ describe('punchRecover 阶跃保持模型（60fps 实测）', () => {
 describe('蹲走拉出 crouchWalkChance', () => {
   it('默认 0.2（pull 波掷定蹲走拉出变体）', () => {
     expect(CONFIG.training.crouchWalkChance).toBe(0.2)
+  })
+})
+
+describe('走路拉出 walkPeekChance / walkMult', () => {
+  it('默认 0.25 掷定、62.8% 跑速系数（官方 shift 走 → ≈3.39m/s，介于跑与蹲走的声读中间档）', () => {
+    expect(CONFIG.training.walkPeekChance).toBe(0.25)
+    expect(CONFIG.training.walkMult).toBe(0.628)
+    const v = CONFIG.bot.moveSpeed * CONFIG.training.walkMult
+    expect(v).toBeGreaterThan(3.35)
+    expect(v).toBeLessThan(3.45)
+    expect(v).toBeGreaterThan(CONFIG.training.crouchWalkSpeed) // 慢于蹲走（2.7）……
+    expect(v).toBeLessThan(CONFIG.bot.moveSpeed)               // 更慢于跑（5.4）
   })
 })
 

@@ -4,6 +4,9 @@ import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BotManager } from '../src/entities/BotManager.js'
 import { CONFIG } from '../src/core/Config.js'
+import {
+  GAP_LEFT, GAP_RIGHT, SPAWN_Z, DOOR_WALL_FAR_Z,
+} from '../src/world/corridor.js' // 训练不变量单一事实源（手抄死值已删，见 corridor.test.js）
 
 // 「Bot 距离」botDistance（单位米，绝对距离非倍率）：玩家出生架枪位（map.spawn.z）
 // 到 Bot 出场横移线 z 的距离——z = spawn.z − botDistance，再钳走廊硬域
@@ -13,10 +16,9 @@ import { CONFIG } from '../src/core/Config.js'
 //  (d) 藏点楔形外扩 _hideOff：可见楔形半宽 = hw·D/7.8，藏点在楔形外留 0.5m
 //  (e) 双拉同线 + cross 副 Bot 终点回贴主 Bot 终点（副端点楔形不变量）
 //  (f) 接线锁：滑条 → applyAll → params → place 全链，旧消费点不得恢复
-const GAP = { x0: -9, x1: -6 }  // 左窄口（MapBuilder 训练不变量，hw=1.5）
-const GAP_R = { x0: 3, x1: 7 }  // 右宽口（hw=2：楔形外扩最先起效的口）
-const SPAWN_Z = -17             // 出生架枪位（MapBuilder.js:284 固定）
-const TO_WALL = SPAWN_Z - -24.8 // spawn.z − 门墙远面 = 7.8（楔形投影分母）
+const GAP = GAP_LEFT  // 左窄口（hw=1.5）
+const GAP_R = GAP_RIGHT // 右宽口（hw=2：楔形外扩最先起效的口）
+const TO_WALL = SPAWN_Z - DOOR_WALL_FAR_Z // spawn.z − 门墙远面 = 7.8（楔形投影分母）
 
 // 楔形几何：深度 D 处玩家透过缺口看到的可见楔形横向半宽 / 两端外余量（带方向）
 const gapCx = (gap) => (gap.x0 + gap.x1) / 2
@@ -57,7 +59,8 @@ function spawnOnce(gap, D, randVal, peekSide = 'left', mapExtra = {}) {
 }
 
 // 出一波双拉（peek-double.test.js spawnWave 同款模板）：Math.random 用队列喂——
-// cross 波两发（风格抽签 + 双拉掷骰）、pull 波五发（风格/藏点/折返/jiggle/双拉，
+// cross 波三发（风格抽签 + walk 掷骰 + 双拉掷骰）、pull 波六发（风格/藏点/折返/
+// jiggle/walk/双拉，
 // 桩无 anim → 蹲走掷骰短路不消耗）。peekSide 决定出发侧
 function spawnDouble(gap, D, queue, peekSide = 'left') {
   const bots = []
@@ -143,7 +146,7 @@ describe('藏点楔形外扩 _hideOff', () => {
 // ---- (e) 双拉同线 + 副 Bot 端点楔形不变量 ----
 describe('双拉同线 + 副端点楔形不变量', () => {
   it('cross 双拉：两人同一条横移线（placed.z 相同且 = spawn.z − D）', () => {
-    const { bots } = spawnDouble(GAP, 16, [0, 0]) // 风格 0→cross / 双拉 0<0.18 掷中
+    const { bots } = spawnDouble(GAP, 16, [0, 0.99, 0]) // 风格 0→cross / walk 0.99 不中 / 双拉 0<0.18 掷中
     expect(bots.length).toBe(2)
     expect(bots[0].placed.z).toBe(SPAWN_Z - 16)
     expect(bots[1].placed.z).toBe(SPAWN_Z - 16)
@@ -155,7 +158,7 @@ describe('双拉同线 + 副端点楔形不变量', () => {
     // Bot 终点。右宽口用 peekSide right 复现该最坏场景
     for (const [gap, side] of [[GAP, 'left'], [GAP_R, 'right']]) {
       for (const D of [16, 18]) {
-        const { bots } = spawnDouble(gap, D, [0, 0], side)
+        const { bots } = spawnDouble(gap, D, [0, 0.99, 0], side)
         const [b1, b2] = bots
         expect(b2.peek.endX).toBe(b1.peek.endX) // 终点回贴（不随 −LANE 平移）
         expect(endMargin(b2.peek, gap, D)).toBeGreaterThanOrEqual(0.5 - 1e-9)
@@ -166,8 +169,8 @@ describe('双拉同线 + 副端点楔形不变量', () => {
 
   it('pull 双拉：副位起点/折返/终点同差 −LANE（沿 −dir 深入藏侧，楔形外无需改）', () => {
     // 队列：0.99→pull；藏点 rand(1.8,2.4)=2.394；折返 rand(0,0.9)=0.891；
-    // 0.99≥0.3 无 jiggle（桩无 anim → 蹲走掷骰短路不消耗）；0→双拉掷中
-    const { bots } = spawnDouble(GAP, 16, [0.99, 0.99, 0.99, 0.99, 0])
+    // 0.99≥0.3 无 jiggle（桩无 anim → 蹲走掷骰短路不消耗）；0.99→walk 不中；0→双拉掷中
+    const { bots } = spawnDouble(GAP, 16, [0.99, 0.99, 0.99, 0.99, 0.99, 0])
     expect(bots.length).toBe(2)
     const [b1, b2] = bots
     expect(b2.peek.style).toBe('pull')

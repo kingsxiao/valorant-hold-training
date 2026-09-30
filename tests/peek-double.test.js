@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { BotManager, shiftPeek } from '../src/entities/BotManager.js'
+import { GAP_LEFT as GAP, SPAWN_Z } from '../src/world/corridor.js' // 训练不变量单一事实源
 
 // 双拉波（166 轮）：主槽掷中 doublePeekChance 时第二人同帧拉出——同侧同风格，
 // 整条横移线路沿行进方向后退 doublePeekLane → 场上锁步跟随。副槽平时休眠
 // （nextAt=Infinity），只随双拉波唤醒，不自主排程、不被闪拉催单飞
-const GAP = { x0: -9, x1: -6 }
 const LANE = 0.9
 
 describe('shiftPeek 双拉第二人线路平移', () => {
@@ -34,13 +34,14 @@ describe('shiftPeek 双拉第二人线路平移', () => {
 })
 
 // 出一波并返回主/副槽与出场 Bot 列表：Math.random 用队列喂——固定侧别下
-// 第一发是风格抽签（<0.5 cross），随后 pull 分支内部各掷、最后一发是双拉掷骰
+// 第一发是风格抽签（<0.5 cross），cross 波随后 walk 掷骰再双拉掷骰；pull 分支
+// 内部各掷（含蹲走/walk 慢速档），最后一发是双拉掷骰
 function spawnWave(queue) {
   const bots = []
   const mgr = Object.create(BotManager.prototype)
   mgr.now = () => 0
   mgr.params = { peekSide: 'left', botDistance: 13 }
-  mgr.map = { gaps: [GAP], spawn: { z: -17 } }
+  mgr.map = { gaps: [GAP], spawn: { z: SPAWN_Z } }
   mgr._bot = () => {
     // anim.crouchWalk 在场：蹲走掷骰照常消耗随机数（F8 起无官方蹲走 clip 的
     // 模型不掷、不消耗——本桩模型蹲走 clip 齐备）
@@ -62,13 +63,14 @@ function spawnWave(queue) {
 
 describe('BotManager 双拉波', () => {
   it('cross 掷中双拉：第二人同帧出场，起点后退一个身位、终点回贴主 Bot（楔形不变量）', () => {
-    const { bots, partner } = spawnWave([0, 0]) // 风格 0→cross / 双拉 0<0.18 → 掷中
+    const { bots, partner } = spawnWave([0, 0.99, 0]) // 风格 0→cross / walk 0.99 不中 / 双拉 0<0.18 掷中
     expect(bots.length).toBe(2)
     const [, b2] = bots
     expect(partner.bot).toBe(b2)
     expect(b2.slot).toBe(partner)
     expect(b2.peek.style).toBe('cross')
     expect(b2.peek.dir).toBe(1)
+    expect(b2.peek.walk).toBe(false) // walk 掷骰 0.99：非走路波
     expect(b2.peek.startX).toBeCloseTo(GAP.x0 - 2.2 - LANE, 6)
     // 终点共享主 Bot 终点（不随 −LANE 平移）：纯平移会把副端点推进可见楔形
     // （_hideOff 同源约束）——「消失位置在墙后」的回归锁
@@ -77,7 +79,7 @@ describe('BotManager 双拉波', () => {
   })
 
   it('双拉未掷中：只出一只，副槽保持休眠', () => {
-    const { bots, partner } = spawnWave([0, 0.99]) // cross / 双拉 0.99 ≥ 0.18
+    const { bots, partner } = spawnWave([0, 0.99, 0.99]) // cross / walk 0.99 不中 / 双拉 0.99 ≥ 0.18
     expect(bots.length).toBe(1)
     expect(partner.bot).toBeNull()
     expect(partner.nextAt).toBe(Infinity)
@@ -85,12 +87,14 @@ describe('BotManager 双拉波', () => {
 
   it('pull 掷中双拉：第二人同风格锁步（startX/turnX 同差 -LANE，crouchWalk 照抄）', () => {
     // 队列：0.99→pull；0.5/0.5→藏点 rand(1.8,2.4) 与折返 rand(0,0.9)；
-    // 0.5≥0.3 无 jiggle；0.5≥0.2 不蹲走；0→双拉掷中
-    const { bots, partner } = spawnWave([0.99, 0.5, 0.5, 0.5, 0.5, 0])
+    // 0.5≥0.3 无 jiggle；0.5≥0.2 不蹲走（桩 anim.crouchWalk 在场，掷骰消耗）；
+    // 0.5≥0.25 不走 walk；0→双拉掷中
+    const { bots, partner } = spawnWave([0.99, 0.5, 0.5, 0.5, 0.5, 0.5, 0])
     expect(bots.length).toBe(2)
     const [b1, b2] = bots
     expect(b2.peek.style).toBe('pull')
     expect(b2.peek.crouchWalk).toBe(b1.peek.crouchWalk)
+    expect(b2.peek.walk).toBe(b1.peek.walk) // walk 照抄（同风格锁步）
     expect(b2.peek.startX).toBeCloseTo(b1.peek.startX - LANE, 6)
     expect(b2.peek.turnX).toBeCloseTo(b1.peek.turnX - LANE, 6)
     expect(partner.bot).toBe(b2)

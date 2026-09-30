@@ -52,7 +52,18 @@ export function strafeRampW({ style, speed, minSpeed = 0.25, rampSpeed = 1.15 })
 // 相位由里程推进（每步 π，调用侧保证横移步距口径，见 Bot.STRAFE_STEP_LEN）；
 // abduct 消费端 Bot._applyLegPose 的 Z 轴镜像取反不在本函数——与单测锁值解耦
 const STRAFE_WALKE = { base: 0.49, swing: 1.06 }
-export function strafeStepPose({ speed, phase, lateralVel, moveSpeed = 5.4 }) {
+// leg() 内联化暂存（thigh/knee 顺序消费后立即写入 out——128Hz 热路径零分配，
+// 与 locoWeights 的 _lwOut 同手法）；单次只有一份，L 消费完才算 R
+const _ssLegOut = { thigh: 0, knee: 0 }
+function _ssLeg(p, thighAmp, b, base, swing) {
+  _ssLegOut.thigh = thighAmp * Math.sin(p) + b
+  _ssLegOut.knee = base + swing * Math.max(0, -Math.sin(p - 0.5))
+  return _ssLegOut
+}
+// out（可选）：热路径调用侧传自己的模块级 scratch；缺省新建 = 纯函数语义不变
+// （单测锁值不传 out，返回形状与旧版逐字段一致）
+export function strafeStepPose({ speed, phase, lateralVel, moveSpeed = 5.4 }, out = null) {
+  const o = out ?? { s: 0, yawL: 0, yawR: 0, thighL: 0, thighR: 0, kneeL: 0, kneeR: 0, abductL: 0, abductR: 0, bob: 0, lean: 0 }
   const t = Math.min(1, Math.max(0, (speed - 3.39) / (moveSpeed - 3.39)))
   const base = STRAFE_WALKE.base + (0.20 - STRAFE_WALKE.base) * t
   const swing = STRAFE_WALKE.swing + (GAIT.run.knee - STRAFE_WALKE.swing) * t
@@ -62,25 +73,20 @@ export function strafeStepPose({ speed, phase, lateralVel, moveSpeed = 5.4 }) {
   // 前腿沿运动方向跨（W 的 L 前跨 +0.535、E 的 L 后蹬 −0.582）
   const thighAmp = 0.548 + (sgn > 0 ? 0.109 : -0.109)
   const thighBias = -sgn * 0.56
-  const leg = (p, b) => ({
-    thigh: thighAmp * Math.sin(p) + b,
-    knee: base + swing * Math.max(0, -Math.sin(p - 0.5)),
-  })
-  const L = leg(phase, thighBias)
-  const R = leg(phase + Math.PI, -thighBias)
+  const L = _ssLeg(phase, thighAmp, thighBias, base, swing)
+  o.thighL = L.thigh; o.kneeL = L.knee
+  const R = _ssLeg(phase + Math.PI, thighAmp, -thighBias, base, swing)
+  o.thighR = R.thigh; o.kneeR = R.knee
   const yawOsc = Math.cos(phase) * 0.12
   const ab = Math.cos(phase) * 0.41 * (0.75 + 0.25 * t)
-  return {
-    s: Math.cos(phase),
-    yawL: sgn * 0.90 + yawOsc,
-    yawR: -sgn * 0.90 + yawOsc,
-    thighL: L.thigh, thighR: R.thigh,
-    kneeL: L.knee, kneeR: R.knee,
-    abductL: -ab + dir * 0.155,
-    abductR: ab + dir * 0.155,
-    bob: (1 - Math.abs(Math.cos(phase))) * (0.01 + speed * 0.0036),
-    lean: leanInto(lateralVel),
-  }
+  o.s = Math.cos(phase)
+  o.yawL = sgn * 0.90 + yawOsc
+  o.yawR = -sgn * 0.90 + yawOsc
+  o.abductL = -ab + dir * 0.155
+  o.abductR = ab + dir * 0.155
+  o.bob = (1 - Math.abs(Math.cos(phase))) * (0.01 + speed * 0.0036)
+  o.lean = leanInto(lateralVel)
+  return o
 }
 
 // 向移动方向微倾（与程序化假人 _stepLegs 同参数）；回正速率由调用侧平滑。

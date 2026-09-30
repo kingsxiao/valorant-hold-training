@@ -1,6 +1,14 @@
 import { Bot } from './Bot.js'
 import { CROUCH_WALK_SPEED } from '../core/Locomotion.js'
 import { CONFIG } from '../core/Config.js'
+import { DOOR_WALL_FAR_Z, PEEK_Z_MIN, PEEK_Z_MAX } from '../world/corridor.js'
+
+// Bot 出场横移线的走廊硬域（DOOR_WALL_FAR_Z/PEEK_Z_MIN/PEEK_Z_MAX）：几何派生
+// 单一事实源在 world/corridor.js（门墙远面 -24.8、后墙内面 -35.6 + 0.4m 余量 →
+// [−35.2,−25.2]，含墙盒原值与推导式）——越界会贴/穿墙或被 4m 后墙挡断 LOS →
+// firstVisibleAt 恒 -1（反应/漏杀统计门槛见 finishWave 内 duelsLost 计数）。
+// 菜单滑杆已限 9-18，此处硬钳兜底 params 被其它代码路径污染的极端情况（与滑杆
+// 双层钳位缺一不可）
 
 // 纯架枪训练：三段式随机延迟（快速补拉/短段/长段）后 Bot 以两种节奏出掩体
 // （连出两波同风格强制换），偶发双拉波——同一波两人锁步拉出（模拟双拉转火）。
@@ -11,15 +19,11 @@ export const MODE_INFO = { label: '架枪对枪' }
 
 const rand = (a, b) => a + Math.random() * (b - a)
 
-// Bot 出场横移线的走廊硬域（「Bot 距离」选项的运行时钳位，几何出处 MapBuilder）：
-//   门墙远面 −24.8（MapBuilder.js:138-141 门墙 box z=-24、厚 1.6 → z∈[-24.8,-23.2]）
-//   通道后墙内面 −35.6（MapBuilder.js:173 后墙 box z=-36、厚 0.8）→ 各留 0.4m 模型
-//   余量取 [−35.2, −25.2]。越界会贴/穿墙或被 4m 后墙挡断 LOS → firstVisibleAt 恒 -1
-//   （反应/漏杀统计门槛见 finishWave 内 duelsLost 计数）——菜单滑杆已限 9-18，
-//   此处硬钳兜底 params 被其它代码路径污染的极端情况（双层钳位缺一不可）
-const DOOR_WALL_FAR_Z = -24.8
-const PEEK_Z_MIN = -35.2
-const PEEK_Z_MAX = -25.2
+// 池预建节奏（倒计时窗口内分帧构造 Bot）：Bot 构造（骨架克隆+死亡烘焙+握点
+// 顶点扫描）是几十 ms 级同步长帧，波次出场时懒构建 = 每局前 ~cap 波各吃一次、
+// 直接污染对枪期 1% low。倒计时内每 PREBUILD_GAP 秒建一只摊匀，对枪期绝不构造
+const PREBUILD_FIRST_AT = 0.3 // resetRound 后首建延迟（s）：避开 roundStart 音频同帧
+const PREBUILD_GAP = 0.4      // 预建间隔（s/只）：3s 倒计时足够摊开 4-7 只
 
 // 池调度纯逻辑：池未满 → null（新建，每只 Bot 构造时随机抽一名英雄，cap 只
 // 覆盖全英雄池）；池满 → 优先从休眠 Bot 中随机挑一只复用（出场英雄波次轮换）；
@@ -69,6 +73,7 @@ export class BotManager {
     this.roundEndAt = 0
     this.running = false
     this.t = 0 // 游戏时钟：只在 step 里累加 → ESC 暂停时回合计时/Bot 计时一并冻结
+    this._prebuildNextAt = Infinity // 池预建排程（resetRound 才排；倒计时窗口内分帧建满）
   }
 
   _freshStats() {
@@ -93,7 +98,38 @@ export class BotManager {
       ? this.countdownUntil + this.params.roundSeconds
       : 0
     this.hold = null // 惰性初始化：单缺口单槽位调度状态
+    // 池预建排程：倒计时窗口内分帧建满（含双拉副槽余量——单模板 cap=1 也备到
+    // 2 只）；模板池后台注入中途扩容的余额由出场 _bot() 惰性补（对枪期才建）
+    this._prebuildNextAt = this.now() + PREBUILD_FIRST_AT
     this.audio?.roundStart()
+  }
+
+  // 构造一只新 Bot 入池（出场调度 _bot 与倒计时预建共用；回调绑定跟随实例）
+  _newBot() {
+    const b = new Bot(this.scene, this.world); b.manager = this; this.bots.push(b)
+    // Bot 脚步声（空间化 HRTF）：墙后 Bot 拉出/跑过的方位信息——与步态
+    // 落脚帧同拍触发（walkPhase 跨 π 检测），传连续速度（加速中脚步渐强）。
+    // 倒地触地闷响：击杀的重量句点（ease-out 0.63 处的拍地帧触发）
+    b.onFootstep = (speed) => {
+      this.audio?.footstep(b.pos, { pos: this.player.pos, yaw: this.player.yaw }, speed >= 3.2, speed)
+    }
+    b.onDeathLand = () => {
+      this.audio?.bodyDrop(b.pos, { pos: this.player.pos, yaw: this.player.yaw })
+    }
+    return b
+  }
+
+  // 池容量：英雄模板数（每只 Bot 构造时随机抽一名 → cap 覆盖全池）；单模板/
+  // 程序化假人 cap=1，+1 保双拉波第二人也不懒建
+  get _poolCap() { return Math.max(Bot.customTemplates?.length || 1, 2) }
+
+  // 倒计时窗口分帧预建（_stepHold 的倒计时分支每步调）：池满即停；模板池中途
+  // 扩容（main 后台注入英雄）的余额留给出场 _bot() 惰性补——对枪期绝不构造
+  _prebuildStep() {
+    if (this.bots.length >= this._poolCap) return
+    if (this.now() < this._prebuildNextAt) return
+    this._prebuildNextAt = this.now() + PREBUILD_GAP
+    this._newBot()
   }
 
   _bot() {
@@ -105,19 +141,8 @@ export class BotManager {
     const idle = this.bots.filter(x => !x.active && x.mode !== 'dying' && x.mode !== 'corpse')
     const corpses = this.bots.filter(x => x.mode === 'corpse')
     let b = pickIdleBot(idle, corpses, this.bots.length, cap)
-    if (!b) {
-      b = new Bot(this.scene, this.world); b.manager = this; this.bots.push(b)
-      // Bot 脚步声（空间化 HRTF）：墙后 Bot 拉出/跑过的方位信息——与步态
-      // 落脚帧同拍触发（walkPhase 跨 π 检测），传连续速度（加速中脚步渐强）。
-      // 倒地触地闷响：击杀的重量句点（ease-out 0.63 处的拍地帧触发）
-      b.onFootstep = (speed) => {
-        this.audio?.footstep(b.pos, { pos: this.player.pos, yaw: this.player.yaw }, speed >= 3.2, speed)
-      }
-      b.onDeathLand = () => {
-        this.audio?.bodyDrop(b.pos, { pos: this.player.pos, yaw: this.player.yaw })
-      }
-    }
-    else { b.peek = null } // 清上一条命的管理器状态
+    if (!b) b = this._newBot()
+    else b.peek = null // 清上一条命的管理器状态
     return b
   }
 
@@ -189,7 +214,10 @@ export class BotManager {
   }
 
   _stepHold(dt) {
-    if (this.now() < this.countdownUntil) return // 倒计时内不出人
+    if (this.now() < this.countdownUntil) { // 倒计时内不出人：空闲窗口分帧预建池
+      this._prebuildStep()
+      return
+    }
     const h = this.hold ??= this._initHold()
     for (const slot of h.slots) this._stepSlot(slot, dt)
   }
@@ -239,7 +267,9 @@ export class BotManager {
         // 留在楔形内（16m 右宽口缺口 −0.400）——「消失位置在墙后」不保
         startX = fromLeft ? gap.x0 - hide : gap.x1 + hide
         const endX = fromLeft ? gap.x1 + hide : gap.x0 - hide
-        b.peek = { style: 'cross', startX, endX, dir: Math.sign(endX - startX) }
+        // shift 走路贯穿：62.8% 跑速的静步级横移（声音读局中间档）
+        b.peek = { style: 'cross', startX, endX, dir: Math.sign(endX - startX),
+          walk: Math.random() < CONFIG.training.walkPeekChance }
       } else {
         // 正面横向走出（pull）：从墙后藏点起步，面向玩家持枪横移拉出——胸口
         // 正对玩家（peekFacingYaw pull = 面向玩家），不停顿：拉到折返点即缩回
@@ -251,12 +281,17 @@ export class BotManager {
         const jiggleAt = Math.random() < CONFIG.training.pullJiggleChance
           ? startX + dir * rand(0.5, 0.72) * Math.abs(turnX - startX)
           : 0
+        // 慢速档掷定（互斥，均非 jiggle 波专属）：蹲走优先（官方蹲走循环，有
+        // clip 门槛）；未中再掷走路（shift 静步级 62.8% 跑速 ≈3.39m/s）——
+        // 蹲走掷中时走路短路，不出现双重慢档
+        const crouchWalk = !jiggleAt && !!b.anim?.crouchWalk && Math.random() < CONFIG.training.crouchWalkChance
+        const walk = !jiggleAt && !crouchWalk && Math.random() < CONFIG.training.walkPeekChance
         b.peek = { style: 'pull', startX, turnX, endX: startX, dir, phase: 'out', jiggleAt,
           // 蹲走拉出掷定（非 jiggle 波）：有官方蹲走循环的模型才掷（与 Bot.js
           // 消费侧 this.anim?.crouchWalk 同口径）——程序化假人/无蹲走 clip 的
           // 老模型不进蹲走波（否则只表现为慢速站立横移，既不蹲也不贴几何）；
           // 命中区经骨锚跟随蹲姿
-          crouchWalk: !jiggleAt && !!b.anim?.crouchWalk && Math.random() < CONFIG.training.crouchWalkChance }
+          crouchWalk, walk }
       }
       b.place(startX, z, 'peek')
       b.slot = slot
@@ -286,7 +321,10 @@ export class BotManager {
 
     if (activeBot?.peek) {
       const pk = activeBot.peek
+      // walk（shift 走路）波全程慢档：拉出/缩回/贯穿同一档（缩回时手仍按 shift）；
+      // 蹲走档在 out 分支三目优先级更高（掷定侧已互斥，这里只是防御序）
       const speed = CONFIG.bot.moveSpeed * this._rampSpeed
+        * (pk.walk ? CONFIG.training.walkMult : 1)
       // 波次收尾：完整走完未被击杀 = 漏杀（只进统计，无判负机制），躲进墙后
       // 才重新排程下一波（渐进难度系数在排程时生效）
       const finishWave = () => {
@@ -345,6 +383,10 @@ export class BotManager {
     // 伤害力度归一（55 伤=1）：踉跄幅度/命中火花密度共用的力度因子
     const power = Math.min(1.4, Math.max(0.4, dmg / 55))
     bot.flashHit(zone === 'head', power)
+    // 命中 tagging：移速 ×taggingSpeed 持续 taggingTime（Valorant 3.0 补丁定值
+    // 72.5%，每发重置不叠加；moveToward 消费）——打中未杀的 Bot 走线减速，补枪/
+    // 跟枪提前量与真实对枪一致。致死弹也写：无害（倒地动画不走 moveToward）
+    bot.tagUntil = this.now() + CONFIG.bot.taggingTime
     this.stats.hits++
     if (zone === 'head') this.stats.headshots++
     if (bot.hp <= 0) {

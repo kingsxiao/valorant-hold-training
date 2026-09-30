@@ -1,6 +1,10 @@
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { Tex, pbr } from './Textures.js'
+import {
+  DOOR_WALL_Z, DOOR_WALL_THICK, DOOR_WALL_NEAR_Z, BACK_WALL_Z, BACK_WALL_THICK,
+  GAP_LEFT, GAP_RIGHT, SPAWN_Z,
+} from './corridor.js' // 训练不变量单一事实源（墙盒原值与 spawn，见 corridor.js 头注）
 
 // 地图布局（无畏契约站点架构的架枪场景，原创几何按游戏内比例）：
 //   主厅 x∈[-16,16], z∈[6,-46]；四面 6m 围墙（灰泥墙身 + 石砌墙基 + 檐口）
@@ -15,7 +19,8 @@ import { Tex, pbr } from './Textures.js'
 // 训练不变量（锁死，任何视觉重构不得触碰）：gaps[0] 坐标、横墙 z=-24、
 // bot 横移线 z = spawn.z − CONFIG.training.botDistance（菜单 9-18 实时可调；
 // 走廊硬域钳 [−35.2,−25.2]，消费方 BotManager._peekZ）、spawn（缺口正前方）、
-// rebuild(side) 左右镜像
+// rebuild(side) 左右镜像。数值单一事实源在 world/corridor.js（墙盒/缺口/派生面），
+// 本文件与 BotManager/测试同源消费，改动须经 corridor 一致性测试
 export class MapBuilder {
   // side: 'left' 缺口 x∈[-9,-6] / 'right' 缺口 x∈[3,7]（左右位置镜像等距，视线调校一致）
   constructor(world, scene, side = 'left') {
@@ -133,18 +138,18 @@ export class MapBuilder {
     }
 
     // ===== 1. A 门（z=-24 横墙，厚 1.6m + 铆钉钢门套）=====
-    const gap = this._side === 'right' ? { x0: 3, x1: 7 } : { x0: -9, x1: -6 }
+    const gap = this._side === 'right' ? { ...GAP_RIGHT } : { ...GAP_LEFT } // 浅拷贝：外部不改写导出常量
     const gapCx = (gap.x0 + gap.x1) / 2, gapW = gap.x1 - gap.x0
-    const doorFace = -23.2 // 门墙玩家侧面（墙 z∈[-24.8,-23.2]）
+    const doorFace = DOOR_WALL_NEAR_Z // 门墙玩家侧面
     for (const [a, b] of [[-17, gap.x0], [gap.x1, 17]]) {
-      box(geos.wall, (a + b) / 2, 0, -24, b - a, 4, 1.6)
+      box(geos.wall, (a + b) / 2, 0, DOOR_WALL_Z, b - a, 4, DOOR_WALL_THICK)
       // 檐口收头 + 女儿墙压顶：门墙对天空的剪影（>4.2m 装饰不进碰撞）
-      box(geos.trim, (a + b) / 2, 4.0, -24, b - a + 0.4, 0.4, 2.0, false)
-      box(geos.wall, (a + b) / 2, 4.4, -24, b - a, 0.45, 0.5, false)
+      box(geos.trim, (a + b) / 2, 4.0, DOOR_WALL_Z, b - a + 0.4, 0.4, 2.0, false)
+      box(geos.wall, (a + b) / 2, 4.4, DOOR_WALL_Z, b - a, 0.45, 0.5, false)
     }
     // 门洞上方封顶砌体（y3.4..4.0 满墙厚）：门楣钢梁只凸在门脸，梁后到墙顶
     // 必须是实墙——否则门顶留 0.6m 镂空缝，透视一穿帮（首轮像素采样抓到）
-    box(geos.wall, gapCx, 3.4, -24, gapW, 0.6, 1.6)
+    box(geos.wall, gapCx, 3.4, DOOR_WALL_Z, gapW, 0.6, DOOR_WALL_THICK)
     // 门套侧框（凸出玩家侧面 0.35：缺口净宽 x0..x1 不变——Bot 在墙后横移（深度随
     // 「Bot 距离」选项，9-18m 全程在此行走带之外）；净空几何与旧版完全一致）
     box(geos.doorMetal, gap.x0 - 0.225, 0, doorFace + 0.175, 0.45, 3.4, 0.35)
@@ -170,7 +175,7 @@ export class MapBuilder {
       box(geos.stonePillar, 16.4, 0, z, 0.5, 4, 0.7)
     }
     // 通道后墙：整面 + 石基 + 檐口（透过门看到的"通道尽头"）
-    box(geos.wall, 0, 0, -36, 34, 4, 0.8)
+    box(geos.wall, 0, 0, BACK_WALL_Z, 34, 4, BACK_WALL_THICK)
     box(geos.stoneBase, 0, 0, -35.51, 34, 0.9, 0.18, false)
     box(geos.trim, 0, 4.0, -36, 34.4, 0.35, 1.2, false)
     // 通道箱（按 side 摆在 Bot 行走带对侧：left 缺口 → 带 x∈[-11.4,-3.8]，
@@ -281,7 +286,7 @@ export class MapBuilder {
     this._placeSign(board)
 
     // 出生点：缺口正前方架枪位——进局即对口架枪（要换位随时可以走）
-    this.spawn = { x: gapCx, z: -17, yaw: 0 }
+    this.spawn = { x: gapCx, z: SPAWN_Z, yaw: 0 }
 
     // 合并静态几何 → 每种材质 1 个 draw call
     for (const [key, arr] of Object.entries(geos)) {

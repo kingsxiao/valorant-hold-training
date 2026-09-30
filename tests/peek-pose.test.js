@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { peekFacingYaw, strafeRampW, strafeStepPose, leanInto } from '../src/core/PeekPose.js'
 import { BotManager, pickIdleBot } from '../src/entities/BotManager.js'
+import { GAP_LEFT as GAP, SPAWN_Z } from '../src/world/corridor.js' // 训练不变量单一事实源
 
 // 两种出场姿势（pull 拉出即缩 / cross 贯穿跑过）的朝向与步态判定——162 轮起
 // 两者都全程面朝玩家横移（cross 曾顺跑向 = 玩家全程看侧身）。
@@ -49,6 +50,15 @@ describe('strafeRampW 横移步态权重（clip→程序化侧移淡入）', () 
 })
 
 describe('strafeStepPose 程序化侧移步态（官方横移循环口径）', () => {
+  it('out 参数：传 scratch 时返回同一对象、字段全量写入（128Hz 热路径零分配契约）；数值与缺省路径一致', () => {
+    const out = {}
+    const r = strafeStepPose({ speed: 5.4, phase: 1, lateralVel: 5.4 }, out)
+    expect(r).toBe(out)
+    expect(Object.keys(r).sort()).toEqual(
+      ['abductL', 'abductR', 'bob', 'kneeL', 'kneeR', 'lean', 's', 'thighL', 'thighR', 'yawL', 'yawR'])
+    const plain = strafeStepPose({ speed: 5.4, phase: 1, lateralVel: 5.4 })
+    for (const k of Object.keys(r)) expect(r[k], k).toBeCloseTo(plain[k], 12)
+  })
   it('官方 RunE/W 方向性剪：thigh 幅 0.548±0.109 随向、偏置 ∓0.56（TP_Core 实测幅/偏置），yaw 脚尖朝向保留', () => {
     // 右移（W 族）：L 大腿偏置 +0.56（官方 RunW L ∈ [+5.5°,+55.8°] → +0.535）
     const pw = strafeStepPose({ speed: 5.4, phase: 0, lateralVel: 1 })
@@ -115,7 +125,6 @@ describe('strafeStepPose 程序化侧移步态（官方横移循环口径）', (
 })
 
 // —— BotManager 风格抽签：50/50 随机 + 连出两波同风格强制换（两种姿势交替）——
-const GAP = { x0: -9, x1: -6 }
 
 function spawnWith(lastStyles, randVal) {
   // 每次一个全新到期槽位（nextAt:-1）——出人后 nextAt 复位为 0 走排程分支，
@@ -127,7 +136,7 @@ function spawnWith(lastStyles, randVal) {
   const mgr = Object.create(BotManager.prototype)
   mgr.now = () => 0
   mgr.params = { peekSide: 'left', botDistance: 13 }
-  mgr.map = { gaps: [GAP], spawn: { z: -17 } }
+  mgr.map = { gaps: [GAP], spawn: { z: SPAWN_Z } }
   mgr._bot = () => bot
   const orig = Math.random
   Math.random = () => randVal

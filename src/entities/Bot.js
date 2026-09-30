@@ -94,7 +94,69 @@ function procAnkleY(hip, knee, yaw, phi) {
   _pgd2.set(0, -LEG_L2, 0).applyQuaternion(_pgq2)
   return HIP_Y + _pgd1.y + _pgd2.y
 }
-export function procGaitPose({ phase, stepLen, wFore = 1, wLat = 0, runW = 0, latSign = 1, yaw = 0, bobAmp = 0.01, cross = 0.13, tiltX = 0, tiltZ = 0 }) {
+// procGaitPose 的 leg()/solveFoot() 闭包模块级化（128Hz 热路径：每 tick 曾分配
+// 顶层返回对象 + legs 数组 + 2 腿对象 + 2×leg/solveFoot 闭包 ≈ 7 个短命对象/只，
+// 与本文件自立的零分配暂存区标准不一致）。ctx 单份 scratch 顺序消费——不得重入
+const _gpc = { ps: 0, phiAmp: 0, runW: 0, yaw: 0, halfS: 0, wFore: 0, wLat: 0, tiltX: 0, tiltZ: 0, bob: 0, dipMax: 0, phi: 0, f: 0 }
+function _gaitSolveFoot(drop, out) {
+  let s = solveLeg2D(LEG_L1, LEG_L2, drop, _gpc.f)
+  const target = HIP_Y - drop
+  if (Math.abs(procAnkleY(s.hip, s.knee, _gpc.yaw, _gpc.phi) - target) > 0.0015) {
+    // 括号 ±0.15/0.20：横移大侧摆（φ 26°）+ 髋 yaw 下折轴漏高 ~8cm，旧括号
+    // （−0.1/+0.12）饱和 → 踝欠 1~3cm（支撑相穿地成分之一）
+    let lo = drop - 0.15, hi = drop + 0.2
+    for (let it = 0; it < 8; it++) {
+      const mid = (lo + hi) / 2
+      const sm = solveLeg2D(LEG_L1, LEG_L2, mid, _gpc.f)
+      if (procAnkleY(sm.hip, sm.knee, _gpc.yaw, _gpc.phi) > target) lo = mid
+      else hi = mid
+    }
+    s = solveLeg2D(LEG_L1, LEG_L2, (lo + hi) / 2, _gpc.f)
+  }
+  out.hip = s.hip; out.knee = s.knee; out.ankle = s.ankle
+}
+function _gaitLeg(ph2, bias, sideSign, out) {
+  // 每腿按自身相位推导支撑/摆动/抬脚：对侧腿 = 相位 +π——旧版 lift/tdFloat
+  // 用主腿相位算全局量，镜像腿支撑相被抬起（浮至 16~32cm）、摆动相拖地
+  const p2 = ((ph2 % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
+  const st2 = p2 < _gpc.ps
+  const u2 = st2 ? 1 - (2 * p2) / _gpc.ps : -1 + (2 * (p2 - _gpc.ps)) / (Math.PI * 2 - _gpc.ps)
+  const lift2 = st2 ? 0 : (0.16 + 0.16 * _gpc.runW) * Math.sin(Math.PI * (p2 - _gpc.ps) / (Math.PI * 2 - _gpc.ps))
+  const phi = _gpc.phiAmp * u2 * _gpc.wLat
+  _gpc.phi = phi
+  _gpc.f = _gpc.halfS * u2 * _gpc.wFore + bias * _gpc.wLat
+  // 竖直落差：髋世界高 = HIP_Y + meshY = HIP_Y + bob − dip·u²，踝要钉在
+  // ANKLE_SOLE → 落差 = 髋高 − 0.06 = STANCE_H + bob − dip·u² − lift2（bob/dip
+  // 在「身体下沉」与「腿伸展」两侧同项相消，鞋底全程钉地；侧摆/yaw 漏高由
+  // 下方二分精确补偿）。dip 为身体共有量（u² 周期 π，双侧落地各沉一次）
+  // 落地缓冲：|u| 0.9→1 抬起 4cm（跟落地前脚略浮，吃满展钳位段的鞋跟残余）
+  const tdFloat = 0.04 * THREE.MathUtils.clamp((Math.abs(u2) - 0.9) / 0.1, 0, 1)
+  const base = STANCE_H - _gpc.dipMax * u2 * u2 - lift2 + _gpc.bob - tdFloat
+  // FK 精化（二分 8 轮）：yaw×φ 折轴倾斜的漏高随二分补偿——实际踝高对 drop
+  // 单调（drop 越大腿越直、踝越高），二分必收敛不振荡；饱和段自然钳在满展
+  //（脚略高不穿地）
+  _gaitSolveFoot(base, out)
+  // 倾斜补偿：mesh 前倾/侧倾绕地面原点旋转（three Euler 'XYZ' = Rx·Rz），踝
+  // 局部位 (px,pz) 的世界高变化 ≈ −θx·pz + θz·px（小角度）——跑后蹬脚
+  // pz −0.77、θx −0.07 → −5.4cm，是程序化支撑末穿地 4~6cm 的主源（审计
+  // soleMin −0.044~−0.061）；横移侧摆 ax ±0.5、θz −0.05 → ∓2.5cm。drop 按
+  // −变化量修正把踝世界高拉回：用 FK 实测踝局部（_pgd1/_pgd2 段向量 + 髋枢
+  // 侧偏 ±0.115/前向 0）迭代两遍——补正改变解、解改变踝位，定点残差二遍后
+  // mm 级
+  if (_gpc.tiltX || _gpc.tiltZ) {
+    for (let pass = 0; pass < 2; pass++) {
+      procAnkleY(out.hip, out.knee, _gpc.yaw, phi) // 刷新 _pgd1/_pgd2 段向量
+      const ax = sideSign * 0.115 + _pgd1.x + _pgd2.x
+      const az = _pgd1.z + _pgd2.z
+      _gaitSolveFoot(base - (_gpc.tiltX * az - _gpc.tiltZ * ax), out)
+    }
+  }
+  out.z = phi
+  out.stance = st2
+}
+export function procGaitPose({ phase, stepLen, wFore = 1, wLat = 0, runW = 0, latSign = 1, yaw = 0, bobAmp = 0.01, cross = 0.13, tiltX = 0, tiltZ = 0 }, out = null) {
+  // out（可选）：热路径调用侧传 _gpOut 暂存；缺省新建 = 纯函数语义不变（单测锁值）
+  const o = out ?? { dip: 0, u: 0, bob: 0, support: 0, legs: [{ hip: 0, knee: 0, ankle: 0, z: 0, stance: false }, { hip: 0, knee: 0, ankle: 0, z: 0, stance: false }] }
   const ph = ((phase % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
   // 支撑窗占比：走/蹲走全触地（官方无腾空，Locomotion.js:123-126），跑 65%
   //（官方 runN 触地窗 12/18.5 帧 ≈0.65，余下为低幅双摆腾空——双脚均离地但
@@ -121,65 +183,25 @@ export function procGaitPose({ phase, stepLen, wFore = 1, wLat = 0, runW = 0, la
   const dipMax = THREE.MathUtils.clamp(STANCE_H - Math.sqrt(Math.max(0.09, LEG_LEN * LEG_LEN - halfS * halfS)), 0, 0.12)
   const dip = dipMax * u * u
   const phiAmp = Math.asin(Math.min(0.72, halfS / LEG_LEN)) // 官方横移大幅侧扫（≤46°，扫幅=支撑扫距）
-  const leg = (ph2, bias, sideSign) => {
-    // 每腿按自身相位推导支撑/摆动/抬脚：对侧腿 = 相位 +π——旧版 lift/tdFloat
-    // 用主腿相位算全局量，镜像腿支撑相被抬起（浮至 16~32cm）、摆动相拖地
-    const p2 = ((ph2 % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
-    const st2 = p2 < ps
-    const u2 = st2 ? 1 - (2 * p2) / ps : -1 + (2 * (p2 - ps)) / (Math.PI * 2 - ps)
-    const lift2 = st2 ? 0 : (0.16 + 0.16 * runW) * Math.sin(Math.PI * (p2 - ps) / (Math.PI * 2 - ps))
-    const phi = phiAmp * u2 * wLat
-    const f = halfS * u2 * wFore + bias * wLat
-    // 竖直落差：髋世界高 = HIP_Y + meshY = HIP_Y + bob − dip·u²，踝要钉在
-    // ANKLE_SOLE → 落差 = 髋高 − 0.06 = STANCE_H + bob − dip·u² − lift2（bob/dip
-    // 在「身体下沉」与「腿伸展」两侧同项相消，鞋底全程钉地；侧摆/yaw 漏高由
-    // 下方二分精确补偿）。dip 为身体共有量（u² 周期 π，双侧落地各沉一次）
-    // 落地缓冲：|u| 0.9→1 抬起 4cm（跟落地前脚略浮，吃满展钳位段的鞋跟残余）
-    const tdFloat = 0.04 * THREE.MathUtils.clamp((Math.abs(u2) - 0.9) / 0.1, 0, 1)
-    // FK 精化（二分 8 轮）：yaw×φ 折轴倾斜的漏高随二分补偿——实际踝高对 drop
-    // 单调（drop 越大腿越直、踝越高），二分必收敛不振荡；饱和段自然钳在满展
-    //（脚略高不穿地）
-    const solveFoot = (drop) => {
-      let s = solveLeg2D(LEG_L1, LEG_L2, drop, f)
-      const target = HIP_Y - drop
-      if (Math.abs(procAnkleY(s.hip, s.knee, yaw, phi) - target) > 0.0015) {
-        // 括号 ±0.15/0.20：横移大侧摆（φ 26°）+ 髋 yaw 下折轴漏高 ~8cm，旧括号
-        // （−0.1/+0.12）饱和 → 踝欠 1~3cm（支撑相穿地成分之一）
-        let lo = drop - 0.15, hi = drop + 0.2
-        for (let it = 0; it < 8; it++) {
-          const mid = (lo + hi) / 2
-          const sm = solveLeg2D(LEG_L1, LEG_L2, mid, f)
-          if (procAnkleY(sm.hip, sm.knee, yaw, phi) > target) lo = mid
-          else hi = mid
-        }
-        s = solveLeg2D(LEG_L1, LEG_L2, (lo + hi) / 2, f)
-      }
-      return s
-    }
-    // 倾斜补偿：mesh 前倾/侧倾绕地面原点旋转（three Euler 'XYZ' = Rx·Rz），踝
-    // 局部位 (px,pz) 的世界高变化 ≈ −θx·pz + θz·px（小角度）——跑后蹬脚
-    // pz −0.77、θx −0.07 → −5.4cm，是程序化支撑末穿地 4~6cm 的主源（审计
-    // soleMin −0.044~−0.061）；横移侧摆 ax ±0.5、θz −0.05 → ∓2.5cm。drop 按
-    // −变化量修正把踝世界高拉回：用 FK 实测踝局部（_pgd1/_pgd2 段向量 + 髋枢
-    // 侧偏 ±0.115/前向 0）迭代两遍——补正改变解、解改变踝位，定点残差二遍后
-    // mm 级
-    const base = STANCE_H - dipMax * u2 * u2 - lift2 + bob - tdFloat
-    let s = solveFoot(base)
-    if (tiltX || tiltZ) {
-      for (let pass = 0; pass < 2; pass++) {
-        procAnkleY(s.hip, s.knee, yaw, phi) // 刷新 _pgd1/_pgd2 段向量
-        const ax = sideSign * 0.115 + _pgd1.x + _pgd2.x
-        const az = _pgd1.z + _pgd2.z
-        s = solveFoot(base - (tiltX * az - tiltZ * ax))
-      }
-    }
-    return { hip: s.hip, knee: s.knee, ankle: s.ankle, z: phi, stance: st2 }
-  }
   const bob = (1 - Math.abs(u)) * bobAmp // 身体起伏（落脚压低、过中点抬高）
-  return {
-    dip, u, bob, support,
-    legs: [leg(ph, latSign * cross, -1), leg((ph + Math.PI) % (Math.PI * 2), -latSign * cross, 1)],
-  }
+  _gpc.ps = ps
+  _gpc.phiAmp = phiAmp
+  _gpc.runW = runW
+  _gpc.yaw = yaw
+  _gpc.halfS = halfS
+  _gpc.wFore = wFore
+  _gpc.wLat = wLat
+  _gpc.tiltX = tiltX
+  _gpc.tiltZ = tiltZ
+  _gpc.bob = bob
+  _gpc.dipMax = dipMax
+  _gaitLeg(ph, latSign * cross, -1, o.legs[0])
+  _gaitLeg((ph + Math.PI) % (Math.PI * 2), -latSign * cross, 1, o.legs[1])
+  o.dip = dip
+  o.u = u
+  o.bob = bob
+  o.support = support
+  return o
 }
 // kamae 前后交错站姿（程序化假人 idle/急停收敛目标）：左前右后大交错（GLB
 // kamae 双脚前后错位 ~1.06m 的持枪戒备站姿，非并腿立正）——solveLeg2D 解出
@@ -206,6 +228,8 @@ const _axZ = new THREE.Vector3(0, 0, 1)
 const _lwOut = { idle: 0, walkN: 0, runN: 0, walkS: 0, runS: 0, walkNoIdle: 0 }
 const _bobOut = { dip: 0, sway: 0, roll: 0 }
 const _bobZero = { dip: 0, sway: 0, roll: 0 }
+const _ssOut = { s: 0, yawL: 0, yawR: 0, thighL: 0, thighR: 0, kneeL: 0, kneeR: 0, abductL: 0, abductR: 0, bob: 0, lean: 0 } // strafeStepPose 每帧暂存
+const _gpOut = { dip: 0, u: 0, bob: 0, support: 0, legs: [{ hip: 0, knee: 0, ankle: 0, z: 0, stance: false }, { hip: 0, knee: 0, ankle: 0, z: 0, stance: false }] } // procGaitPose 每帧暂存
 const _q1 = new THREE.Quaternion()
 const _q2 = new THREE.Quaternion()
 const _q3 = new THREE.Quaternion()
@@ -235,6 +259,8 @@ const _fpBlend = new THREE.Vector3() // 脚钉地：多锚源加权混合累加�
 const _fpLive = new THREE.Vector3() // 脚钉地：本 tick 活锚世界位（钉固状态机的输入）
 const _fpPole = new THREE.Vector3() // 脚钉地：膝极向参考点（髋前面）
 const _fwdAxis = new THREE.Vector3() // 脚钉地：面朝方向暂存
+const _alq1 = new THREE.Quaternion() // 程序化踝反滚闭式解暂存（_stepLegs 专用，
+const _alq2 = new THREE.Quaternion() // 不与其他方法共用——128Hz 热路径零分配）
 const _IDENTITY = new THREE.Quaternion()
 const _ZAXIS = new THREE.Vector3(0, 0, 1) // 枪轴滚转轴（holder 局部 Z = 枪管向）
 
@@ -1015,7 +1041,7 @@ export class Bot {
     if (w > 0) {
       // 横移相位保持 1 步/1.15m 的出场节奏（全局 STEP_LEN 1.55 是走/跑官方口径，
       // 拉出横移若跟着变会慢 26%，节奏感尽失——见 STRAFE_STEP_LEN）
-      const pose = strafeStepPose({ speed, phase: this.walkPhase * STEP_LEN / STRAFE_STEP_LEN, lateralVel: lx })
+      const pose = strafeStepPose({ speed, phase: this.walkPhase * STEP_LEN / STRAFE_STEP_LEN, lateralVel: lx }, _ssOut)
       this._applyLegPose(pose, w)
       this.mesh.position.y = pose.bob * w
     } else {
@@ -1190,16 +1216,24 @@ export class Bot {
         // （随胶囊走），滞空收腿（锚 z≈0.69）在弧线顶点 = 髋下 ~0.5m 的官方
         // 收腿位（曾把弧线对消 = 锚沉在地面、髋在 2.3m，腿被拉成垂直下蹬的
         // 超人腿——160 轮跳跃腾空期修复）
-        _fpLive.set(_fpBlend.y / wSum, _fpBlend.z / wSum, -_fpBlend.x / wSum)
+        // 前轴 +psa.x → +Z（2026-09-29 畸形 r1 修复：旧 −psa_x 是「mesh 正面 −Z」
+        // 程序化假人时代的口径，164 轮 GLB 正面定 +Z 后未跟上——锚整体前后镜像，
+        // 与（共轭修复后的）clip 腿链 FK 反向 = 落脚点系统性错位、交叉步被拉成
+        // 劈叉。离线 FK 实证：+psa.x 映射下官方锚残差 0.1mm（−psa.x 下 1.6m+）；
+        // 侧轴符号维持「世界系支撑期静止」实测口径不动）
+        _fpLive.set(_fpBlend.y / wSum, _fpBlend.z / wSum, _fpBlend.x / wSum)
           .multiplyScalar(this._heroScale ?? 1) // 官方原始骨架空间 → 本英雄世界（与身体同一 ×s）
           .applyQuaternion(this.mesh.quaternion).add(this.mesh.position)
         leg.up.matrixWorld.decompose(_fpHip, _q1, _gscl)
-        // 钉地状态机诊断计数（探针 _pinDbg 消费；未重置时不累计=生产零开销）：
-        // leg-tick 状态分布（latch/lift/loose/swing/heel）+ 髋世界高范围——live 门
-        // 禁 bothAir/hover 残余病理的定位数据（163 轮：仿真测 target、几何偏平缓，
-        // 两轮 live/仿真分歧证明需要 live 侧地面真值）
-        if (this._pinDbg) {
-          const D = this._pinDbg
+        // 钉地状态机诊断计数（探针 _pinDbg 消费）：leg-tick 状态分布（latch/lift/
+        // loose/swing/heel）+ 髋世界高范围——live 门禁 bothAir/hover 残余病理的
+        // 定位数据（163 轮：仿真测 target、几何偏平缓，两轮 live/仿真分歧证明
+        // 需要 live 侧地面真值）。生产路径从不触碰该字段（undefined=零开销）；
+        // 探针逐场景置 null → 下一 tick 在此重建空表重计（2026-09-29 修复死代码：
+        // 旧「置 null 后无人重建」让 slide.json 的 states 计数恒 0，状态机在存档
+        // 里实际未被观测）
+        if (this._pinDbg !== undefined) {
+          const D = this._pinDbg ??= { latch: 0, lift: 0, loose: 0, swing: 0, heel: 0, hipMin: 9, hipMax: -9 }
           if (st.latch) { st.lift ? D.lift++ : D.latch++ } else if (st.loose) D.loose++
           else D.swing++
           if (st.heelT > 0) D.heel++
@@ -1212,12 +1246,14 @@ export class Bot {
         // 是支撑滑步的直接来源（探针基线 slideMean 34~58 cm/s vs 门 2~8，P90
         // 达体速级瞬移；离线复刻实测锚在带内 ~0.3 m/s 系统性爬行 + 钳制拖拽
         // ~9 m/s 瞬移）。钉固后支撑目标恒世界静止 = 零滑步剖面。
-        //  阈值：入带 ≤0.16·s（官方支撑带 0.123~0.155·s 上沿+余量，Locomotion.js
-        //  :182-186）/出带 >0.19·s（滞回防边界抖动）；st.lift = 提离相（水平仍
-        //  钉固、y 跟活锚升入摆动弧 = 官方蹬地提踵形态），锚离带且腿回可达或
-        //  y>0.21·s → 交还全幅跟踪（st.loose 120ms 水平混合防脱钉瞬移）
+        //  阈值：入带 ≤0.156·s（官方支撑带 0.123~0.155·s 上沿+1mm 浮点余量，
+        //  Locomotion.js :182-186）/出带 >0.19·s（滞回防边界抖动）；st.lift = 提
+        //  离相（水平仍钉固、y 跟活锚升入摆动弧 = 官方蹬地提踵形态），锚离带且
+        //  腿回可达或 y>0.21·s → 交还全幅跟踪（st.loose 120ms 水平混合防脱钉瞬移）
         if (st.latch && st.latch.distanceTo(_fpLive) > 0.5) { st.latch = null; st.lift = false; st.loose = null } // 重生/传送陈旧钉固兜底
-        if (!st.latch && !st.rel && _fpLive.y <= 0.16 * (this._heroScale ?? 1)) {
+        if (!st.latch && !st.rel && _fpLive.y <= 0.156 * (this._heroScale ?? 1)) {
+          // 入带阈值 = 官方支撑带上沿 0.155·s +1mm 浮点余量（旧 0.16 会在下落弧
+          // 里提前 ~4mm 冻结 x/z——锚贴地段还在水平前进，钉固点早于官方落地点）
           ;(st.latch ??= new THREE.Vector3()).copy(_fpLive)
           st.latch.y = Math.min(st.latch.y, 0.125 * (this._heroScale ?? 1)) // 官方触地平台 0.123-0.125
           st.lift = false
@@ -1257,7 +1293,11 @@ export class Bot {
         // 作起点、kamae clip 脚位作终点，衰减窗内目标沿两点插值并叠 sin(π·p)
         // 抬脚弧——双脚带弧收进站姿而非贴地直线滑回（旧 20/s 直落权重 = 脚在
         // 地面拖行穿帮）。8/s ≈ 125ms 与步态权重坡（smoothW fall 7~8）同相
+        // ⚠ 终点每 tick 刷新（2026-09-29 畸形 r1）：_fpFoot 是「还原 clip 快照」
+        // 的脚位，mixer 正把腿混向 kamae——冻结旧帧会让目标钉在过期摆动位，
+        // 与 kamae 混合方向打架（收脚被拖向停步帧位置）
         if (!st.rel) st.rel = { from: st.anchor.clone(), to: _fpFoot.clone(), t: 0 }
+        else st.rel.to.copy(_fpFoot)
         st.rel.t = Math.min(1, st.rel.t + dt * 8)
         st.anchor.lerpVectors(st.rel.from, st.rel.to, st.rel.t)
         st.anchor.y += Math.sin(Math.PI * st.rel.t) * 0.07
@@ -1273,7 +1313,12 @@ export class Bot {
       //    绝不 skip IK；越距只做几何钳制（见下），solver 对钳后目标求解
       leg.up.matrixWorld.decompose(_fpHip, _q1, _gscl)
       leg.knee.matrixWorld.decompose(_fpKnee, _q2, _gscl)
-      _fpKneeWClip.setFromRotationMatrix(leg.knee.matrixWorld) // clip 膝世界 Q（此刻矩阵=还原后的 clip 姿态）
+      // clip 膝世界 Q（此刻矩阵=还原后的 clip 姿态）。⚠ 必须走 decompose 口径
+      // （getWorldQuaternion）：英雄根缩放 ×s 污染 matrixWorld 的 3×3——
+      // setFromRotationMatrix 假定纯旋转，s=0.9 时提出 |q|≈0.96 的错误旋转
+      //（现实膝向域内脚朝向恒偏 2~8°、90° 膝向极端 34°+，四英雄每移动 tick
+      // 带恒定拧脚 = 靴面内外翻的来源）
+      leg.knee.getWorldQuaternion(_fpKneeWClip)
       _fpAnchor.copy(st.anchor).lerp(_fpFoot, 1 - st.w)
       // 3a) 目标地面钳制：权重坡途中目标 = 锚（贴地）与 clip 原始姿（起步混合段
       // 踝可低至 -0.10，实测 pull/out 加速段穿地 ~20cm 脚底）的中值——中值同样
@@ -1315,10 +1360,20 @@ export class Bot {
               // 的运行时根因之一）
               const yNeed = _fpHip.y - Math.sqrt(Math.max(0, reach * reach - dH * dH))
               const yCap = Math.min(0.155 * (this._heroScale ?? 1), st.latch.y + 0.032)
-              st.clampT.set(st.latch.x, Math.min(yNeed, yCap), st.latch.z)
+              // 目标必须取可达侧（max，2026-09-29 畸形 r1）：旧 min 在 yNeed>yCap
+              // 时把目标钉在可达球外 5~7cm，solver 只能给满展直腿+踝悬空——
+              // max 保证钳后目标恒在球面上（yNeed≥yCap 取 yNeed=球面点；反之
+              // yCap≤yNeed 本就可达），提踵上浮量确定、无 solver 悬浮
+              st.clampT.set(st.latch.x, Math.max(yNeed, yCap), st.latch.z)
               clamped = true
               st.heelT = (st.heelT ?? 0) + dt // 按 dt 累计：探针双相 step(0) 不双计
-              if (st.heelT > 2 / 128) st.lift = true
+              if (st.heelT > 2 / 128) {
+                st.lift = true
+                st.clampHold = null // 转提离即刻释放钳位保持（畸形 r1）：clampHold
+                // 把目标世界点钉到「髋离原点一整条腿」才换位——支撑末 dH 被人为
+                // 拉满展外，直腿 A 字劈叉 + 踝悬空 4~20cm 的直接来源；释放后
+                // x/z 仍由 st.latch 钉死（滑步门不受影响）、y 跟活锚升弧
+              }
             }
             if (!clamped && !st.latch) {
               // 主杠杆：保方向钳水平到允许半径
@@ -1464,17 +1519,29 @@ export class Bot {
       // 为主导，bob 压低）；tiltX/Z：前倾/侧倾的鞋底穿地补偿（procGaitPose 内
       // 按迹位一阶抵消）
       const pose = procGaitPose({ phase: this.walkPhase, stepLen, wFore, wLat, runW, latSign, yaw: hipYaw, bobAmp: 0.008 + 0.0074 * speed * runW,
-        cross: this.peek?.style === 'pull' ? 0.13 : 0, tiltX: this.foreLean, tiltZ: this.lean })
+        cross: this.peek?.style === 'pull' ? 0.13 : 0, tiltX: this.foreLean, tiltZ: this.lean }, _gpOut)
       const [L, R] = legs, [pl, pr] = pose.legs
       L.hip.rotation.set(pl.hip, hipYaw, pl.z)
       R.hip.rotation.set(pr.hip, hipYaw, pr.z)
       // 膝屈取负施加（正面 −Z：屈膝 = −X；solver 的 knee 为正屈曲量，FK σ=hip−knee）。
-      // 踝反滚 −φ（绕 Z）：抵消髋侧摆的鞋底倾斜（R_z(φ)·R_x(0)·R_z(−φ)=I）——
-      // 大幅侧摆（官方横移侧扫 35°）下鞋底保持水平，外缘不犁地
+      // 踝反滚闭式解（2026-09-29 畸形 r1）：目标踝世界 = Ry(yaw)（鞋底水平+顺髋
+      // yaw）。旧 (ankle,0,−φ) 三元组只在 hip.x=0 时精确——髋 Euler 'XYZ' 把
+      // Rz(φ) 夹在 Rx(hip)·Ry(yaw) 与膝 Rx(−k) 之间，非对易残留：横移跑鞋底世
+      // 界倾 22.8°、横移走 28.5° 且落在支撑相（鞋底斜 = 外/内缘犁地或单边悬空）。
+      // 闭式解 Q = [Rx(h)·Ry(y)·Rz(φ)·Rx(−k)]⁻¹·Ry(y) = Rx(k)·Rz(−φ)·Ry(−y)·Rx(−h)·Ry(y)，
+      // φ=0 时退化为 Rx(k−h)=Rx(ankle) 与旧口径严格一致
       L.knee.rotation.x = -pl.knee
       R.knee.rotation.x = -pr.knee
-      L.ankle.rotation.set(pl.ankle, 0, -pl.z)
-      R.ankle.rotation.set(pr.ankle, 0, -pr.z)
+      _alq1.setFromAxisAngle(_axX, pl.knee).multiply(_alq2.setFromAxisAngle(_axZ, -pl.z))
+        .multiply(_alq2.setFromAxisAngle(_up, -hipYaw))
+        .multiply(_alq2.setFromAxisAngle(_axX, -pl.hip))
+        .multiply(_alq2.setFromAxisAngle(_up, hipYaw))
+      L.ankle.quaternion.copy(_alq1)
+      _alq1.setFromAxisAngle(_axX, pr.knee).multiply(_alq2.setFromAxisAngle(_axZ, -pr.z))
+        .multiply(_alq2.setFromAxisAngle(_up, -hipYaw))
+        .multiply(_alq2.setFromAxisAngle(_axX, -pr.hip))
+        .multiply(_alq2.setFromAxisAngle(_up, hipYaw))
+      R.ankle.quaternion.copy(_alq1)
       // 步态起伏：落地张开时最低（步距落差 dip 已含 u² 相位）、并腿过中点最高
       this._yBase = pose.bob - pose.dip
       this._foreW = wFore // 前倾只跟前进分量走：侧移对枪（wFore≈0）上身立直
@@ -1488,6 +1555,11 @@ export class Bot {
         leg.hip.rotation.z += (t.z - leg.hip.rotation.z) * k
         leg.knee.rotation.x += (-t.knee - leg.knee.rotation.x) * k // 屈膝 = −X（同步态分支）
         leg.ankle.rotation.x += (t.ankle - leg.ankle.rotation.x) * k
+        // 踝 y/z 残留同率衰减（2026-09-29 畸形 r1）：移动分支每 tick 重写全姿态
+        //（现为反滚闭式解），急停分支旧只写 x——最后横移相位的侧滚残留到站姿
+        //（双靴侧翻 26~30°，与 :1434「残留不串命」断言不符）
+        leg.ankle.rotation.y += (0 - leg.ankle.rotation.y) * k
+        leg.ankle.rotation.z += (0 - leg.ankle.rotation.z) * k
       }
       this._yBase += (-KAMAE_DIP - this._yBase) * k // kamae 低姿重心（交错的几何落差）
       this._foreW = 0
@@ -1568,7 +1640,7 @@ export class Bot {
       const l = this._legs[i], t = KAMAE_STANCE[i]
       l.hip.rotation.set(t.hip, t.yaw, t.z)
       l.knee.rotation.x = -t.knee
-      l.ankle.rotation.x = t.ankle
+      l.ankle.rotation.set(t.ankle, 0, 0) // 全轴归位（旧只写 x：横移侧滚残留跨命，畸形 r1）
     }
     if (this._strafeRig) for (const leg of this._strafeRig.legs) { // 不带上一条的脚钉锚点
       const st = leg.foot.userData._pin
@@ -1582,6 +1654,7 @@ export class Bot {
     this.firstVisibleAt = -1
     this.reactRecorded = false // 反应样本每次出场只记一条（防多段击杀重复计数）
     this.flinch = 0 // 复用的 Bot 不带旧受击踉跄
+    this.tagUntil = 0 // 也不带旧 tagging 减速（上一条命被打中的 tag 不跨出场）
     this.breath = vary() * Math.PI * 2 // 呼吸相位随机（多假人不同步）
     this.breathW = 0
     this._yBase = 0
@@ -1647,13 +1720,18 @@ export class Bot {
   // 真人 peek 的节奏
   moveToward(targetVelX, dt, targetVelZ = 0) {
     const M = CONFIG.movement
-    this.velX = groundStep(this.velX, targetVelX, {
-      accel: accelFor(targetVelX, M.groundAccel, M.runSpeed),
+    // 命中 tagging：tagUntil 前目标速度 ×taggingSpeed（0.725，3.0 补丁定值）——
+    // 被打中未杀的 Bot 走线减速（damage() 写 tagUntil，每发命中重置）。缩放后的
+    // 目标速度同时喂 accelFor：加速段与减速段都按慢档走，停稳/起步节奏随速档
+    const tag = this.now() < (this.tagUntil ?? 0) ? CONFIG.bot.taggingSpeed : 1
+    const tx = targetVelX * tag, tz = targetVelZ * tag
+    this.velX = groundStep(this.velX, tx, {
+      accel: accelFor(tx, M.groundAccel, M.runSpeed),
       decelFlat: M.groundDecelFlat,
       decelDrag: M.groundDecelDrag,
     }, dt)
-    this.velZ = groundStep(this.velZ, targetVelZ, {
-      accel: accelFor(targetVelZ, M.groundAccel, M.runSpeed),
+    this.velZ = groundStep(this.velZ, tz, {
+      accel: accelFor(tz, M.groundAccel, M.runSpeed),
       decelFlat: M.groundDecelFlat,
       decelDrag: M.groundDecelDrag,
     }, dt)

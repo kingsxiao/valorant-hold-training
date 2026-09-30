@@ -14,6 +14,18 @@ import { GLOVE_POSES } from './HandsRig.js'
 // 腕-腕轴 → 现役枪 GLOVE_POSES 腕锚轴 + 官方 Camera 骨 ↔ rest 取景的数据解
 // 滚转 + 等价手定尺）把整副手臂贴到当前枪上，root 直接挂 vm 下与枪同做
 // 刚体运动（后坐/摇摆/ADS 全程不脱手，且与 attach 时刻的 holder 瞬态无关）。
+// —— 终态参数速览（2026-10-01 持续穿模收敛后，详 DEPLOY 十~十八轮附录）：
+//   锚：ARMS_ANCHORS 按 L* 流形（|handL−handR|=实际落腕跨度）标定，双腕真实
+//       零误差（审计 0.006/0.0045mm）；滚转：数据解（__ARMS_ROLL 仅加性缝）；
+//   网格：ARMS_DEPENETRATE 静止位偏移表（蒙皮线性映射，attach 按枪克隆施加）——
+//       十轮仅存 vandal 表（0/0 守住）；phantom 表已回退（7~10mm 世界级拇指尖
+//       拉伸=评审尖刺伪影源头）；
+//   指姿：ARMS_GRIP_PATCH 握姿润饰（九~十一轮包握/收拢 + 十四轮 vandal 拇指
+//       落位 + 十六轮指列收敛 Index Y42/Ring Y40 + 十七轮 Thumb2 X15 钩持与
+//       Twist2 +8 袖口合缝；十三轮 L_Hand 滚转与十二轮 Twist2+45 经评审证实
+//       致扭已回退）。终态审计：vandal 3/0/75/0、phantom 10/0/38/0（嵌枪/可见
+//       /相交/可见），指尖 0.52/1.52mm、腕锚 0.006/0.0045mm、手尺 8.2cm；
+//       手尺定尺不变。
 // 与 WeaponSystem 的接口：读 sys.vmScene / vmHolder / activeCustomVm()，
 // 写 sys.officialArms / sys.handsAnim（置 null，官方姿势自带扳机指放置）。
 // ============================================================================
@@ -45,15 +57,21 @@ export function fitSimilar3(p1, p2, p3, q1, q2, q3) {
   return { scale, quat: new THREE.Quaternion().setFromRotationMatrix(R) }
 }
 
-// 官方手臂专用腕锚（GLOVE_POSES 系标定，2026-09-15；穿透感知网格扫描收敛——
-// 手臂网格顶点对枪面 45mm 带内做 +X 光线奇偶判定（负=枪内）计数最小化 +
-// 双手十指尖悬停距离次级目标。基态（沿用 GLOVE_POSES 锚）实测 495/325 顶点
-// 嵌枪（掌根/鱼际），收敛后枪本地系 + 数据解滚转下残留 35/56 个，均在玩家
-// 视角被枪体遮挡区（左前臂下侧/拇指远侧，截图评审 2-4px 边缘重叠）。
-// 扫描方法与坑位见 DEPLOY.md 四轮附录）
+// 官方手臂专用腕锚（GLOVE_POSES 系标定，2026-09-15 四轮收敛；2026-10-01 六轮在
+// 五轮终态拟合基（枪本地两点拟合 + 数据解滚转）下重扫——四轮锚是为旧三点拟合基
+// 调的，换基后从未重扫）：
+//   - 可达流形：两点拟合把右腕精确钉锚、左腕落在 dstR + spanDir×(|srcSpan|·sLocal)
+//     ——左锚只在 |handL−handR| = L*（实际落腕跨度）时可达；旧锚对半径与 L* 差
+//     6.2/20.9 本地 mm（左腕从未真正落锚——旧「腕锚误差恒 0」读数是审计脚本
+//     漏 ×1000 的米标毫米假象，脚本已修）。新锚对按 L* 球面投影 → 双腕真实
+//     零误差（审计口径 0.006/0.005mm）。
+//   - 结果（45mm 带内奇偶、世界系、十指尖悬停距离双目标坐标下降，右手握把
+//     接触守恒——phantom handR 锁基线）：vandal 34→27 / phantom 49→9，均零
+//     可见；指尖最小贴枪 1.38→0.52 / 2.40→1.52mm（更贴不悬空）；手尺 8.2cm
+//     不变形；滚转仍由数据解出零手调。扫描方法与坑位见 DEPLOY.md 六轮附录）
 export const ARMS_ANCHORS = {
-  vandal: { handR: [0.24, -0.009, -0.109], handL: [-0.247, 0.0225, -0.0045] },
-  phantom: { handR: [0.237, -0.0495, -0.097], handL: [-0.2065, -0.017, 0.0025] },
+  vandal: { handR: [0.24, -0.018, -0.109], handL: [-0.2525, 0.0174, -0.0019] },
+  phantom: { handR: [0.237, -0.0495, -0.097], handL: [-0.2299, -0.0071, -0.0114] },
 }
 
 // 等价手尺寸（相机系米）：官方手的腕→中指尖骨链缩放到此值 = glove 路径的
@@ -65,6 +83,121 @@ const OFFICIAL_HAND_EQUIV = 0.082
 // 本地系对齐解出（见 attachOfficialArms 拟合段）。手调常数曾两轮换基即废
 // （世界系→holder 系→枪本地系），数据解与基无关。globalThis.__ARMS_ROLL
 // 仅作页内加性微调缝（vhtdbg 扫描用）
+
+// 网格级去穿透（第 2 轮/七轮）：动骨（六轮锚重扫）到界后剩余嵌枪肉点（vandal
+// 27 / phantom 9）的终解。推出向量按蒙皮线性（s(p+Δ)=s(p)+B_lin·Δ）映射进静止
+// 位姿——骨系零改动，腕锚/手尺/肘位天然不变，fire/equip 姿态下偏移随骨走。
+// 偏移表由 scripts/arms-depenetrate-bake.mjs 在当前锚/拟合常量下烘焙（45mm 带
+// +X 奇偶迭代推出 + 顽固组试逃）——锚再调需重烘焙。
+// 十轮教训（2026-10-01）：推距必须以世界 mm 记账（B_lin 实测，rest≈世界 ×5.8），
+// 「rest 数值≈亚毫米世界」是记账坑——phantom 表的 7~10mm 世界级拇指尖推拉被
+// 评审读作「撕裂/尖刺」后整体回退（见上）；保留本层的枪必须过截图评审关。
+// cloneSkinned 共享模板 geometry → 按枪克隆一份施加（_depenetratedGeo 缓存，
+// 首次 attach 一次性付清，切枪重挂零开销）
+export const ARMS_DEPENETRATE = {
+  vandal: {
+    FP_Phoenix_S0_Skelmesh001: [
+      [1678, -0.011779, -0.014102, -0.005313], [1679, -0.008281, -0.01001, -0.003758],
+      [1680, -0.001999, 0.005172, -0.007374], [1688, 0.005541, 0.002478, -0.012875],
+      [1740, -0.01314, 0.003882, 0.007828], [1742, -0.02068, 0.006213, 0.01114],
+      [1743, -0.007632, -0.014159, -0.005059], [1744, 0.031711, -0.00931, -0.018818],
+      [1745, -0.003612, -0.006718, -0.002215], [1746, 0.024406, -0.007496, -0.015468],
+      [1747, 0.021063, -0.006794, -0.014353], [1748, -0.007558, -0.013729, -0.003872],
+      [1749, 0.007283, -0.002236, -0.004674], [1750, 0.005451, -0.001977, -0.004064],
+      [1753, 0.012602, -0.0037, -0.007478], [1762, 0.01045, -0.006223, -0.000279],
+      [1764, -0.005877, -0.008544, 0.000671], [1804, 0.011671, -0.003381, -0.00633],
+      [1807, 0.029437, -0.008642, -0.015901], [1866, 0.014252, -0.007595, -0.008845],
+      [1869, 0.00876, 0.002675, 0.000514], [1870, -0.003403, -8.8e-05, 0.005507],
+      [1872, -0.011409, -0.012265, -0.006923], [3698, -0.028986, 0.010811, -0.003428],
+      [3711, -0.003465, -0.005478, 0.002727], [3932, -0.014241, -0.007803, 0.005701],
+      [1873, -0.013327, -0.016109, -0.006048],
+    ],
+  },
+  phantom: {
+    // 十轮回退（2026-10-01）：评审证实的「网格撕裂/尖刺」伪影源头即本表——
+    // 页内取证（scripts/arms-diag.mjs）实测 6579/6584/6588/6595（L_Thumb2/3 拇
+    // 指尖簇）世界位移 7.3/7.8/8.1/9.8mm、3929（L_Hand 掌跟）4.5mm——七轮附录
+    // 「亚毫米世界推距」系把 rest 单位误当世界 mm 的记账错误（本单位坑的复刻）。
+    // 拇指尖高曲率轮廓区局部 4 顶点 8~10mm 拉伸=肉眼可见尖刺；页内对照（S3 变体）
+    // 撤表后拇指尖平滑、无可见互陷。代价：隐藏嵌枪 30→32、相交臂三角 27→36
+    //（双可见口径 0/0 不变；指尖/腕锚/手尺分毫不差）。vandal 表不回退（评审 9 分
+    // 通过、审计 0/0；其顶点均在遮挡面低曲率区）。
+    FP_Phoenix_S0_Skelmesh001: [],
+  },
+}
+const _depenetratedGeo = new Map()
+// 握持润饰补丁（八轮起；十一轮扩近节/小指，十二轮扩前臂拧转骨，十四轮扩
+// vandal 左拇指基节）：官方 idle 指姿 × 我们枪体前段尺寸的错配校正——phantom
+// 左拇指横跨枪管、指尖过导轨、指列扇形不包握、袖扣带拧麻花呈现，vandal 左
+// 拇指悬空。final = base ⊗ delta（骨本地小旋转），只动指骨/前臂拧转骨；
+// 调参经 globalThis.__GRIP_PATCH 覆盖缝（页内迭代，scripts/grip-wrap-tune.mjs
+// / cuff-roll-tune.mjs / vandal-thumb-tune.mjs），收敛值固化于此表。
+export const ARMS_GRIP_PATCH = {
+  vandal: {
+    // 左三指中节 +本地X 40°：指尖过导轨上缘（评审【穿模】）→ 收拢到护木后侧
+    L_Index2: [0.34202, 0, 0, 0.93969],
+    L_Middle2: [0.34202, 0, 0, 0.93969],
+    L_Ring2: [0.34202, 0, 0, 0.93969],
+    // 左拇指基节 +本地Z −25°（十四轮）：官方 idle 拇指在我们护木尺寸下悬空
+    // 16mm（评审【光滑钩状悬空不接触护木】）——基节绕 Z 收拢使指尖贴护木侧
+    // 1.6mm（接触不穿；扫描 out/vandal-thumb-tune：−20 → 4.1mm、−25 → 1.6mm
+    // 隐藏嵌枪 3、−30 起穿透劣化 23/104）。轴探测：±X/±Y 均不朝向护木。
+    L_Thumb1: [0, 0, -0.21644, 0.976296],
+  },
+  phantom: {
+    // 左三指近节 +本地Y（十一轮 +Y35 整指包握；十六轮收敛定稿：Index +Y42 /
+    // Middle +Y35 / Ring +Y40）——均匀 +Y35 时指团间隙透出背景与金戒指（评审
+    // 【指间大缝隙】【黄色碎片】），差异化收拢使指团互贴、戒指藏到中指团后
+    // （露边大幅缩小，全消需模型层）。轴物理：近节绕 Y=整指摆向近侧；
+    // 本骨架骨长轴=局部 X（零偏移骨架——*2 旋转不动 *3 节点，绕 X=拧转），
+    // *1 绕 Y+ 才把整列往「屏幕下方+近侧」摆=包握向；+X 实测反向（张开）。
+    L_Index1: [0, 0.358368, 0, 0.93358],
+    L_Middle1: [0, 0.300706, 0, 0.953717],
+    L_Ring1: [0, 0.34202, 0, 0.939693],
+    // 左三指中节 +本地X 75°（九轮，保留）：扇形竖指带背景缝 → 整排包覆枪体
+    L_Index2: [0.608761, 0, 0, 0.793353],
+    L_Middle2: [0.608761, 0, 0, 0.793353],
+    L_Ring2: [0.608761, 0, 0, 0.793353],
+    // 左小指收拢（十一轮）：+本地Y 20° 摆近 + 中节 +本地X 55° 卷指——小指不再
+    // 向后外翘拖出扇形尾巴
+    L_Pinky1: [0, 0.173648, 0, 0.984808],
+    L_Pinky2: [0.461749, 0, 0, 0.887011],
+    // 左拇指中节 +本地X 15°（十七轮，替换九轮 Y25）：九轮 Y25 沉拇指后它呈
+    // 「细长僵直伸向枪口悬空」（评审）——X15 卷曲使拇指尖钩向护木底、贴合持
+    // 观感且脱离护木顶压持带（隐藏嵌枪 32→10，扫描 scripts/grip-deepen-tune
+    // 20/21 候选）；末节 +本地Y 15°（九轮，保留）
+    L_Thumb2: [0.382683, 0, 0, 0.92388],
+    L_Thumb3: [0, 0.130526, 0, 0.991445],
+    // 左前臂拧转骨 +本地X 8°（十七轮）：掌跟与袖口间透缝（评审【断裂镂空】）
+    // ——微正角把袖口向掌侧收，透缝显著变窄；+15 起环折初现（十五轮漏斗教训），
+    // 全闭合需模型层，透缝变窄为姿势层上限
+    L_Twist2: [0.069756, 0, 0, 0.997564],
+    // 十五回退（2026-10-01）：L_Hand +X−20°（十三轮）与 L_Twist2 +X45°（十二轮）
+    // 整体摘除——五轮视觉评审证实两者为「压数字换扭曲」：hx−20 造成腕部反向
+    // 弯折、掌反搭枪顶观感与拇指蹼皮肤拉伸薄膜；twist+45 把袖扣带卷成环带
+    // 镂空漏斗（中心透出腕部皮肤）。回退后袖口为平滑袖管、腕线自然；隐藏嵌枪
+    // 4→32、相交 31→36 为如实代价（可见口径 0/0 不变）。十七轮在回退基线上
+    // 只保留微调量（twist+8、拇指 X15），不复活漏斗/反折。
+  },
+}
+function applyArmsDepenetration(root, weaponId) {
+  const table = ARMS_DEPENETRATE[weaponId]
+  if (!table) return
+  root.traverse((o) => {
+    if (!o.isSkinnedMesh || !table[o.name]) return
+    const key = weaponId + '/' + o.name
+    let geo = _depenetratedGeo.get(key)
+    if (!geo) {
+      geo = o.geometry.clone()
+      const pos = geo.attributes.position
+      for (const [i, dx, dy, dz] of table[o.name]) {
+        pos.setXYZ(i, pos.getX(i) + dx, pos.getY(i) + dy, pos.getZ(i) + dz)
+      }
+      _depenetratedGeo.set(key, geo)
+    }
+    o.geometry = geo
+  })
+}
 
 export function attachOfficialArms(sys, gltf, weaponId = sys.currentVmId) {
   const vm = sys.activeCustomVm(weaponId)
@@ -196,6 +329,7 @@ export function attachOfficialArms(sys, gltf, weaponId = sys.currentVmId) {
   // 挂枪（vm 本地）：枪的一切刚体运动（后坐/摇摆/ADS 缩放/切枪取景）手臂同行
   sys.vmScene.remove(root)
   vm.add(root)
+  applyArmsDepenetration(root, weaponId) // 网格级去穿透（七轮，静态偏移表）
   vm.updateMatrixWorld(true)
   if (localStorage.getItem('vhtdbg')) {
     const dstR_w = vm.localToWorld(dstR_g.clone())
@@ -291,6 +425,7 @@ function buildArmsAnim(root, animations, weaponId) {
 // 纯重算，scratch 跨骨/跨帧覆盖安全，128Hz 热路径零分配
 const _poseQ = new THREE.Quaternion() // base 姿势（slerp 目标）
 const _finalQ = new THREE.Quaternion() // final = base ⊗ fireD（替代逐骨克隆乘积）
+const _patchQ = new THREE.Quaternion() // 握持润饰补丁（八轮，见 ARMS_GRIP_PATCH）
 export function animateOfficialArms(sys, dt) {
   const A = sys._armsAnim
   if (!A || !sys.officialArms) return
@@ -303,6 +438,12 @@ export function animateOfficialArms(sys, dt) {
   const eqU = sys._armsEquipU ?? 1
   const adsK = A.hasAds ? sys.adsBlend : 0
   const fT = A.fire && A.fire.t !== Infinity ? A.fire.t : -1
+  // 握持润饰补丁（八轮）：官方 idle 的拇指/指姿在我们的枪体前段尺寸下会横跨
+  // 枪管/指尖过轨——按骨名叠加本地小旋转（final = base ⊗ patch）。只动指骨
+  // （L_Thumb*/L_Index*/L_Middle*/L_Ring*/L_Pinky*），腕/臂锚与手定尺不变。
+  // 常量表 + globalThis.__GRIP_PATCH 覆盖缝（页内调参用，同 __ARMS_ANCHORS 模式）
+  const patch = (typeof globalThis !== 'undefined' && globalThis.__GRIP_PATCH) || ARMS_GRIP_PATCH
+  const patchQ = patch && patch[sys.currentVmId]
   for (const b of A.bones) {
     let q
     if (eqU < 1 && b.equip) q = sampleQuatTrack(b.equip, eqU * A.equipDur) // = _sampleQ
@@ -311,6 +452,10 @@ export function animateOfficialArms(sys, dt) {
     // copy 必须先于 multiply 的参数求值：q 可能是 _sampleQ（equip 路径），而
     // sampleQuatTrack(fireD) 会覆盖 _sampleQ——先落 _finalQ 再采样再乘
     if (fT >= 0 && b.fireD) q = _finalQ.copy(q).multiply(sampleQuatTrack(b.fireD, fT))
+    if (patchQ) {
+      const pq = patchQ[b.node.name]
+      if (pq) q = _finalQ.copy(q).multiply(_patchQ.set(pq[0], pq[1], pq[2], pq[3]))
+    }
     b.node.quaternion.copy(q)
   }
 }

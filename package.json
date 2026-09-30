@@ -5,7 +5,7 @@
   "type": "module",
   "description": "WebGL 第一人称架枪训练器（数值按 Valorant 公开参数调校）",
   "engines": {
-    "node": ">=18"
+    "node": ">=20.19"
   },
   "scripts": {
     "dev": "vite",

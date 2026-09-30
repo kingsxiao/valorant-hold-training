@@ -144,6 +144,7 @@ node scripts/smooth-normals.mjs public/models/glove.glb
 ## 附：无畏契约模型获取与转换管线（2026-09-08）
 
 > ⚠ 下述资源均为**非官方游戏提取件，无再分发授权**——仅限个人本地使用，请自行决定是否推送到远端。
+> 这些 .glb 已按 `.gitignore` 的 `models-optional/**/*.glb` 口径**移出 git 版控**（150MB 级死重，clone/CI 不再拉取）；仓库历史中仍存在，彻底清除需 `git filter-repo`；新环境请按下表来源自行下载放置。
 
 ### 来源清单
 
@@ -151,7 +152,7 @@ node scripts/smooth-normals.mjs public/models/glove.glb
 |---|---|---|
 | 英雄（jett/phoenix/sage/sova，带贴图+kamae 待机动画，UE 骨架） | GitHub 粉丝仓库 [Valorant-3D-Immersive-Guide](https://github.com/abdullah-nadeem-lodhi/Valorant-3D-Immersive-Guide)（Sketchfab 导出） | `dist/{jett,phoenix,sage,sova}/*_animated.glb` → 拷为 `public/models/agent-*.glb` |
 | 武器（32 把 .blend：Vandal/Phantom/Sheriff/Classic/Ghost/Operator/Odin…含皮肤变体） | YouTube Rocklan 模型包的 Google Drive 文件夹 | `drive.google.com/drive/folders/17pJMWTGJloEFU86NE9sIOBlH4VB9rFVh` → `Weapons/` 子目录 |
-| 武器纯几何（无 UV/贴图，仅素材备用） | GitHub [codex-vibe-fps](https://github.com/yseho031018/codex-vibe-fps) | `assets/models/weapons/*.glb` → `models-optional/weapons-raw/` |
+| 武器纯几何（无 UV/贴图，仅素材备用；**不入库**，本地放置） | GitHub [codex-vibe-fps](https://github.com/yseho031018/codex-vibe-fps) | `assets/models/weapons/*.glb` → `models-optional/weapons-raw/` |
 
 已验证的死路：models-resource 的 Valorant 页面是空的（0 资源）；Sketchfab/Meshy 下载需登录；
 Mega 链接（YouTube 描述里的各包）大多已失效；"skins changer" 类仓库是恶意软件勿碰。

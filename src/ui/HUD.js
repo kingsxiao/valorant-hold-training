@@ -215,13 +215,18 @@ export class HUD {
     g.clearRect(0, 0, 150, 36)
     g.fillStyle = 'rgba(255,255,255,0.12)'
     g.fillRect(0, 30, 150, 1) // 16.6ms 参考线（60fps）
+    // 150 柱同色 #00ffb3 → 单 path 一次 fill：逐柱 fillRect 曾是每帧 150 次
+    // canvas2D 调用（每秒 ~9000 次，状态机开销远高于填充本身）——HUD 剩余的
+    // 唯一每帧绘制热点
     g.fillStyle = '#00ffb3'
+    g.beginPath()
     for (let i = 0; i < 150; i++) {
       const t = this.fpsFrames[(this.fpsIdx + i) % 150]
       if (!t) continue
       const h = Math.min(34, t / 33.4 * 34)
-      g.fillRect(i, 36 - h, 1, h)
+      g.rect(i, 36 - h, 1, h)
     }
+    g.fill()
   }
 
   setFpsText(txt) {

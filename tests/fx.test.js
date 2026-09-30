@@ -146,6 +146,44 @@ describe('FX 回合清理', () => {
   })
 })
 
+// ParticleSys 零粒子门控（fx-particle-zero-upload）：needsUpdate 标脏触发
+// three 整段 bufferSubData（sparks+puffs ~16KB/帧），空闲帧/菜单页纯属空传。
+// 用 BufferAttribute.version 计数断言：needsUpdate=true 才自增
+describe('ParticleSys 零粒子门控', () => {
+  const versions = (sys) => ['position', 'acolor', 'asize', 'aalpha']
+    .map(n => sys.geo.attributes[n].version)
+
+  it('空闲帧 version 不动；emit 后首帧与末颗消亡帧各标脏一次，归零后恢复不动', () => {
+    const { fx } = makeFx()
+    const sys = fx.sparks
+    sys.update(0.016); sys.update(0.016)
+    const idle = versions(sys)
+    sys.update(0.016)
+    expect(versions(sys)).toEqual(idle) // 0→0：空传消失
+    sys.emit(0, 1, -2, 0, 0, 0, { life: 0.05 })
+    sys.update(0.016) // 0→1：新粒子数据必须上传
+    const live = versions(sys)
+    expect(live.map((v, i) => v - idle[i])).toEqual([1, 1, 1, 1])
+    sys.update(0.05) // 寿命尽：n→0，末颗消亡帧仍标脏（drawRange 收零的伴随上传）
+    expect(sys.n).toBe(0)
+    expect(versions(sys).map((v, i) => v - live[i])).toEqual([1, 1, 1, 1])
+    sys.update(0.016)
+    expect(versions(sys)).toEqual(versions(sys)) // 归零后稳定
+    sys.update(0.016)
+    expect(sys.prevN).toBe(0)
+  })
+
+  it('活粒子期逐帧标脏照旧（行为不变：alp/size 逐帧演化需要上传）', () => {
+    const { fx } = makeFx()
+    const sys = fx.sparks
+    sys.emit(0, 1, -2, 0, 0, 0, { life: 0.5 })
+    sys.update(0.016)
+    const v0 = versions(sys)
+    sys.update(0.016)
+    expect(versions(sys).map((v, i) => v - v0[i])).toEqual([1, 1, 1, 1])
+  })
+})
+
 describe('vary 可复现噪声', () => {
   it('输出落在 [0,1)', () => {
     for (let i = 0; i < 200; i++) {

@@ -387,6 +387,9 @@ engine.start()
 // WebGL 上下文丢失/恢复：暂停并提示（Engine 内部已停/重启渲染循环）
 engine.onContextLost = () => {
   state.playing = false
+  // 挂起音频时钟（与 ESC 暂停路径同语义）：回合中丢上下文时在途循环节点会在
+  // 冻结画面与断连菜单上继续出声——恢复交给既有的 resumeRound/onLockChange resume
+  audio.suspend()
   document.exitPointerLock?.()
   menu.show()
   hud.toastMsg('图形上下文已断开，恢复后请重新开始', 3000)

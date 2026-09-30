@@ -221,6 +221,86 @@ describe('paintCrosshair 零长线段绘制（导入代码所见即所得）', (
   })
 })
 
+describe('paintCrosshair 脏矩形（dirty 协议）与 scratch 桶复用', () => {
+  // 记账桩（同上 mkCtx，多记 clearRect）
+  const mkRecCtx = () => {
+    const rects = [], fills = [], clears = []
+    return {
+      ctx: {
+        globalAlpha: 1, fillStyle: '',
+        beginPath() {}, rect: (...a) => rects.push(a), fill() {},
+        fillRect: (...a) => fills.push(a),
+        clearRect: (...a) => clears.push(a),
+      },
+      rects, fills, clears,
+    }
+  }
+  // 半径 = offset + length + 轮廓(默认 outlineThickness 1)
+  const WIDE = parseCrosshairCode('0;P;c;5;0t;1;0l;20;0o;20;1b;0') // 半径 41
+  const TIGHT = parseCrosshairCode('0;P;c;5;0t;1;0l;4;0o;0;1b;0')  // 半径 5
+  const NONE = parseCrosshairCode('0;P;c;5;d;0;0b;0;1b;0')         // 线全关+点关：零元素
+  const mkDirty = () => ({ x0: 0, y0: 0, x1: 0, y1: 0, has: false })
+
+  it('首帧（has=false）只清本帧笔迹区（±2px 抗锯齿余量）；bbox 写回并置 has', () => {
+    const { ctx, fills, clears } = mkRecCtx()
+    const dirty = mkDirty()
+    paintCrosshair(ctx, WIDE, { cx: 320, cy: 320, dirty })
+    expect(clears).toHaveLength(1)
+    const [x, y, w, h] = clears[0]
+    for (const [fx, fy, fw, fh] of fills) { // 本帧笔迹全部落在清屏矩形内
+      expect(fx).toBeGreaterThanOrEqual(x); expect(fx + fw).toBeLessThanOrEqual(x + w)
+      expect(fy).toBeGreaterThanOrEqual(y); expect(fy + fh).toBeLessThanOrEqual(y + h)
+    }
+    expect(x).toBeGreaterThanOrEqual(320 - 41 - 2 - 1e-9) // 不比 bbox+余量更大（清得省）
+    expect(x + w).toBeLessThanOrEqual(320 + 41 + 2 + 1e-9)
+    expect(dirty.has).toBe(true)
+    expect(dirty.x0).toBeCloseTo(320 - 41); expect(dirty.x1).toBeCloseTo(320 + 41)
+  })
+
+  it('线收拢帧：clear = 上帧 ∪ 本帧 bbox（张开笔迹的残留区被覆盖）', () => {
+    const { ctx, clears } = mkRecCtx()
+    const dirty = mkDirty()
+    paintCrosshair(ctx, WIDE, { cx: 320, cy: 320, dirty })
+    const wideClear = clears[0]
+    paintCrosshair(ctx, TIGHT, { cx: 320, cy: 320, dirty })
+    expect(clears).toHaveLength(2)
+    const [x, y, w, h] = clears[1]
+    expect(x).toBeLessThanOrEqual(wideClear[0]) // 收拢后清屏区仍覆盖帧A 包络
+    expect(x + w).toBeGreaterThanOrEqual(wideClear[0] + wideClear[2])
+    expect(y).toBeLessThanOrEqual(wideClear[1])
+    expect(y + h).toBeGreaterThanOrEqual(wideClear[1] + wideClear[3])
+  })
+
+  it('零元素帧（准星全关）：clear 仍覆盖上一帧笔迹区（bbox 以中心点初始化，非 Infinity）', () => {
+    const { ctx, clears } = mkRecCtx()
+    const dirty = mkDirty()
+    paintCrosshair(ctx, TIGHT, { cx: 320, cy: 320, dirty })
+    paintCrosshair(ctx, NONE, { cx: 320, cy: 320, dirty })
+    expect(clears).toHaveLength(2)
+    const [x, y, w, h] = clears[1]
+    expect(x).toBeLessThanOrEqual(320 - 5) // 帧A 半径 5 的笔迹区被清掉
+    expect(x + w).toBeGreaterThanOrEqual(320 + 5)
+    expect(y).toBeLessThanOrEqual(320 - 5)
+    expect(y + h).toBeGreaterThanOrEqual(320 + 5)
+  })
+
+  it('scratch 桶复用：第二帧绘制的元素只含本帧（无上一帧残留，_n 不复位会多画）', () => {
+    const { ctx, fills } = mkRecCtx()
+    const dirty = mkDirty()
+    paintCrosshair(ctx, WIDE, { cx: 320, cy: 320, dirty })
+    expect(fills).toHaveLength(4) // 内线四条（无 dot）
+    fills.length = 0
+    paintCrosshair(ctx, TIGHT, { cx: 320, cy: 320, dirty })
+    expect(fills).toHaveLength(4)
+  })
+
+  it('不传 dirty：不清屏（菜单预览自行铺背景，行为不变）', () => {
+    const { ctx, clears } = mkRecCtx()
+    paintCrosshair(ctx, WIDE, { cx: 320, cy: 320 })
+    expect(clears).toHaveLength(0)
+  })
+})
+
 describe('旧版准星设置迁移', () => {
   it('识别旧模型（length/gap/tShape），迁移保持观感', () => {
     const old = { color: '#00ffb3', length: 5, thickness: 2, gap: 3, dot: false, tShape: false, outline: true, error: true }

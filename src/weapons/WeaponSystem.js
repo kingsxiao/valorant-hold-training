@@ -58,7 +58,6 @@ export class WeaponSystem {
     this.lastFireTime = -10
     this.sprayIndex = 0
     this.nextShotAt = 0
-    this.burstLeft = 0 // Classic 右键三连发
     this.equipUntil = 0
     this.now = 0
 
@@ -359,7 +358,6 @@ export class WeaponSystem {
   switchTo(id, instant = false) {
     if (id === this.currentId && !instant) return
     this.currentId = id
-    this.burstLeft = 0
     this.equipUntil = this.now + CONFIG.weapons[id].equipTime * (instant ? 0 : 1)
     this.sprayIndex = 0
     this.patOff.p = this.patOff.y = 0 // 切枪弹道表清零，准星跟随偏移一并复位
@@ -408,24 +406,27 @@ export class WeaponSystem {
     if (this.now < this.equipUntil) return
 
     if (w.slot === 'melee') {
-      if (triggerEdge && this.now >= this.nextShotAt) {
-        this.nextShotAt = this.now + 1 / w.fireRate
-        this._meleeSwing()
+      // Alt Fire（重刺）：右键 = 更高单发/更长恢复/略短范围（CONFIG.weapons.knife.alt）
+      const alt = !!(w.alt && altEdge)
+      if ((triggerEdge || alt) && this.now >= this.nextShotAt) {
+        this.nextShotAt = this.now + 1 / (alt ? w.alt.fireRate : w.fireRate)
+        this._meleeSwing(alt)
       }
       return
     }
 
-    // Classic 右键三连发：直接排队 3 发
+    // Classic 右键三连发（Alt Fire，维基 Classic 页口径）：三发「instantly」近同帧
+    // 霰弹式扇出 + 组后 0.45s 冷却——不走左键的 6.75/s 逐发排队（旧实现与左键
+    // 几乎无手感差）。同帧三发全流程击发（音/焰/曳光各自三连），近身扫脸是招牌
     if (w.burst && altEdge && this.now >= this.nextShotAt) {
-      this.burstLeft = 3
-      this.nextShotAt = this.now
+      for (let i = 0; i < (w.alt?.count ?? 3); i++) this._fireOne(true)
+      this.nextShotAt = this.now + (w.alt?.cooldown ?? 0.45) // 组间冷却（非逐发射速间隔）
+      return
     }
 
-    const wantFire = w.auto ? triggerHeld : triggerEdge || this.burstLeft > 0
+    const wantFire = w.auto ? triggerHeld : triggerEdge
     if (!wantFire) return
     if (this.now < this.nextShotAt) return
-
-    if (this.burstLeft > 0) this.burstLeft--
 
     this._fireOne()
     // 下一发时刻 = max(上一次限定, 当前时刻) + 射击间隔（ADS 打九折，见 effectiveFireRate）。
@@ -434,24 +435,46 @@ export class WeaponSystem {
     this.nextShotAt = Math.max(this.nextShotAt, this.now) + 1 / this.effectiveFireRate()
   }
 
-  _fireOne() {
+  // 左键弹道表（累计偏移）。表按武器生成：水平保护弹数 / 换向节拍来自
+  // recoil.protected & swingTime×射速（公开补丁机制：Vandal 6 发 / Phantom 8 发、
+  // 水平换向 0.6s）。sprayIndex 归零（切枪/停火超 recoverTime）= 新扫射会话 →
+  // 重掷该武器水平序列：官方口径每次扫射的水平摆动方向/幅度逐次随机（rng 缺省
+  // 的确定表只作标定基准），练的是读随机水平分量再修而非背板固定漂移；垂直
+  // 形状仍按实测确定
+  _patternAt(w) {
+    const patterns = this.patterns ?? (this.patterns = {})
+    if (this.sprayIndex === 0) delete patterns[this.currentId]
+    // 索引必须在 ?? 之外：写成 `a ?? (a = 表)[i]` 时左侧命中即短路，第二发起会
+    // 返回整张表（pat.p = undefined → punch NaN）——曾踩，锁死两步结构
+    const pattern = patterns[this.currentId] ?? (patterns[this.currentId] = makeSprayPattern(30, {
+      prot: w.recoil.protected ?? 6,
+      swing: (w.recoil.swingTime ?? 0.6) * w.fireRate,
+      climb: w.recoil.climb ?? 4.03, // 防御性 fallback（现行全武器已标定 climb）
+      rng: Math.random, // 与散布锥同源；会话内只掷一次（dir/amp），见 makeSprayPattern
+    }))
+    return pattern[Math.min(this.sprayIndex, pattern.length - 1)]
+  }
+
+  // Alt Fire 散布（维基 Classic 页 Alt Fire 行）：组内每发锥散布站立 1.9°/蹲 ×0.9；
+  // 移动/跳跃惩罚不放宽——取 max(维基 alt 值, 左键移动态口径)（跑步右键不比左键准，
+  // 跳跃全额沿用 jump 散布）。连射增量随左键口径延续（burst 本身不推进 sprayIndex）
+  _altSpread(w) {
+    const base = (w.alt?.spreadStand ?? 1.9)
+      * (this.player.crouchAmt > 0.5 ? (w.alt?.crouchMult ?? 0.9) : 1)
+    return Math.max(base, this.currentSpread())
+  }
+
+  _fireOne(alt = false) {
     const w = this.weapon
     // 开火音色：音效皮肤（混沌序曲 → rifle_chaos）覆盖武器默认，其余用本体音色。
     // 皮肤只换"声音与火光"——弹道/散布/后坐/握姿与皮肤无关（游戏同规则）
     const snd = soundKindFor(this.currentId, this.skin) ?? w.sound
     this.onShotFired?.()
 
-    // 弹道表（累计偏移）+ 散布锥。表按武器生成：水平保护弹数 / 换向节拍来自
-    // recoil.protected & swingTime×射速（公开补丁机制：Vandal 6 发 / Phantom 8 发、
-    // 水平换向 0.6s），切枪/武器不同各自缓存，sprayIndex 切枪时已清零
-    const patterns = this.patterns ?? (this.patterns = {})
-    const pattern = patterns[this.currentId] ?? (patterns[this.currentId] = makeSprayPattern(30, {
-      prot: w.recoil.protected ?? 6,
-      swing: (w.recoil.swingTime ?? 0.6) * w.fireRate,
-      climb: w.recoil.climb ?? 4.03, // 防御性 fallback（现行全武器已标定 climb）
-    }))
-    const pi = Math.min(this.sprayIndex, pattern.length - 1)
-    const pat = pattern[pi]
+    // Alt Fire（Classic 右键 burst 单发）：不走左键弹道表——霰弹式扇出无垂直
+    // 累计（弹道偏移恒 0，ADS 准星跟随不摇），连射计数不推进（burst 非「扫射」，
+    // 且组间 0.45s > recoverTime 0.35，跨组 sprayIndex 本就被停火复位）
+    const pat = alt ? { p: 0, y: 0 } : this._patternAt(w)
 
     // ADS 后坐削减（维基定性"Slight recoil reduction"，×0.85 近似）：弹道表幅度
     // 垂直/水平同乘 —— 开镜扫射上爬更缓，与首发散布收紧合成"更准"的读数
@@ -459,8 +482,8 @@ export class WeaponSystem {
 
     // 连射计数在散布采样之后递增：首发按 sprayIndex=0 采静止基准散布（无
     // +0.05° 连射增量，= 表显 stand），与弹道表首项 0 同语义——首发精度所见即所得
-    const spreadDeg = this.currentSpread()
-    this.sprayIndex++
+    const spreadDeg = alt ? this._altSpread(w) : this.currentSpread()
+    if (!alt) this.sprayIndex++
     const p = this.player
     _dir.set(0, 0, -1).applyEuler(_euler.set(p.pitch, p.yaw, 0))
     // 弹道偏移（跑动垂直后坐 ×runMult，v6.11 公开改动：1.5→1.8，按移速比例介入）
@@ -593,8 +616,9 @@ export class WeaponSystem {
     ud.cylTarget = (ud.cylTarget ?? ud.cylPivot.rotation.z) + Math.PI / 3
   }
 
-  _meleeSwing() {
+  _meleeSwing(alt = false) {
     const w = this.weapon
+    const spec = alt && w.alt ? w.alt : w // Alt Fire：单发更高/略短范围（恢复在 tryFire 按 alt.fireRate）
     this.onShotFired?.() // 挥刀也计一次"射击"：命中仍会进 stats.hits，
     // 不计 shots 会让刀局的命中率分母缺失（混枪后命中率失真甚至 >100%）
     this.audio.shot(w.sound, null, { pos: this.camera.position, yaw: this.player.yaw })
@@ -602,10 +626,21 @@ export class WeaponSystem {
     this.vmSwing = 1 // 挥刀弧线（updateViewmodel 里 sin 包络）
     const p = this.player
     const eye = _eye.set(p.pos.x, p.pos.y + p.eyeHeight, p.pos.z)
-    const hit = this.bots.pickHit(eye, _dir.set(0, 0, -1).applyEuler(_euler.set(p.pitch, p.yaw, 0)), w.range)
+    const hit = this.bots.pickHit(eye, _dir.set(0, 0, -1).applyEuler(_euler.set(p.pitch, p.yaw, 0)), spec.range)
     if (hit) {
-      const killed = this.bots.damage(hit.bot, w.damage.body, 'body')
-      this.onHitBot?.(hit.bot, 'body', w.damage.body, killed, hit.point)
+      // 背刺 ×2（维基 Melee 页「deals double damage when striking the target's
+      // back」）：Bot 朝向·玩家方向点积 ≤ 0 = 玩家在 Bot 背后——朝向轴符号与
+      // startDeath 的死亡方向判定同口径（GLB 视觉正面 +Z / 程序化假人 -Z）
+      const b = hit.bot
+      let dmg = spec.damage.body
+      if (w.backstabMult && b.mesh?.rotation && b.pos) {
+        const f = b.mixer ? 1 : -1
+        const yaw = b.mesh.rotation.y
+        const dot = f * (Math.sin(yaw) * (p.pos.x - b.pos.x) + Math.cos(yaw) * (p.pos.z - b.pos.z))
+        if (dot <= 0) dmg *= w.backstabMult
+      }
+      const killed = this.bots.damage(b, dmg, 'body')
+      this.onHitBot?.(b, 'body', dmg, killed, hit.point)
     }
   }
 

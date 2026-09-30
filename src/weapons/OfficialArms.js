@@ -286,6 +286,11 @@ function buildArmsAnim(root, animations, weaponId) {
 // 写入 sys._armsEquipU：1=不播 equip；0..1 = 官方切枪动画进度）：
 //   base = equip(u)（切枪中，绝对姿势）否则 slerp(idle→ads, adsBlend)
 //   final = base ⊗ fireD(t)（fire 加法增量，互斥：equip 期间无法开火）
+// 模块级 scratch：104 骨 × 开火/切枪窗口每帧曾分配 1 个 tmp + 逐骨克隆乘积~
+// 100+/帧（每秒 6000+ 短命 Quaternion）——管线是「算完立即 copy 进 node」的
+// 纯重算，scratch 跨骨/跨帧覆盖安全，128Hz 热路径零分配
+const _poseQ = new THREE.Quaternion() // base 姿势（slerp 目标）
+const _finalQ = new THREE.Quaternion() // final = base ⊗ fireD（替代逐骨克隆乘积）
 export function animateOfficialArms(sys, dt) {
   const A = sys._armsAnim
   if (!A || !sys.officialArms) return
@@ -298,13 +303,14 @@ export function animateOfficialArms(sys, dt) {
   const eqU = sys._armsEquipU ?? 1
   const adsK = A.hasAds ? sys.adsBlend : 0
   const fT = A.fire && A.fire.t !== Infinity ? A.fire.t : -1
-  const tmp = new THREE.Quaternion()
   for (const b of A.bones) {
     let q
-    if (eqU < 1 && b.equip) q = sampleQuatTrack(b.equip, eqU * A.equipDur)
-    else if (adsK > 0 && b.ads) q = tmp.slerpQuaternions(b.idle, b.ads, adsK)
+    if (eqU < 1 && b.equip) q = sampleQuatTrack(b.equip, eqU * A.equipDur) // = _sampleQ
+    else if (adsK > 0 && b.ads) q = _poseQ.slerpQuaternions(b.idle, b.ads, adsK)
     else q = b.idle
-    if (fT >= 0 && b.fireD) q = q.clone().multiply(sampleQuatTrack(b.fireD, fT))
+    // copy 必须先于 multiply 的参数求值：q 可能是 _sampleQ（equip 路径），而
+    // sampleQuatTrack(fireD) 会覆盖 _sampleQ——先落 _finalQ 再采样再乘
+    if (fT >= 0 && b.fireD) q = _finalQ.copy(q).multiply(sampleQuatTrack(b.fireD, fT))
     b.node.quaternion.copy(q)
   }
 }

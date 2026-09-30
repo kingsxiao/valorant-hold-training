@@ -54,6 +54,7 @@ class ParticleSys {
   constructor(scene, tex, blending, max) {
     this.max = max
     this.n = 0
+    this.prevN = 0 // 上一帧粒子数（零粒子门控：空帧不再标脏 GPU 上传）
     const geo = this.geo = new THREE.BufferGeometry()
     this.pos = new Float32Array(max * 3)
     this.col = new Float32Array(max * 3)
@@ -122,9 +123,16 @@ class ParticleSys {
       this.alp[i] = this.alpha0[i] * Math.min(1, (1 - t) * 8) * t // 快速淡入 + 线性淡出
       this.size[i] = this.size1[i] + (this.size0[i] - this.size1[i]) * t
     }
-    for (const name of ['position', 'acolor', 'asize', 'aalpha']) {
-      this.geo.attributes[name].needsUpdate = true
+    // 零粒子门控：本帧与上一帧都无粒子 → 跳过 4 个 attribute 标脏（three 按
+    // version 变化整段 bufferSubData——空闲帧/菜单页每帧 ~16KB 空传纯属浪费；
+    // main 暂停时也以 dt=0 调 update）。emit 后首帧（0→n）与末颗消亡帧（n→0）
+    // 仍标脏一次，活粒子帧全量上传照旧——渲染行为不变
+    if (this.n > 0 || this.prevN > 0) {
+      for (const name of ['position', 'acolor', 'asize', 'aalpha']) {
+        this.geo.attributes[name].needsUpdate = true
+      }
     }
+    this.prevN = this.n
     this.geo.setDrawRange(0, this.n)
   }
 

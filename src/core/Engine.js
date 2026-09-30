@@ -2,6 +2,66 @@ import * as THREE from 'three'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { CONFIG } from './Config.js'
 
+// ============================================================================
+// 引擎纯数值逻辑（独立于 WebGL 装配，node 可单测——算错直接错 HUD fps/1% low
+// 读数与分辨率档位）：固定步长循环 / 帧率与 1% low 统计 / 自适应分辨率滞回
+// ============================================================================
+
+// 固定步长推进：消耗 accumulator 跑 simStep；跑满 maxSteps 仍欠账（渲染掉帧/
+// 切后台回来）= 过载 → 清零 accumulator 放弃追赶（否则一次长帧后连续百步补帧，
+// 游戏快进而且回不来）。返回 { acc, steps } 供 renderFrame 插值与测试断言
+export function fixedStepRun(acc, fixedDt, maxSteps, stepFn) {
+  let steps = 0
+  while (acc >= fixedDt && steps < maxSteps) {
+    stepFn(fixedDt)
+    acc -= fixedDt
+    steps++
+  }
+  if (steps === maxSteps) acc = 0 // 过载保护（含 maxSteps=0 的退化配置）
+  return { acc, steps }
+}
+
+// 帧率统计：fps = 有效帧（t>0）的均值倒数取整；1% low = 最差 1% 帧（600 帧
+// 窗口 = 6 帧）均值倒数取整。六槽部分选择免整段排序（ lows 升序、lows[0] 为
+// 当前最小槽，比它大才替换并冒泡入位）；无效帧（未填充的 0/负）两个口径都不计，
+// 有效帧不足 6 时按实际帧数取均值（不虚拉低 1% low）
+export function frameRateStats(frameTimes) {
+  let sum = 0, n = 0
+  const lows = [0, 0, 0, 0, 0, 0]
+  for (let i = 0; i < frameTimes.length; i++) {
+    const t = frameTimes[i]
+    if (t <= 0) continue
+    sum += t
+    n++
+    if (t > lows[0]) {
+      lows[0] = t
+      for (let k = 1; k < lows.length && lows[k - 1] > lows[k]; k++) {
+        const tmp = lows[k - 1]; lows[k - 1] = lows[k]; lows[k] = tmp
+      }
+    }
+  }
+  let lowSum = 0, m = 0
+  for (const t of lows) { if (t > 0) { lowSum += t; m++ } }
+  return {
+    n,
+    fps: n > 0 ? Math.round(1000 / (sum / n)) : 0,
+    low1Pct: m > 0 ? Math.round(1000 / (lowSum / m)) : 0,
+  }
+}
+
+// 自适应分辨率单步滞回：结算帧 fps<48 且未到底 → 降 0.10（0.6 下限）；≥58 且
+// 未满 → 升 0.05；48~57 的滞回带内不动（写反降/升阈值会来回抖分辨率）。0 作
+// 「尚无结算帧」处理：不动。返回新 scale（不变即无动作）
+export function adaptiveScaleNext(scale, fps) {
+  if (fps > 0 && fps < 48 && scale > 0.6) {
+    return Math.max(0.6, Math.round((scale - 0.1) * 100) / 100)
+  }
+  if (fps >= 58 && scale < 1) {
+    return Math.min(1, Math.round((scale + 0.05) * 100) / 100)
+  }
+  return scale
+}
+
 // 引擎：渲染器 / 场景 / 相机 / 固定步长主循环 / FPS 统计
 export class Engine {
   constructor(canvas) {
@@ -272,13 +332,8 @@ export class Engine {
       this.preFrame?.(dtMs / 1000)
 
       this.accumulator += dtMs / 1000
-      let steps = 0
-      while (this.accumulator >= this.fixedDt && steps < CONFIG.sim.maxStepsPerFrame) {
-        this.simStep?.(this.fixedDt)
-        this.accumulator -= this.fixedDt
-        steps++
-      }
-      if (steps === CONFIG.sim.maxStepsPerFrame) this.accumulator = 0 // 过载保护
+      const run = fixedStepRun(this.accumulator, this.fixedDt, CONFIG.sim.maxStepsPerFrame, (d) => this.simStep?.(d))
+      this.accumulator = run.acc
 
       this.renderFrame?.(this.accumulator / this.fixedDt, dtMs)
       this.renderer.autoClear = false
@@ -325,27 +380,10 @@ export class Engine {
     this.frameIdx = (this.frameIdx + 1) % this.frameTimes.length
     // 每 30 帧结算一次：fps 取有效帧均值；1% low 取最差 1%（600 帧中的 6 帧）均值
     if (this.frameIdx % 30 === 0) {
-      let sum = 0, n = 0, worst = 0
-      for (let i = 0; i < this.frameTimes.length; i++) {
-        const t = this.frameTimes[i]
-        if (t > 0) { sum += t; n++; if (t > worst) worst = t }
-      }
-      if (n > 0) {
-        this.fps = Math.round(1000 / (sum / n))
-        // 最差 6 帧均值：用一次部分选择避免整段排序
-        const lows = [0, 0, 0, 0, 0, 0]
-        for (let i = 0; i < this.frameTimes.length; i++) {
-          const t = this.frameTimes[i]
-          if (t > lows[0]) {
-            lows[0] = t
-            for (let k = 1; k < lows.length && lows[k - 1] > lows[k]; k++) {
-              const tmp = lows[k - 1]; lows[k - 1] = lows[k]; lows[k] = tmp
-            }
-          }
-        }
-        let lowSum = 0, m = 0
-        for (const t of lows) { if (t > 0) { lowSum += t; m++ } }
-        this.low1Pct = m > 0 ? Math.round(1000 / (lowSum / m)) : 0
+      const s = frameRateStats(this.frameTimes)
+      if (s.n > 0) {
+        this.fps = s.fps
+        this.low1Pct = s.low1Pct
       }
     }
   }
@@ -384,11 +422,9 @@ export class Engine {
     this._resAccum = (this._resAccum ?? 0) + dtMs
     if (this._resAccum < 800) return
     this._resAccum = 0
-    if (this.fps > 0 && this.fps < 48 && this.autoScale > 0.6) {
-      this.autoScale = Math.max(0.6, Math.round((this.autoScale - 0.1) * 100) / 100)
-      this._applyScale()
-    } else if (this.fps >= 58 && this.autoScale < 1) {
-      this.autoScale = Math.min(1, Math.round((this.autoScale + 0.05) * 100) / 100)
+    const next = adaptiveScaleNext(this.autoScale, this.fps)
+    if (next !== this.autoScale) {
+      this.autoScale = next
       this._applyScale()
     }
   }
